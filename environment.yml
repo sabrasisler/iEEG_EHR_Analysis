@@ -1,0 +1,15 @@
+name: iEEG_EHR_Analysis
+channels:
+  - defaults
+dependencies:
+  - h5io
+  - h5py
+  - mne-base
+  - pymatreader
+  - pynwb
+  - matplotlib
+  - numpy
+  - pandas
+  - scipy
+  - seaborn
+prefix: /home/klab/anaconda3/envs/iEEG_EHR_Analysis
