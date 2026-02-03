@@ -2,8 +2,8 @@
 #SBATCH --job-name=ieeg_preprocess
 #SBATCH --output=logs/preprocess_%A_%a.out
 #SBATCH --error=logs/preprocess_%A_%a.err
-#SBATCH --time=02:00:00
-#SBATCH --mem=35G
+#SBATCH --time=03:00:00
+#SBATCH --mem=45G
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
 #SBATCH --array=1-162%2
