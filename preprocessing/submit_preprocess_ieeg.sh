@@ -3,7 +3,7 @@
 #SBATCH --output=logs/preprocess_%A_%a.out
 #SBATCH --error=logs/preprocess_%A_%a.err
 #SBATCH --time=03:00:00
-#SBATCH --mem=45G
+#SBATCH --mem=60G
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
 #SBATCH --array=1-162%2
