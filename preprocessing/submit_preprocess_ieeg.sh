@@ -28,7 +28,7 @@
 # ============================================================================
 
 # Paths
-SCRIPT_DIR="/home/groups/ckeller1/sisler/iEEG_EHR_Analysis"
+SCRIPT_DIR="/home/groups/ckeller1/sisler/iEEG_EHR_Analysis/preprocessing"
 cd ${SCRIPT_DIR}
 
 # Create logs directory
