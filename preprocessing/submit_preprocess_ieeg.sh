@@ -2,11 +2,12 @@
 #SBATCH --job-name=ieeg_preprocess
 #SBATCH --output=logs/preprocess_%A_%a.out
 #SBATCH --error=logs/preprocess_%A_%a.err
-#SBATCH --time=03:00:00
-#SBATCH --mem=60G
+#SBATCH --time=01:00:00           # Changed from 03:00:00
+#SBATCH --mem=4G                  # Changed from 60G
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
-#SBATCH --array=1-162%2
+#SBATCH --array=1-162%20          # Changed from %2 to %20
+
 
 # ============================================================================
 # iEEG Preprocessing - SLURM Array Job
