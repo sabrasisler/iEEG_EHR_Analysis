@@ -43,7 +43,7 @@ NPERSEG=500
 OVERLAP=0.5
 
 # Run preprocessing
-python preprocess_ieeg.py \
+python preprocess_ieeg_chunked.py \
     --file-list file_list.txt \
     --task-id ${SLURM_ARRAY_TASK_ID} \
     --nperseg ${NPERSEG} \
