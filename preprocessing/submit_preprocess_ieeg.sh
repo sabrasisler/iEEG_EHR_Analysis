@@ -6,7 +6,7 @@
 #SBATCH --mem=4G                  # Changed from 60G
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
-#SBATCH --array=1-162%20          # Changed from %2 to %20
+#SBATCH --array=154-1%20          # Changed from %2 to %20
 
 
 # ============================================================================
