@@ -566,8 +566,7 @@ def main():
     # Discovery mode
     parser.add_argument('--discover', action='store_true',
                         help='Discover files and create file list')
-    parser.add_argument('--subjects', nargs='+', type=str,
-                        help='Subject IDs to process (e.g., 259 260)')
+
     parser.add_argument('--force-overwrite', action='store_true',
                         help='Include files that already exist')
     
