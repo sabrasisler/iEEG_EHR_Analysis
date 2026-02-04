@@ -152,44 +152,73 @@ def create_bipolar_electrode_table(elec_df, pairs):
     
     return pd.DataFrame(bipolar_rows)
 
-def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=500, noverlap=None):
+def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=None, noverlap=None):
     """
-    Compute band power for a single chunk of data.
-    Returns band power array for this chunk.
+    Compute band power for a single chunk of data using Welch's method.
+    
+    Parameters:
+    -----------
+    data_chunk : array, shape (n_samples, n_channels)
+        Time series data chunk
+    sfreq : float
+        Sampling frequency
+    bands : dict
+        Frequency bands {name: (low, high)}
+    nperseg : int, optional
+        Length of each segment for Welch (default: 2*sfreq = 2 seconds)
+    noverlap : int, optional
+        Overlap between segments (default: nperseg//2 = 50%)
+    
+    Returns:
+    --------
+    band_power_chunk : array, shape (1, n_channels, n_bands)
+        Band power for each channel and frequency band
     """
+    # Default Welch parameters (2-second windows with 50% overlap)
+    if nperseg is None:
+        nperseg = int(2 * sfreq)  # 2 seconds
     if noverlap is None:
-        noverlap = nperseg // 2
+        noverlap = nperseg // 2  # 50% overlap
     
     n_samples, n_channels = data_chunk.shape
     n_bands = len(bands)
     
-    # Compute spectrogram for first channel to get dimensions
-    freqs, times, _ = signal.spectrogram(
-        data_chunk[:, 0], fs=sfreq, nperseg=nperseg, noverlap=noverlap, window='hann'
-    )
-    
-    n_windows = len(times)
-    band_power_chunk = np.zeros((n_windows, n_channels, n_bands), dtype=np.float32)
+    # Initialize output (just 1 time point per chunk)
+    band_power_chunk = np.zeros((1, n_channels, n_bands), dtype=np.float32)
     
     # Process each channel
     for ch_idx in range(n_channels):
-        freqs, times, Sxx = signal.spectrogram(
-            data_chunk[:, ch_idx], fs=sfreq, nperseg=nperseg, 
-            noverlap=noverlap, window='hann'
+        # Compute PSD using Welch's method
+        freqs, psd = signal.welch(
+            data_chunk[:, ch_idx],
+            fs=sfreq,
+            nperseg=nperseg,
+            noverlap=noverlap,
+            window='hann',
+            scaling='density'
         )
         
         # Extract power for each band
         for band_idx, (band_name, (fmin, fmax)) in enumerate(bands.items()):
             freq_mask = (freqs >= fmin) & (freqs < fmax)
-            band_power_chunk[:, ch_idx, band_idx] = Sxx[freq_mask, :].mean(axis=0)
+            
+            if not freq_mask.any():
+                # No frequencies in this band
+                print(f"      Warning: No frequencies found for {band_name} "
+                      f"({fmin}-{fmax} Hz) on channel {ch_idx}")
+                band_power_chunk[0, ch_idx, band_idx] = np.nan
+            else:
+                # Average power across frequencies in the band
+                band_power_chunk[0, ch_idx, band_idx] = psd[freq_mask].mean()
     
-    return band_power_chunk, times
+    return band_power_chunk
 
 def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sfreq, bands, 
-                                           nperseg=500, overlap_frac=0.5, 
-                                           chunk_duration_sec=60):
+                                           nperseg=None, overlap_frac=0.5, 
+                                           chunk_duration_sec=10):
     """
-    Compute band power by processing data in chunks to minimize memory usage.
+    Compute band power by processing data in chunks using Welch's method.
+    Each chunk produces one band power estimate per channel.
     
     Parameters:
     -----------
@@ -203,12 +232,12 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
         Sampling rate
     bands : dict
         Frequency bands
-    nperseg : int
-        FFT window size in samples
+    nperseg : int, optional
+        Welch segment size (default: 2*sfreq = 2 seconds)
     overlap_frac : float
-        Overlap fraction (0.5 = 50%)
+        Overlap fraction for Welch segments (default: 0.5)
     chunk_duration_sec : float
-        Duration of each chunk to process in seconds
+        Duration of each time bin in seconds (default: 10s)
     """
     
     n_samples_total = series.data.shape[0]
@@ -218,29 +247,28 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
     
     # Calculate chunk parameters
     chunk_size = int(chunk_duration_sec * sfreq)
+    
+    # Welch parameters
+    if nperseg is None:
+        nperseg = int(2 * sfreq)  # 2-second segments
     noverlap = int(nperseg * overlap_frac)
     
-    # We need to overlap chunks by nperseg to avoid edge effects
-    chunk_overlap = nperseg
-    chunk_step = chunk_size - chunk_overlap
+    # Calculate number of chunks (non-overlapping time bins)
+    n_chunks = int(np.ceil(n_samples_total / chunk_size))
     
-    # Estimate total number of time windows
-    approx_n_windows = int((n_samples_total - nperseg) / (nperseg - noverlap)) + 1
+    print(f"\n  Time-varying band power with Welch's method:")
+    print(f"    Time bin size: {chunk_duration_sec}s ({chunk_size:,} samples)")
+    print(f"    Welch segment size: {nperseg/sfreq:.1f}s ({nperseg} samples)")
+    print(f"    Welch overlap: {overlap_frac*100:.0f}% ({noverlap} samples)")
+    print(f"    Total time bins: {n_chunks}")
     
-    print(f"\n  Memory-efficient processing:")
-    print(f"    Chunk size: {chunk_duration_sec}s ({chunk_size:,} samples)")
-    print(f"    Chunk overlap: {chunk_overlap} samples")
-    print(f"    Estimated output windows: ~{approx_n_windows}")
-    
-    # Pre-allocate output array (this is much smaller than input data)
-    band_power_all = []
-    times_all = []
-    
-    n_chunks = int(np.ceil((n_samples_total - chunk_overlap) / chunk_step))
+    # Pre-allocate output array
+    band_power_all = np.zeros((n_chunks, n_pairs, n_bands), dtype=np.float32)
+    times = np.zeros(n_chunks, dtype=np.float32)
     
     for chunk_idx in range(n_chunks):
         # Calculate chunk boundaries
-        start_idx = chunk_idx * chunk_step
+        start_idx = chunk_idx * chunk_size
         end_idx = min(start_idx + chunk_size, n_samples_total)
         
         # Load only this chunk from disk
@@ -256,47 +284,29 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
         # Free memory
         del data_chunk
         
-        # Compute band power for this chunk
-        band_power_chunk, times_chunk = compute_band_power_chunk(
+        # Compute band power for this chunk using Welch
+        band_power_chunk = compute_band_power_chunk(
             bipolar_chunk, sfreq, bands, nperseg=nperseg, noverlap=noverlap
         )
         
-        # Adjust times to global timeline
-        times_chunk = times_chunk + (start_idx / sfreq)
-        
-        # Handle overlap between chunks
-        if chunk_idx > 0:
-            # Skip the overlapping windows from previous chunk
-            # Find where the times from this chunk start being new
-            last_time = times_all[-1][-1]
-            new_indices = times_chunk > last_time
-            band_power_chunk = band_power_chunk[new_indices]
-            times_chunk = times_chunk[new_indices]
-        
-        band_power_all.append(band_power_chunk)
-        times_all.append(times_chunk)
+        # Store results (squeeze out the time dimension since it's just 1)
+        band_power_all[chunk_idx] = band_power_chunk[0]
+        times[chunk_idx] = (start_idx + (end_idx - start_idx) / 2) / sfreq  # midpoint time
         
         # Free memory
         del bipolar_chunk, band_power_chunk
         
         # Progress
         progress_pct = 100 * (chunk_idx + 1) / n_chunks
-        elapsed = chunk_idx + 1
-        remaining = n_chunks - elapsed
-        print(f"    Chunk {chunk_idx+1}/{n_chunks} ({progress_pct:.1f}%) - "
-              f"{len(times_chunk)} windows", end='\r')
+        print(f"    Chunk {chunk_idx+1}/{n_chunks} ({progress_pct:.1f}%)", end='\r')
     
     print()
     
-    # Concatenate all chunks
-    band_power_time = np.concatenate(band_power_all, axis=0)
-    times = np.concatenate(times_all)
+    print(f"  ✓ Final shape: {band_power_all.shape}")
+    print(f"    ({band_power_all.shape[0]} time bins × {band_power_all.shape[1]} channels × "
+          f"{band_power_all.shape[2]} bands)")
     
-    print(f"  ✓ Final shape: {band_power_time.shape}")
-    print(f"    ({band_power_time.shape[0]} windows × {band_power_time.shape[1]} channels × "
-          f"{band_power_time.shape[2]} bands)")
-    
-    return band_power_time, times
+    return band_power_all, times
 
 # ============================================================================
 # FILE DISCOVERY
@@ -311,18 +321,51 @@ def get_output_path(input_path):
     return str(output_dir / output_filename)
 
 def discover_files(subjects=None, force_overwrite=False):
-    """Discover NWB files that need processing"""
+    """
+    Discover NWB files that need processing
+    
+    Parameters:
+    -----------
+    subjects : list of str or str, optional
+        Subject ID(s) to process. Can be:
+        - None: process all subjects
+        - Single string: '259' or 'sub-259'
+        - List of strings: ['259', '260'] or ['sub-259', 'sub-260']
+    force_overwrite : bool
+        Include files even if output already exists
+    """
     file_pairs = []
     
+    # Normalize subjects input
+    if subjects is not None:
+        # Handle single subject string
+        if isinstance(subjects, str):
+            subjects = [subjects]
+        
+        # Normalize subject IDs (handle both '259' and 'sub-259' formats)
+        normalized_subjects = []
+        for sub in subjects:
+            if sub.startswith('sub-'):
+                normalized_subjects.append(sub.replace('sub-', ''))
+            else:
+                normalized_subjects.append(sub)
+        subjects = normalized_subjects
+    
+    # Build file list
     if subjects is None:
+        # Get all subjects
         pattern = f"{DATA_DIR}/sub-*/ses-*/ieeg/sub-*_ses-*_run-*.nwb"
         all_files = glob.glob(pattern)
     else:
+        # Get specific subjects
         all_files = []
         for sub_id in subjects:
             pattern = f"{DATA_DIR}/sub-{sub_id}/ses-*/ieeg/sub-{sub_id}_ses-*_run-*.nwb"
-            all_files.extend(glob.glob(pattern))
+            files = glob.glob(pattern)
+            all_files.extend(files)
+            print(f"  Found {len(files)} files for subject {sub_id}")
     
+    # Filter by existing outputs
     for input_path in sorted(all_files):
         output_path = get_output_path(input_path)
         if not force_overwrite and os.path.exists(output_path):
@@ -539,6 +582,9 @@ def main():
                         help='Input NWB file')
     parser.add_argument('output_path', nargs='?', type=str,
                         help='Output NWB file')
+    # In the main() function, modify the --subjects help text:
+    parser.add_argument('--subjects', nargs='+', type=str,
+                        help='Subject ID(s) to process. Examples: --subjects 259, --subjects 259 260, --subjects sub-259')
     
     # Processing params
     parser.add_argument('--nperseg', type=int, default=500,
