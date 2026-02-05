@@ -108,15 +108,10 @@ def create_bipolar_pairs(elec_df):
 
 def create_bipolar_electrode_table(elec_df, pairs):
     """Create enhanced electrode table for bipolar pairs"""
-    coord_systems = ['MNI', 'LEPTO', 'MGRID', 'subINF', 'fsaverageINF', 'ScannerNativeRAS']
-    coord_columns = []
-    for coord_sys in coord_systems:
-        for axis in ['_coord_1', '_coord_2', '_coord_3']:
-            col_name = f"{coord_sys}{axis}"
-            if col_name in elec_df.columns:
-                coord_columns.append(col_name)
     
-    single_columns = ['group', 'group_name']
+    # Columns to keep as single values (from anode only, no suffix)
+    single_columns = ['group', 'group_name', 'location']
+    
     bipolar_rows = []
     
     for pair in pairs:
@@ -126,26 +121,18 @@ def create_bipolar_electrode_table(elec_df, pairs):
         cathode_row = elec_df.loc[cathode_idx]
         
         new_row = {}
+        
+        # 1. Set bipolar location name
         new_row['location'] = pair['location']
         
-        for col in single_columns:
-            if col in elec_df.columns:
-                new_row[col] = anode_row[col]
+        # 2. Add group columns from anode
+        new_row['group'] = anode_row['group']
+        if 'group_name' in elec_df.columns:
+            new_row['group_name'] = anode_row['group_name']
         
-        for col in coord_columns:
-            anode_val = anode_row[col]
-            cathode_val = cathode_row[col]
-            if pd.notna(anode_val) and pd.notna(cathode_val):
-                new_row[col] = (anode_val + cathode_val) / 2
-            elif pd.notna(anode_val):
-                new_row[col] = anode_val
-            elif pd.notna(cathode_val):
-                new_row[col] = cathode_val
-            else:
-                new_row[col] = np.nan
-        
+        # 3. Add ALL other columns with _anode and _cathode suffixes
         for col in elec_df.columns:
-            if col not in single_columns and col not in coord_columns and col != 'location':
+            if col not in single_columns:
                 new_row[f"{col}_anode"] = anode_row[col]
                 new_row[f"{col}_cathode"] = cathode_row[col]
         
