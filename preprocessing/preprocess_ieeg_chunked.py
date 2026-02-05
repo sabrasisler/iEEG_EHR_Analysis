@@ -22,6 +22,7 @@ from pynwb import NWBFile
 from pynwb.file import Subject
 from pynwb.ecephys import ElectricalSeries
 from pynwb.misc import DecompositionSeries
+import pytz
 from datetime import datetime
 import os
 import re
@@ -382,6 +383,13 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
                 chunk_duration_sec=60, force_overwrite=False):
     """Process a single NWB file with memory-efficient chunking"""
     start_time = time.time()
+
+    # Capture timezone explicitly
+    sf_timezone = pytz.timezone('America/Los_Angeles')
+    processing_timestamp = datetime.now(sf_timezone)
+    
+    # Capture script metadata
+    script_name = Path(__file__).name
     
     # Create output directory
     output_dir = os.path.dirname(output_path)
@@ -511,13 +519,38 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
     
     sampling_rate = 1.0 / (times[1] - times[0])
     processing_params = {
+        # Script information
+        'script_name': script_name,
+        'processing_timestamp': processing_timestamp.isoformat(),
+        'timezone': 'America/Los_Angeles',
+        
+        # Rereferencing
         'rereferencing_method': 'bipolar',
+        
+        # Welch's method parameters (COMPLETE)
+        'method': 'welch',
         'nperseg': nperseg,
+        'noverlap': int(nperseg * overlap_frac),
         'overlap_fraction': overlap_frac,
         'window_function': 'hann',
-        'frequency_bands': BANDS,
+        'scaling': 'density',
+        'detrend': False,  # Document default behavior
+        
+        # Time binning
         'chunk_duration_sec': chunk_duration_sec,
-        'processing_date': datetime.now().isoformat()
+        'time_bin_method': 'non_overlapping',
+        
+        # Frequency bands
+        'frequency_bands': BANDS,
+        
+        # Data properties
+        'original_sampling_rate': float(sfreq),
+        'output_sampling_rate': float(sampling_rate),
+        'n_time_bins': len(times),
+        'n_bipolar_pairs': len(pairs),
+        
+        # Input file
+        'source_file': os.path.basename(input_path)
     }
     
     decomp_series = DecompositionSeries(
