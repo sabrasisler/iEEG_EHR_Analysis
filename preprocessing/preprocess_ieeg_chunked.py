@@ -422,6 +422,9 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
     # Create bipolar pairs
     print(f"\nCreating bipolar pairs...")
     pairs, filtered_elec_df = create_bipolar_pairs(elec_df)
+
+    print(f"\n  Original electrode columns: {list(filtered_elec_df.columns)}")
+    print(f"  Total: {len(filtered_elec_df.columns)}")
     
     # Compute band power using chunked processing
     print(f"\nComputing band power (chunked processing)...")
@@ -478,6 +481,13 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
     )
     
     bipolar_elec_df = create_bipolar_electrode_table(filtered_elec_df, pairs)
+
+    print(f"\n  Bipolar electrode table created:")
+    print(f"    Columns: {list(bipolar_elec_df.columns)}")
+    print(f"    Total columns: {len(bipolar_elec_df.columns)}")
+    print(f"    Sample of column names:")
+    for col in list(bipolar_elec_df.columns)[:10]:
+        print(f"      - {col}")
     
     # Add custom electrode columns
     standard_columns = ['location', 'group', 'group_name']
@@ -613,6 +623,9 @@ def main():
     parser.add_argument('--chunk-duration', type=float, default=60,
                         help='Chunk duration in seconds (default: 60)')
     
+    parser.add_argument('--batch-size', type=int, default=1,
+                        help='Number of files to process per job (default: 1)')
+    
     args = parser.parse_args()
     
     # DISCOVERY MODE
@@ -644,6 +657,68 @@ def main():
         return
     
     # ARRAY JOB MODE
+    if args.file_list and args.task_id:
+        with open(args.file_list) as f:
+            lines = f.readlines()
+        
+        # Calculate which files this job should process
+        batch_size = args.batch_size
+        start_idx = (args.task_id - 1) * batch_size
+        end_idx = min(start_idx + batch_size, len(lines))
+        
+        if start_idx >= len(lines):
+            print(f"✗ ERROR: Task ID {args.task_id} out of range (1-{len(lines)})")
+            sys.exit(1)
+        
+        print("=" * 70)
+        print(f"BATCH JOB: Processing files {start_idx+1} to {end_idx}")
+        print(f"Batch size: {batch_size} | Total files: {len(lines)}")
+        print("=" * 70)
+        
+        success_count = 0
+        fail_count = 0
+        failed_files = []
+        
+        for idx in range(start_idx, end_idx):
+            line = lines[idx].strip()
+            input_path, output_path = line.split('\t')
+            
+            file_num = idx - start_idx + 1
+            print(f"\n{'='*70}")
+            print(f"BATCH FILE {file_num}/{end_idx-start_idx}: {os.path.basename(input_path)}")
+            print(f"Overall: {idx+1}/{len(lines)}")
+            print(f"{'='*70}")
+            
+            success = process_file(
+                input_path, output_path, 
+                args.nperseg, args.overlap, args.chunk_duration,
+                args.force_overwrite
+            )
+            
+            if success:
+                success_count += 1
+                print(f"✓ File {file_num}/{end_idx-start_idx} completed successfully")
+            else:
+                fail_count += 1
+                failed_files.append(os.path.basename(input_path))
+                print(f"✗ File {file_num}/{end_idx-start_idx} FAILED")
+        
+        print(f"\n{'='*70}")
+        print(f"BATCH SUMMARY")
+        print(f"{'='*70}")
+        print(f"Total processed: {end_idx - start_idx}")
+        print(f"Succeeded: {success_count}")
+        print(f"Failed: {fail_count}")
+        if failed_files:
+            print(f"\nFailed files:")
+            for f in failed_files:
+                print(f"  - {f}")
+        print(f"{'='*70}")
+        
+        sys.exit(0 if fail_count == 0 else 1)
+
+
+
     if args.file_list and args.task_id:
         with open(args.file_list) as f:
             lines = f.readlines()

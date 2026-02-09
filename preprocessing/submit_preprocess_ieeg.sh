@@ -2,28 +2,36 @@
 #SBATCH --job-name=ieeg_preprocess
 #SBATCH --output=logs/preprocess_%A_%a.out
 #SBATCH --error=logs/preprocess_%A_%a.err
-#SBATCH --time=00:20:00         # Changed from 03:00:00
-#SBATCH --mem=4G                  # Changed from 60G
+#SBATCH --time=02:00:00         # 2 hours for batch of 20 files (5-6 min each)
+#SBATCH --mem=4G                # 8GB is safe (4GB per file + buffer)
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
-#SBATCH --array=1-60%8        
-
+#SBATCH --array=1-4%4           # CHANGE THIS based on calculation
+                                # Example: 60 files ÷ 15 per batch = 4 jobs
 
 # ============================================================================
-# iEEG Preprocessing - SLURM Array Job
+# iEEG Preprocessing - SLURM Array Job with BATCHING
 # ============================================================================
 #
 # BEFORE SUBMITTING:
-#   1. Run: python preprocess_ieeg.py --discover
-#   2. Check file_list.txt to see how many files
-#   3. Edit line 6 above: change --array=1-100 to --array=1-N
-#      where N is the number of files
+#   1. Run: python preprocess_ieeg_chunked.py --discover
+#   2. Check file_list.txt to see how many files (e.g., 60 files)
+#   3. Choose BATCH_SIZE (recommended: 15-20)
+#   4. Calculate number of jobs: N_JOBS = ceil(N_FILES / BATCH_SIZE)
+#      Example: 60 files ÷ 15 per batch = 4 jobs
+#   5. Edit line 9 above: --array=1-N_JOBS%N_JOBS
 #
-# MEMORY TUNING:
-#   - Default: 8GB per job, max 8 parallel (%8)
-#   - Total RAM: 8GB * 8 = 64GB
-#   - To use more memory: increase --mem, decrease %8
-#     Example: --mem=16G with %4 = 64GB total
+# EXAMPLE CALCULATIONS:
+#   60 files, batch_size=15:  --array=1-4%4   (4 jobs × 15 files)
+#   60 files, batch_size=20:  --array=1-3%3   (3 jobs × 20 files)
+#   100 files, batch_size=20: --array=1-5%5   (5 jobs × 20 files)
+#
+# MEMORY & TIME:
+#   - Each file takes ~3-5 min, uses ~4GB RAM
+#   - Sequential processing = only ONE file in memory at a time
+#   - 8GB is enough with safety margin (even for larger files)
+#   - Batch of 15: ~75 min
+#   - Batch of 20: ~100 min
 #
 # SUBMIT: sbatch submit_preprocessing.sh
 # ============================================================================
@@ -40,14 +48,30 @@ module load python/3.9
 source /home/groups/ckeller1/venvs/ieeg_analysis/bin/activate
 
 # Processing parameters
+BATCH_SIZE=15      # Number of files per job (processed sequentially)
 NPERSEG=500
 OVERLAP=0.5
+CHUNK_DURATION=60
+
+echo "=========================================="
+echo "Job Array ID: ${SLURM_ARRAY_JOB_ID}"
+echo "Task ID: ${SLURM_ARRAY_TASK_ID}"
+echo "Batch size: ${BATCH_SIZE} (sequential)"
+echo "=========================================="
 
 # Run preprocessing
 python preprocess_ieeg_chunked.py \
     --file-list file_list.txt \
     --task-id ${SLURM_ARRAY_TASK_ID} \
+    --batch-size ${BATCH_SIZE} \
     --nperseg ${NPERSEG} \
-    --overlap ${OVERLAP}
+    --overlap ${OVERLAP} \
+    --chunk-duration ${CHUNK_DURATION}
 
-echo "Exit code: $?"
+EXIT_CODE=$?
+
+echo "=========================================="
+echo "Job finished with exit code: ${EXIT_CODE}"
+echo "=========================================="
+
+exit ${EXIT_CODE}
