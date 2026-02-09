@@ -2,11 +2,11 @@
 #SBATCH --job-name=ieeg_preprocess
 #SBATCH --output=logs/preprocess_%A_%a.out
 #SBATCH --error=logs/preprocess_%A_%a.err
-#SBATCH --time=02:15:00         # 2 hours for batch of 20 files (5-6 min each)
-#SBATCH --mem=4G                # 8GB is safe (4GB per file + buffer)
+#SBATCH --time=02:00:00         # 2 hours for batch of 20 files (5-6 min each)
+#SBATCH --mem=8G                # 8GB is safe (4GB per file + buffer)
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
-#SBATCH --array=1-7%7           # CHANGE THIS based on calculation
+#SBATCH --array=1-9%9           # CHANGE THIS based on calculation
                                 # Example: 60 files ÷ 15 per batch = 4 jobs
 
 # ============================================================================
@@ -36,6 +36,7 @@
 # SUBMIT: sbatch submit_preprocessing.sh
 # ============================================================================
 
+
 # Paths
 SCRIPT_DIR="/home/groups/ckeller1/sisler/iEEG_EHR_Analysis/preprocessing"
 cd ${SCRIPT_DIR}
@@ -48,15 +49,18 @@ module load python/3.9
 source /home/groups/ckeller1/venvs/ieeg_analysis/bin/activate
 
 # Processing parameters
-BATCH_SIZE=15      # Number of files per job (processed sequentially)
-NPERSEG=500
+BATCH_SIZE=20          # Number of files per job (processed sequentially)
+NPERSEG=1000           # CHANGED: 2000 for 0.5 Hz frequency resolution (was 500)
 OVERLAP=0.5
 CHUNK_DURATION=60
+MAX_FREQ=170          # NEW: Limit frequency computation to 200 Hz
 
 echo "=========================================="
 echo "Job Array ID: ${SLURM_ARRAY_JOB_ID}"
 echo "Task ID: ${SLURM_ARRAY_TASK_ID}"
 echo "Batch size: ${BATCH_SIZE} (sequential)"
+echo "nperseg: ${NPERSEG} (freq resolution: 0.5 Hz)"
+echo "max_freq: ${MAX_FREQ} Hz"
 echo "=========================================="
 
 # Run preprocessing
@@ -66,7 +70,8 @@ python preprocess_ieeg_chunked.py \
     --batch-size ${BATCH_SIZE} \
     --nperseg ${NPERSEG} \
     --overlap ${OVERLAP} \
-    --chunk-duration ${CHUNK_DURATION}
+    --chunk-duration ${CHUNK_DURATION} \
+    --max-freq ${MAX_FREQ}
 
 EXIT_CODE=$?
 

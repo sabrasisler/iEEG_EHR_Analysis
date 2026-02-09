@@ -11,7 +11,7 @@ Usage:
     python preprocess_ieeg.py INPUT_NWB OUTPUT_NWB
     
     # Process from file list (for SLURM array jobs)
-    python preprocess_ieeg.py --file-list file_list.txt --task-id $SLURM_ARRAY_TASK_ID
+    python preprocess_ieeg.py --file-list file_list.txt --task-id $SLURM_ARRAY_TASK_ID --batch-size 15
 """
 
 import numpy as np
@@ -140,7 +140,7 @@ def create_bipolar_electrode_table(elec_df, pairs):
     
     return pd.DataFrame(bipolar_rows)
 
-def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=None, noverlap=None):
+def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=None, noverlap=None, max_freq=200):
     """
     Compute band power for a single chunk of data using Welch's method.
     
@@ -156,6 +156,8 @@ def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=None, noverlap=No
         Length of each segment for Welch (default: 2*sfreq = 2 seconds)
     noverlap : int, optional
         Overlap between segments (default: nperseg//2 = 50%)
+    max_freq : float, optional
+        Maximum frequency to compute (default: 200 Hz)
     
     Returns:
     --------
@@ -168,6 +170,11 @@ def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=None, noverlap=No
     if noverlap is None:
         noverlap = nperseg // 2  # 50% overlap
     
+    # Calculate nfft to limit frequency range
+    # We want frequencies up to max_freq with same resolution as nperseg
+    nfft = int(nperseg * (max_freq / (sfreq / 2)))
+    nfft = max(nfft, nperseg)
+    
     n_samples, n_channels = data_chunk.shape
     n_bands = len(bands)
     
@@ -176,12 +183,13 @@ def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=None, noverlap=No
     
     # Process each channel
     for ch_idx in range(n_channels):
-        # Compute PSD using Welch's method
+        # Compute PSD using Welch's method with limited frequency range
         freqs, psd = signal.welch(
             data_chunk[:, ch_idx],
             fs=sfreq,
             nperseg=nperseg,
             noverlap=noverlap,
+            nfft=nfft,
             window='hann',
             scaling='density'
         )
@@ -203,7 +211,7 @@ def compute_band_power_chunk(data_chunk, sfreq, bands, nperseg=None, noverlap=No
 
 def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sfreq, bands, 
                                            nperseg=None, overlap_frac=0.5, 
-                                           chunk_duration_sec=10):
+                                           chunk_duration_sec=10, max_freq=200):
     """
     Compute band power by processing data in chunks using Welch's method.
     Each chunk produces one band power estimate per channel.
@@ -226,6 +234,8 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
         Overlap fraction for Welch segments (default: 0.5)
     chunk_duration_sec : float
         Duration of each time bin in seconds (default: 10s)
+    max_freq : float, optional
+        Maximum frequency to compute (default: 200 Hz)
     """
     
     n_samples_total = series.data.shape[0]
@@ -241,6 +251,15 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
         nperseg = int(2 * sfreq)  # 2-second segments
     noverlap = int(nperseg * overlap_frac)
     
+    # Calculate nfft for limited frequency range
+    nfft_requested = int(nperseg * (max_freq / (sfreq / 2)))
+    nfft_actual = max(nfft_requested, nperseg)  # nfft must be >= nperseg
+    
+    # Calculate actual max frequency and number of bins
+    max_freq_actual = (nfft_actual / nperseg) * (sfreq / 2)
+    n_freq_bins = nfft_actual // 2 + 1
+    freq_resolution = sfreq / nperseg
+    
     # Calculate number of chunks (non-overlapping time bins)
     n_chunks = int(np.ceil(n_samples_total / chunk_size))
     
@@ -248,6 +267,10 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
     print(f"    Time bin size: {chunk_duration_sec}s ({chunk_size:,} samples)")
     print(f"    Welch segment size: {nperseg/sfreq:.1f}s ({nperseg} samples)")
     print(f"    Welch overlap: {overlap_frac*100:.0f}% ({noverlap} samples)")
+    print(f"    Frequency resolution: {freq_resolution:.2f} Hz")
+    print(f"    Frequency range: 0-{max_freq_actual:.1f} Hz ({n_freq_bins} bins)")
+    if nfft_actual > nfft_requested:
+        print(f"    Note: nfft adjusted from {nfft_requested} to {nfft_actual} (nfft must be ≥ nperseg)")
     print(f"    Total time bins: {n_chunks}")
     
     # Pre-allocate output array
@@ -274,7 +297,7 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
         
         # Compute band power for this chunk using Welch
         band_power_chunk = compute_band_power_chunk(
-            bipolar_chunk, sfreq, bands, nperseg=nperseg, noverlap=noverlap
+            bipolar_chunk, sfreq, bands, nperseg=nperseg, noverlap=noverlap, max_freq=max_freq
         )
         
         # Store results (squeeze out the time dimension since it's just 1)
@@ -295,6 +318,7 @@ def compute_time_varying_band_power_chunked(series, pairs, electrode_indices, sf
           f"{band_power_all.shape[2]} bands)")
     
     return band_power_all, times
+
 
 # ============================================================================
 # FILE DISCOVERY
@@ -366,8 +390,8 @@ def discover_files(subjects=None, force_overwrite=False):
 # MAIN PROCESSING
 # ============================================================================
 
-def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5, 
-                chunk_duration_sec=60, force_overwrite=False):
+def process_file(input_path, output_path, nperseg=2000, overlap_frac=0.5, 
+                chunk_duration_sec=60, max_freq=200, force_overwrite=False):
     """Process a single NWB file with memory-efficient chunking"""
     start_time = time.time()
 
@@ -422,9 +446,6 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
     # Create bipolar pairs
     print(f"\nCreating bipolar pairs...")
     pairs, filtered_elec_df = create_bipolar_pairs(elec_df)
-
-    print(f"\n  Original electrode columns: {list(filtered_elec_df.columns)}")
-    print(f"  Total: {len(filtered_elec_df.columns)}")
     
     # Compute band power using chunked processing
     print(f"\nComputing band power (chunked processing)...")
@@ -436,7 +457,8 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
         bands=BANDS,
         nperseg=nperseg,
         overlap_frac=overlap_frac,
-        chunk_duration_sec=chunk_duration_sec
+        chunk_duration_sec=chunk_duration_sec,
+        max_freq=max_freq
     )
     
     # Create output NWB
@@ -481,13 +503,6 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
     )
     
     bipolar_elec_df = create_bipolar_electrode_table(filtered_elec_df, pairs)
-
-    print(f"\n  Bipolar electrode table created:")
-    print(f"    Columns: {list(bipolar_elec_df.columns)}")
-    print(f"    Total columns: {len(bipolar_elec_df.columns)}")
-    print(f"    Sample of column names:")
-    for col in list(bipolar_elec_df.columns)[:10]:
-        print(f"      - {col}")
     
     # Add custom electrode columns
     standard_columns = ['location', 'group', 'group_name']
@@ -506,7 +521,7 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
     
     electrode_region = nwb_out.create_electrode_table_region(
         region=list(range(len(pairs))),
-        description='bipolar electrode pairs with averaged coordinates'
+        description='bipolar electrode pairs'
     )
     
     ecephys_module = nwb_out.create_processing_module(
@@ -514,7 +529,7 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
         description='Processed electrophysiology data including bipolar referencing and band power'
     )
     
-    sampling_rate = 1.0 / (times[1] - times[0])
+    sampling_rate = 1.0 / (times[1] - times[0]) if len(times) > 1 else 1.0 / chunk_duration_sec
     processing_params = {
         # Script information
         'script_name': script_name,
@@ -531,7 +546,8 @@ def process_file(input_path, output_path, nperseg=500, overlap_frac=0.5,
         'overlap_fraction': overlap_frac,
         'window_function': 'hann',
         'scaling': 'density',
-        'detrend': False,  # Document default behavior
+        'detrend': False,
+        'max_frequency': max_freq,
         
         # Time binning
         'chunk_duration_sec': chunk_duration_sec,
@@ -596,7 +612,6 @@ def main():
     # Discovery mode
     parser.add_argument('--discover', action='store_true',
                         help='Discover files and create file list')
-
     parser.add_argument('--force-overwrite', action='store_true',
                         help='Include files that already exist')
     
@@ -605,26 +620,26 @@ def main():
                         help='File list for array jobs')
     parser.add_argument('--task-id', type=int,
                         help='Task ID for array jobs (1-indexed)')
+    parser.add_argument('--batch-size', type=int, default=1,
+                        help='Number of files to process per job (default: 1)')
     
     # Single file mode
     parser.add_argument('input_path', nargs='?', type=str,
                         help='Input NWB file')
     parser.add_argument('output_path', nargs='?', type=str,
                         help='Output NWB file')
-    # In the main() function, modify the --subjects help text:
     parser.add_argument('--subjects', nargs='+', type=str,
                         help='Subject ID(s) to process. Examples: --subjects 259, --subjects 259 260, --subjects sub-259')
     
     # Processing params
-    parser.add_argument('--nperseg', type=int, default=500,
-                        help='FFT segment size (default: 500)')
+    parser.add_argument('--nperseg', type=int, default=2000,
+                        help='FFT segment size (default: 2000 = 2s window for 0.5 Hz resolution)')
     parser.add_argument('--overlap', type=float, default=0.5,
                         help='Overlap fraction (default: 0.5)')
     parser.add_argument('--chunk-duration', type=float, default=60,
                         help='Chunk duration in seconds (default: 60)')
-    
-    parser.add_argument('--batch-size', type=int, default=1,
-                        help='Number of files to process per job (default: 1)')
+    parser.add_argument('--max-freq', type=float, default=200,
+                        help='Maximum frequency to compute (default: 200 Hz)')
     
     args = parser.parse_args()
     
@@ -652,8 +667,20 @@ def main():
                 f.write(f"{inp}\t{out}\n")
         
         print(f"\n✓ File list written to: file_list.txt")
-        print(f"\nNext: Edit submit_preprocessing.sh to set --array=1-{len(file_pairs)}%8")
-        print(f"Then: sbatch submit_preprocessing.sh")
+        
+        # Provide batch size recommendations
+        print(f"\n{'='*70}")
+        print("BATCH SIZE RECOMMENDATIONS")
+        print(f"{'='*70}")
+        for batch_size in [10, 15, 20]:
+            n_jobs = (len(file_pairs) + batch_size - 1) // batch_size
+            print(f"Batch size {batch_size}: {n_jobs} jobs needed")
+            print(f"  SLURM setting: --array=1-{n_jobs}%{min(n_jobs, 10)}")
+        
+        print(f"\nNext steps:")
+        print(f"  1. Edit submit_preprocessing.sh")
+        print(f"  2. Set BATCH_SIZE and --array parameters")
+        print(f"  3. Run: sbatch submit_preprocessing.sh")
         return
     
     # ARRAY JOB MODE
@@ -692,7 +719,7 @@ def main():
             success = process_file(
                 input_path, output_path, 
                 args.nperseg, args.overlap, args.chunk_duration,
-                args.force_overwrite
+                args.max_freq, args.force_overwrite
             )
             
             if success:
@@ -716,26 +743,6 @@ def main():
         print(f"{'='*70}")
         
         sys.exit(0 if fail_count == 0 else 1)
-
-
-
-    if args.file_list and args.task_id:
-        with open(args.file_list) as f:
-            lines = f.readlines()
-        
-        if args.task_id < 1 or args.task_id > len(lines):
-            print(f"✗ ERROR: Task ID {args.task_id} out of range (1-{len(lines)})")
-            sys.exit(1)
-        
-        line = lines[args.task_id - 1].strip()
-        input_path, output_path = line.split('\t')
-        
-        success = process_file(
-            input_path, output_path, 
-            args.nperseg, args.overlap, args.chunk_duration,
-            args.force_overwrite
-        )
-        sys.exit(0 if success else 1)
     
     # SINGLE FILE MODE
     if args.input_path and args.output_path:
@@ -746,7 +753,7 @@ def main():
         success = process_file(
             args.input_path, args.output_path,
             args.nperseg, args.overlap, args.chunk_duration,
-            args.force_overwrite
+            args.max_freq, args.force_overwrite
         )
         sys.exit(0 if success else 1)
     
