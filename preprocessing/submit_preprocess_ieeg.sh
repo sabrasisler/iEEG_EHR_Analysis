@@ -3,10 +3,10 @@
 #SBATCH --output=logs/preprocess_%A_%a.out
 #SBATCH --error=logs/preprocess_%A_%a.err
 #SBATCH --time=02:00:00         # 2 hours for batch of 20 files (5-6 min each)
-#SBATCH --mem=8G                # 8GB is safe (4GB per file + buffer)
+#SBATCH --mem=6G                # 8GB is safe (4GB per file + buffer)
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
-#SBATCH --array=1-9%9           # CHANGE THIS based on calculation
+#SBATCH --array=1-8%8           # CHANGE THIS based on calculation
                                 # Example: 60 files ÷ 15 per batch = 4 jobs
 
 # ============================================================================
