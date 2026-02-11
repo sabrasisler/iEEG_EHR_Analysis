@@ -6,7 +6,7 @@
 #SBATCH --mem=6G                # 8GB is safe (4GB per file + buffer)
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=normal
-#SBATCH --array=1-19%10           # CHANGE THIS based on calculation
+#SBATCH --array=1-104%10           # CHANGE THIS based on calculation
                                 # Example: 60 files ÷ 15 per batch = 4 jobs
 
 # ============================================================================
