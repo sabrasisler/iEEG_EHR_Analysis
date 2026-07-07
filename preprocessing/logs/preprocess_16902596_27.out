@@ -1,0 +1,43 @@
+==========================================
+Job Array ID: 16902596
+Task ID: 27
+Batch size: 20 (sequential)
+nperseg: 1000 (freq resolution: 0.5 Hz)
+max_freq: 170 Hz
+==========================================
+======================================================================
+BATCH JOB: Processing files 521 to 540
+Batch size: 20 | Total files: 3205
+======================================================================
+
+======================================================================
+BATCH FILE 1/20: sub-084_ses-01_run-DA52617O.nwb
+Overall: 521/3205
+======================================================================
+✓ Created output directory: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-084/ses-01/preprocessed
+======================================================================
+PROCESSING: sub-084_ses-01_run-DA52617O.nwb
+======================================================================
+
+File info:
+  Samples: 7,203,000 (120.0 minutes)
+  Channels: 40
+  Sampling rate: 1000.0 Hz
+  Data size: 1.07 GB (float32)
+
+Creating bipolar pairs...
+  Created 35 bipolar pairs from 40 electrodes
+
+Computing band power (chunked processing)...
+
+  Time-varying band power with Welch's method:
+    Time bin size: 60.0s (60,000 samples)
+    Welch segment size: 1.0s (1000 samples)
+    Welch overlap: 50% (500 samples)
+    Frequency resolution: 1.00 Hz
+    Frequency range: 0-500.0 Hz (501 bins)
+    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
+    Total time bins: 121
+    Chunk 1/121 (0.8%)    Chunk 2/121 (1.7%)    Chunk 3/121 (2.5%)    Chunk 4/121 (3.3%)    Chunk 5/121 (4.1%)    Chunk 6/121 (5.0%)    Chunk 7/121 (5.8%)    Chunk 8/121 (6.6%)    Chunk 9/121 (7.4%)    Chunk 10/121 (8.3%)    Chunk 11/121 (9.1%)    Chunk 12/121 (9.9%)    Chunk 13/121 (10.7%)    Chunk 14/121 (11.6%)    Chunk 15/121 (12.4%)    Chunk 16/121 (13.2%)    Chunk 17/121 (14.0%)    Chunk 18/121 (14.9%)    Chunk 19/121 (15.7%)    Chunk 20/121 (16.5%)    Chunk 21/121 (17.4%)==========================================
+Job finished with exit code: 1
+==========================================

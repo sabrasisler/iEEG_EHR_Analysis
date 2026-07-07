@@ -1,0 +1,30 @@
+======================================================================
+PROCESSING: sub-257_ses-01_run-FA6153AP.nwb
+======================================================================
+
+File info:
+  Samples: 188,000 (1.6 minutes)
+  Channels: 180
+  Sampling rate: 2000.0 Hz
+  Data size: 0.13 GB (float32)
+
+Creating bipolar pairs...
+  Created 165 bipolar pairs from 180 electrodes
+
+Computing band power (chunked processing)...
+
+  Memory-efficient processing:
+    Chunk size: 60s (120,000 samples)
+    Chunk overlap: 500 samples
+    Estimated output windows: ~751
+    Chunk 1/2 (50.0%) - 479 windows    Chunk 2/2 (100.0%) - 272 windows
+  ✓ Final shape: (751, 165, 6)
+    (751 windows × 165 channels × 6 bands)
+
+Creating output NWB...
+
+Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-257/ses-01/preprocessed/sub-257_ses-01_run-FA6153AP_bipolar_psd.nwb
+
+✓ COMPLETED in 7.9s (0.1 min)
+  Output size: 3.4 MB
+Exit code: 0

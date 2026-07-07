@@ -1,0 +1,86 @@
+
+The following have been reloaded with a version change:
+  1) gcc/14.2.0 => gcc/12.4.0
+
+Wrote /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/summary/exclusion_rates_saturation.csv (198 rows)
+
+[saturation] pct_windows_excluded stats: {'mean': np.float64(0.233143216342507), 'median': np.float64(0.04447792012155134), 'std': np.float64(0.7484649523627028), 'min': np.float64(0.017531442967618775), 'max': np.float64(9.395678383713578)}
+[saturation] top-10 highest:
+subject_id channel artifact_type  pct_windows_excluded
+   sub-093   RINS7    saturation              9.395678
+   sub-093   LOF10    saturation              4.219295
+   sub-093    LOF9    saturation              0.672809
+   sub-093    LAT5    saturation              0.671844
+   sub-093    LAT2    saturation              0.655434
+   sub-093    LAT1    saturation              0.649642
+   sub-093    LAT6    saturation              0.645781
+   sub-093    LOF8    saturation              0.644816
+   sub-093    LOF7    saturation              0.642402
+   sub-093    LOF6    saturation              0.642402
+
+Wrote /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/summary/exclusion_rates_flatline.csv (198 rows)
+
+[flatline] pct_windows_excluded stats: {'mean': np.float64(0.011150597174716196), 'median': np.float64(0.001947938107513197), 'std': np.float64(0.03990422043588569), 'min': np.float64(0.0), 'max': np.float64(0.2915414034244752)}
+[flatline] top-10 highest:
+subject_id channel artifact_type  pct_windows_excluded
+   sub-217   RATH6      flatline              0.291541
+   sub-217   RATH5      flatline              0.277906
+   sub-217   RATH3      flatline              0.233103
+   sub-217   RATH4      flatline              0.191547
+   sub-217   RATH2      flatline              0.182457
+   sub-217   RAMY1      flatline              0.155835
+   sub-217   RATH1      flatline              0.103241
+   sub-217   RAMY2      flatline              0.079865
+   sub-093   RINS7      flatline              0.061296
+   sub-093    LAT7      flatline              0.037646
+
+Wrote /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/summary/exclusion_rates_gross_artifact.csv (198 rows)
+
+[gross_artifact] pct_windows_excluded stats: {'mean': np.float64(0.03065886719184091), 'median': np.float64(0.019485580670303974), 'std': np.float64(0.02734127493159624), 'min': np.float64(0.0), 'max': np.float64(0.13639906469212784)}
+[gross_artifact] top-10 highest:
+subject_id channel  artifact_type  pct_windows_excluded
+   sub-217   LMHP9 gross_artifact              0.136399
+   sub-217  LAMY11 gross_artifact              0.116913
+   sub-217   LMHP7 gross_artifact              0.116913
+   sub-217   LMHP5 gross_artifact              0.097428
+   sub-217   LMHP4 gross_artifact              0.097428
+   sub-217   LMHP2 gross_artifact              0.097428
+   sub-217   LMHP6 gross_artifact              0.097428
+   sub-217  LPTH13 gross_artifact              0.097428
+   sub-217   LMHP3 gross_artifact              0.097428
+   sub-217  RPHP10 gross_artifact              0.097428
+
+Wrote /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/summary/flagged_for_review.csv (11 flagged subject/channel/artifact rows)
+--- rail summary ---
+  sub-093_saturation.csv: 3480 channel/run combos
+  sub-217_saturation.csv: 6072 channel/run combos
+Wrote /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/summary/saturation_rails.csv (9552 rows)
+
+--- Sanity check: rail values per (subject, session, channel), across runs ---
+(should ALWAYS be 1 now — rail is resolved once per session, not per run)
+0/198 subject-session-channels have >1 distinct rail value across runs -- as expected.
+
+--- Informational: rail values per (subject, session), across all channels ---
+(>1 is expected whenever SAT_AGREEMENT_THRESHOLD wasn't met and some channels
+ fell back to their own per-channel result)
+subject_id  session_id
+sub-093     ses-01        1
+sub-217     ses-01        1
+
+--- rail_source breakdown ---
+rail_source
+session_agreement    9552
+--- plots ---
+Saved /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/plots/metric_distribution_saturation.png
+Saved /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/plots/exclusion_rate_hist_saturation.png
+Saved /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/plots/metric_distribution_flatline.png
+Saved /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/plots/exclusion_rate_hist_flatline.png
+Saved /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/plots/metric_distribution_gross_artifact.png
+Saved /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/plots/exclusion_rate_hist_gross_artifact.png
+Saved /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc_session_rail/plots/rail_values_by_subject.png
+
+Per-subject rail-value spread (most inconsistent first):
+            nunique          min          max  std
+subject_id                                        
+sub-093           1  3199.999919  3199.999919  0.0
+sub-217           1  3199.999919  3199.999919  0.0

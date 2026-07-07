@@ -1,0 +1,2 @@
+/var/spool/slurmd/job15025104/slurm_script: line 50: 248589 Killed                  python preprocess_ieeg.py --file-list file_list.txt --task-id ${SLURM_ARRAY_TASK_ID} --nperseg ${NPERSEG} --overlap ${OVERLAP}
+[2026-02-03T11:24:38.747] error: Detected 1 oom_kill event in StepId=15025104.batch. Some of the step tasks have been OOM Killed.

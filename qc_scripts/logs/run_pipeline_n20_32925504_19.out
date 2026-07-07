@@ -1,0 +1,10 @@
+
+The following have been reloaded with a version change:
+  1) gcc/14.2.0 => gcc/12.4.0
+
+Array task 19 -> subject 251
+Running on 1 subject(s): ['251']
+=== sub-251 ===
+  sub-251 ses-01 run-FA6152OY: loading...
+/var/spool/slurmd/job32925504/slurm_script: line 17: 30922 Killed                  python -m qc_scripts.run_pipeline --subjects "$SUBJECT"
+[2026-07-06T13:41:03.866] error: Detected 1 oom_kill event in StepId=32925504.batch. Some of the step tasks have been OOM Killed.

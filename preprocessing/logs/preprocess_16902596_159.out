@@ -1,0 +1,42 @@
+==========================================
+Job Array ID: 16902596
+Task ID: 159
+Batch size: 20 (sequential)
+nperseg: 1000 (freq resolution: 0.5 Hz)
+max_freq: 170 Hz
+==========================================
+======================================================================
+BATCH JOB: Processing files 3161 to 3180
+Batch size: 20 | Total files: 3205
+======================================================================
+
+======================================================================
+BATCH FILE 1/20: sub-255_ses-01_run-FA61535R.nwb
+Overall: 3161/3205
+======================================================================
+======================================================================
+PROCESSING: sub-255_ses-01_run-FA61535R.nwb
+======================================================================
+
+File info:
+  Samples: 14,400,000 (120.0 minutes)
+  Channels: 134
+  Sampling rate: 2000.0 Hz
+  Data size: 7.19 GB (float32)
+
+Creating bipolar pairs...
+  Created 123 bipolar pairs from 134 electrodes
+
+Computing band power (chunked processing)...
+
+  Time-varying band power with Welch's method:
+    Time bin size: 60.0s (120,000 samples)
+    Welch segment size: 0.5s (1000 samples)
+    Welch overlap: 50% (500 samples)
+    Frequency resolution: 2.00 Hz
+    Frequency range: 0-1000.0 Hz (501 bins)
+    Note: nfft adjusted from 170 to 1000 (nfft must be ≥ nperseg)
+    Total time bins: 120
+    Chunk 1/120 (0.8%)    Chunk 2/120 (1.7%)    Chunk 3/120 (2.5%)    Chunk 4/120 (3.3%)    Chunk 5/120 (4.2%)    Chunk 6/120 (5.0%)    Chunk 7/120 (5.8%)    Chunk 8/120 (6.7%)    Chunk 9/120 (7.5%)    Chunk 10/120 (8.3%)    Chunk 11/120 (9.2%)    Chunk 12/120 (10.0%)    Chunk 13/120 (10.8%)    Chunk 14/120 (11.7%)    Chunk 15/120 (12.5%)    Chunk 16/120 (13.3%)    Chunk 17/120 (14.2%)    Chunk 18/120 (15.0%)    Chunk 19/120 (15.8%)    Chunk 20/120 (16.7%)    Chunk 21/120 (17.5%)    Chunk 22/120 (18.3%)    Chunk 23/120 (19.2%)    Chunk 24/120 (20.0%)    Chunk 25/120 (20.8%)    Chunk 26/120 (21.7%)    Chunk 27/120 (22.5%)    Chunk 28/120 (23.3%)    Chunk 29/120 (24.2%)    Chunk 30/120 (25.0%)    Chunk 31/120 (25.8%)    Chunk 32/120 (26.7%)    Chunk 33/120 (27.5%)    Chunk 34/120 (28.3%)    Chunk 35/120 (29.2%)    Chunk 36/120 (30.0%)    Chunk 37/120 (30.8%)    Chunk 38/120 (31.7%)    Chunk 39/120 (32.5%)    Chunk 40/120 (33.3%)    Chunk 41/120 (34.2%)    Chunk 42/120 (35.0%)    Chunk 43/120 (35.8%)    Chunk 44/120 (36.7%)    Chunk 45/120 (37.5%)    Chunk 46/120 (38.3%)    Chunk 47/120 (39.2%)    Chunk 48/120 (40.0%)    Chunk 49/120 (40.8%)    Chunk 50/120 (41.7%)    Chunk 51/120 (42.5%)    Chunk 52/120 (43.3%)    Chunk 53/120 (44.2%)    Chunk 54/120 (45.0%)    Chunk 55/120 (45.8%)    Chunk 56/120 (46.7%)    Chunk 57/120 (47.5%)    Chunk 58/120 (48.3%)    Chunk 59/120 (49.2%)    Chunk 60/120 (50.0%)    Chunk 61/120 (50.8%)    Chunk 62/120 (51.7%)    Chunk 63/120 (52.5%)    Chunk 64/120 (53.3%)    Chunk 65/120 (54.2%)    Chunk 66/120 (55.0%)    Chunk 67/120 (55.8%)    Chunk 68/120 (56.7%)    Chunk 69/120 (57.5%)    Chunk 70/120 (58.3%)    Chunk 71/120 (59.2%)==========================================
+Job finished with exit code: 1
+==========================================

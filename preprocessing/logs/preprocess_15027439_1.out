@@ -1,0 +1,23 @@
+======================================================================
+PROCESSING: sub-256_ses-01_run-IA61942U.nwb
+======================================================================
+
+Loading data: 14,400,000 samples, 214 channels, 2000.0 Hz
+  Created 199 bipolar pairs from 214 electrodes
+
+Computing bipolar re-referencing...
+✓ Bipolar data: (14400000, 199)
+
+Computing band power...
+  Computing spectrogram: 57599 time windows, 251 frequency bins
+  Progress: 10/199 channels  Progress: 20/199 channels  Progress: 30/199 channels  Progress: 40/199 channels  Progress: 50/199 channels  Progress: 60/199 channels  Progress: 70/199 channels  Progress: 80/199 channels  Progress: 90/199 channels  Progress: 100/199 channels  Progress: 110/199 channels  Progress: 120/199 channels  Progress: 130/199 channels  Progress: 140/199 channels  Progress: 150/199 channels  Progress: 160/199 channels  Progress: 170/199 channels  Progress: 180/199 channels  Progress: 190/199 channels  Progress: 199/199 channels
+✓ Band power: (57599, 199, 6)
+
+Creating output NWB...
+  Adding 68 custom columns...
+  Adding 199 electrode rows...
+
+Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-256/ses-01/preprocessed/sub-256_ses-01_run-IA61942U_bipolar_psd.nwb
+
+✓ COMPLETED in 349.3s (525.3 MB)
+Exit code: 0

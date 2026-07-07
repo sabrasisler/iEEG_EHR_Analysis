@@ -1,0 +1,217 @@
+==========================================
+Job Array ID: 16902596
+Task ID: 73
+Batch size: 20 (sequential)
+nperseg: 1000 (freq resolution: 0.5 Hz)
+max_freq: 170 Hz
+==========================================
+======================================================================
+BATCH JOB: Processing files 1441 to 1460
+Batch size: 20 | Total files: 3205
+======================================================================
+
+======================================================================
+BATCH FILE 1/20: sub-111_ses-01_run-MA47988U.nwb
+Overall: 1441/3205
+======================================================================
+======================================================================
+PROCESSING: sub-111_ses-01_run-MA47988U.nwb
+======================================================================
+
+File info:
+  Samples: 7,205,000 (120.1 minutes)
+  Channels: 58
+  Sampling rate: 1000.0 Hz
+  Data size: 1.56 GB (float32)
+
+Creating bipolar pairs...
+  Created 51 bipolar pairs from 58 electrodes
+
+Computing band power (chunked processing)...
+
+  Time-varying band power with Welch's method:
+    Time bin size: 60.0s (60,000 samples)
+    Welch segment size: 1.0s (1000 samples)
+    Welch overlap: 50% (500 samples)
+    Frequency resolution: 1.00 Hz
+    Frequency range: 0-500.0 Hz (501 bins)
+    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
+    Total time bins: 121
+    Chunk 1/121 (0.8%)    Chunk 2/121 (1.7%)    Chunk 3/121 (2.5%)    Chunk 4/121 (3.3%)    Chunk 5/121 (4.1%)    Chunk 6/121 (5.0%)    Chunk 7/121 (5.8%)    Chunk 8/121 (6.6%)    Chunk 9/121 (7.4%)    Chunk 10/121 (8.3%)    Chunk 11/121 (9.1%)    Chunk 12/121 (9.9%)    Chunk 13/121 (10.7%)    Chunk 14/121 (11.6%)    Chunk 15/121 (12.4%)    Chunk 16/121 (13.2%)    Chunk 17/121 (14.0%)    Chunk 18/121 (14.9%)    Chunk 19/121 (15.7%)    Chunk 20/121 (16.5%)    Chunk 21/121 (17.4%)    Chunk 22/121 (18.2%)    Chunk 23/121 (19.0%)    Chunk 24/121 (19.8%)    Chunk 25/121 (20.7%)    Chunk 26/121 (21.5%)    Chunk 27/121 (22.3%)    Chunk 28/121 (23.1%)    Chunk 29/121 (24.0%)    Chunk 30/121 (24.8%)    Chunk 31/121 (25.6%)    Chunk 32/121 (26.4%)    Chunk 33/121 (27.3%)    Chunk 34/121 (28.1%)    Chunk 35/121 (28.9%)    Chunk 36/121 (29.8%)    Chunk 37/121 (30.6%)    Chunk 38/121 (31.4%)    Chunk 39/121 (32.2%)    Chunk 40/121 (33.1%)    Chunk 41/121 (33.9%)    Chunk 42/121 (34.7%)    Chunk 43/121 (35.5%)    Chunk 44/121 (36.4%)    Chunk 45/121 (37.2%)    Chunk 46/121 (38.0%)    Chunk 47/121 (38.8%)    Chunk 48/121 (39.7%)    Chunk 49/121 (40.5%)    Chunk 50/121 (41.3%)    Chunk 51/121 (42.1%)    Chunk 52/121 (43.0%)    Chunk 53/121 (43.8%)    Chunk 54/121 (44.6%)    Chunk 55/121 (45.5%)    Chunk 56/121 (46.3%)    Chunk 57/121 (47.1%)    Chunk 58/121 (47.9%)    Chunk 59/121 (48.8%)    Chunk 60/121 (49.6%)    Chunk 61/121 (50.4%)    Chunk 62/121 (51.2%)    Chunk 63/121 (52.1%)    Chunk 64/121 (52.9%)    Chunk 65/121 (53.7%)    Chunk 66/121 (54.5%)    Chunk 67/121 (55.4%)    Chunk 68/121 (56.2%)    Chunk 69/121 (57.0%)    Chunk 70/121 (57.9%)    Chunk 71/121 (58.7%)    Chunk 72/121 (59.5%)    Chunk 73/121 (60.3%)    Chunk 74/121 (61.2%)    Chunk 75/121 (62.0%)    Chunk 76/121 (62.8%)    Chunk 77/121 (63.6%)    Chunk 78/121 (64.5%)    Chunk 79/121 (65.3%)    Chunk 80/121 (66.1%)    Chunk 81/121 (66.9%)    Chunk 82/121 (67.8%)    Chunk 83/121 (68.6%)    Chunk 84/121 (69.4%)    Chunk 85/121 (70.2%)    Chunk 86/121 (71.1%)    Chunk 87/121 (71.9%)    Chunk 88/121 (72.7%)    Chunk 89/121 (73.6%)    Chunk 90/121 (74.4%)    Chunk 91/121 (75.2%)    Chunk 92/121 (76.0%)    Chunk 93/121 (76.9%)    Chunk 94/121 (77.7%)    Chunk 95/121 (78.5%)    Chunk 96/121 (79.3%)    Chunk 97/121 (80.2%)    Chunk 98/121 (81.0%)    Chunk 99/121 (81.8%)    Chunk 100/121 (82.6%)    Chunk 101/121 (83.5%)    Chunk 102/121 (84.3%)    Chunk 103/121 (85.1%)    Chunk 104/121 (86.0%)    Chunk 105/121 (86.8%)    Chunk 106/121 (87.6%)    Chunk 107/121 (88.4%)    Chunk 108/121 (89.3%)    Chunk 109/121 (90.1%)    Chunk 110/121 (90.9%)    Chunk 111/121 (91.7%)    Chunk 112/121 (92.6%)    Chunk 113/121 (93.4%)    Chunk 114/121 (94.2%)    Chunk 115/121 (95.0%)    Chunk 116/121 (95.9%)    Chunk 117/121 (96.7%)    Chunk 118/121 (97.5%)    Chunk 119/121 (98.3%)    Chunk 120/121 (99.2%)    Chunk 121/121 (100.0%)
+  ✓ Final shape: (121, 51, 6)
+    (121 time bins × 51 channels × 6 bands)
+
+Creating output NWB...
+
+Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-111/ses-01/preprocessed/sub-111_ses-01_run-MA47988U_bipolar_psd.nwb
+
+✓ COMPLETED in 47.8s (0.8 min)
+  Output size: 0.5 MB
+✓ File 1/20 completed successfully
+
+======================================================================
+BATCH FILE 2/20: sub-111_ses-01_run-MA47988V.nwb
+Overall: 1442/3205
+======================================================================
+======================================================================
+PROCESSING: sub-111_ses-01_run-MA47988V.nwb
+======================================================================
+
+File info:
+  Samples: 3,278,000 (54.6 minutes)
+  Channels: 58
+  Sampling rate: 1000.0 Hz
+  Data size: 0.71 GB (float32)
+
+Creating bipolar pairs...
+  Created 51 bipolar pairs from 58 electrodes
+
+Computing band power (chunked processing)...
+
+  Time-varying band power with Welch's method:
+    Time bin size: 60.0s (60,000 samples)
+    Welch segment size: 1.0s (1000 samples)
+    Welch overlap: 50% (500 samples)
+    Frequency resolution: 1.00 Hz
+    Frequency range: 0-500.0 Hz (501 bins)
+    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
+    Total time bins: 55
+    Chunk 1/55 (1.8%)    Chunk 2/55 (3.6%)    Chunk 3/55 (5.5%)    Chunk 4/55 (7.3%)    Chunk 5/55 (9.1%)    Chunk 6/55 (10.9%)    Chunk 7/55 (12.7%)    Chunk 8/55 (14.5%)    Chunk 9/55 (16.4%)    Chunk 10/55 (18.2%)    Chunk 11/55 (20.0%)    Chunk 12/55 (21.8%)    Chunk 13/55 (23.6%)    Chunk 14/55 (25.5%)    Chunk 15/55 (27.3%)    Chunk 16/55 (29.1%)    Chunk 17/55 (30.9%)    Chunk 18/55 (32.7%)    Chunk 19/55 (34.5%)    Chunk 20/55 (36.4%)    Chunk 21/55 (38.2%)    Chunk 22/55 (40.0%)    Chunk 23/55 (41.8%)    Chunk 24/55 (43.6%)    Chunk 25/55 (45.5%)    Chunk 26/55 (47.3%)    Chunk 27/55 (49.1%)    Chunk 28/55 (50.9%)    Chunk 29/55 (52.7%)    Chunk 30/55 (54.5%)    Chunk 31/55 (56.4%)    Chunk 32/55 (58.2%)    Chunk 33/55 (60.0%)    Chunk 34/55 (61.8%)    Chunk 35/55 (63.6%)    Chunk 36/55 (65.5%)    Chunk 37/55 (67.3%)    Chunk 38/55 (69.1%)    Chunk 39/55 (70.9%)    Chunk 40/55 (72.7%)    Chunk 41/55 (74.5%)    Chunk 42/55 (76.4%)    Chunk 43/55 (78.2%)    Chunk 44/55 (80.0%)    Chunk 45/55 (81.8%)    Chunk 46/55 (83.6%)    Chunk 47/55 (85.5%)    Chunk 48/55 (87.3%)    Chunk 49/55 (89.1%)    Chunk 50/55 (90.9%)    Chunk 51/55 (92.7%)    Chunk 52/55 (94.5%)    Chunk 53/55 (96.4%)    Chunk 54/55 (98.2%)    Chunk 55/55 (100.0%)
+  ✓ Final shape: (55, 51, 6)
+    (55 time bins × 51 channels × 6 bands)
+
+Creating output NWB...
+
+Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-111/ses-01/preprocessed/sub-111_ses-01_run-MA47988V_bipolar_psd.nwb
+
+✓ COMPLETED in 22.3s (0.4 min)
+  Output size: 0.4 MB
+✓ File 2/20 completed successfully
+
+======================================================================
+BATCH FILE 3/20: sub-111_ses-01_run-MA479891.nwb
+Overall: 1443/3205
+======================================================================
+======================================================================
+PROCESSING: sub-111_ses-01_run-MA479891.nwb
+======================================================================
+
+File info:
+  Samples: 3,086,000 (102.9 minutes)
+  Channels: 58
+  Sampling rate: 500.0 Hz
+  Data size: 0.67 GB (float32)
+
+Creating bipolar pairs...
+  Created 51 bipolar pairs from 58 electrodes
+
+Computing band power (chunked processing)...
+
+  Time-varying band power with Welch's method:
+    Time bin size: 60.0s (30,000 samples)
+    Welch segment size: 2.0s (1000 samples)
+    Welch overlap: 50% (500 samples)
+    Frequency resolution: 0.50 Hz
+    Frequency range: 0-250.0 Hz (501 bins)
+    Note: nfft adjusted from 680 to 1000 (nfft must be ≥ nperseg)
+    Total time bins: 103
+    Chunk 1/103 (1.0%)    Chunk 2/103 (1.9%)    Chunk 3/103 (2.9%)    Chunk 4/103 (3.9%)    Chunk 5/103 (4.9%)    Chunk 6/103 (5.8%)    Chunk 7/103 (6.8%)    Chunk 8/103 (7.8%)    Chunk 9/103 (8.7%)    Chunk 10/103 (9.7%)    Chunk 11/103 (10.7%)    Chunk 12/103 (11.7%)    Chunk 13/103 (12.6%)    Chunk 14/103 (13.6%)    Chunk 15/103 (14.6%)    Chunk 16/103 (15.5%)    Chunk 17/103 (16.5%)    Chunk 18/103 (17.5%)    Chunk 19/103 (18.4%)    Chunk 20/103 (19.4%)    Chunk 21/103 (20.4%)    Chunk 22/103 (21.4%)    Chunk 23/103 (22.3%)    Chunk 24/103 (23.3%)    Chunk 25/103 (24.3%)    Chunk 26/103 (25.2%)    Chunk 27/103 (26.2%)    Chunk 28/103 (27.2%)    Chunk 29/103 (28.2%)    Chunk 30/103 (29.1%)    Chunk 31/103 (30.1%)    Chunk 32/103 (31.1%)    Chunk 33/103 (32.0%)    Chunk 34/103 (33.0%)    Chunk 35/103 (34.0%)    Chunk 36/103 (35.0%)    Chunk 37/103 (35.9%)    Chunk 38/103 (36.9%)    Chunk 39/103 (37.9%)    Chunk 40/103 (38.8%)    Chunk 41/103 (39.8%)    Chunk 42/103 (40.8%)    Chunk 43/103 (41.7%)    Chunk 44/103 (42.7%)    Chunk 45/103 (43.7%)    Chunk 46/103 (44.7%)    Chunk 47/103 (45.6%)    Chunk 48/103 (46.6%)    Chunk 49/103 (47.6%)    Chunk 50/103 (48.5%)    Chunk 51/103 (49.5%)    Chunk 52/103 (50.5%)    Chunk 53/103 (51.5%)    Chunk 54/103 (52.4%)    Chunk 55/103 (53.4%)    Chunk 56/103 (54.4%)    Chunk 57/103 (55.3%)    Chunk 58/103 (56.3%)    Chunk 59/103 (57.3%)    Chunk 60/103 (58.3%)    Chunk 61/103 (59.2%)    Chunk 62/103 (60.2%)    Chunk 63/103 (61.2%)    Chunk 64/103 (62.1%)    Chunk 65/103 (63.1%)    Chunk 66/103 (64.1%)    Chunk 67/103 (65.0%)    Chunk 68/103 (66.0%)    Chunk 69/103 (67.0%)    Chunk 70/103 (68.0%)    Chunk 71/103 (68.9%)    Chunk 72/103 (69.9%)    Chunk 73/103 (70.9%)    Chunk 74/103 (71.8%)    Chunk 75/103 (72.8%)    Chunk 76/103 (73.8%)    Chunk 77/103 (74.8%)    Chunk 78/103 (75.7%)    Chunk 79/103 (76.7%)    Chunk 80/103 (77.7%)    Chunk 81/103 (78.6%)    Chunk 82/103 (79.6%)    Chunk 83/103 (80.6%)    Chunk 84/103 (81.6%)    Chunk 85/103 (82.5%)    Chunk 86/103 (83.5%)    Chunk 87/103 (84.5%)    Chunk 88/103 (85.4%)    Chunk 89/103 (86.4%)    Chunk 90/103 (87.4%)    Chunk 91/103 (88.3%)    Chunk 92/103 (89.3%)    Chunk 93/103 (90.3%)    Chunk 94/103 (91.3%)    Chunk 95/103 (92.2%)    Chunk 96/103 (93.2%)    Chunk 97/103 (94.2%)    Chunk 98/103 (95.1%)    Chunk 99/103 (96.1%)    Chunk 100/103 (97.1%)    Chunk 101/103 (98.1%)    Chunk 102/103 (99.0%)    Chunk 103/103 (100.0%)
+  ✓ Final shape: (103, 51, 6)
+    (103 time bins × 51 channels × 6 bands)
+
+Creating output NWB...
+
+Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-111/ses-01/preprocessed/sub-111_ses-01_run-MA479891_bipolar_psd.nwb
+
+✓ COMPLETED in 20.4s (0.3 min)
+  Output size: 0.5 MB
+✓ File 3/20 completed successfully
+
+======================================================================
+BATCH FILE 4/20: sub-111_ses-01_run-MA479895.nwb
+Overall: 1444/3205
+======================================================================
+======================================================================
+PROCESSING: sub-111_ses-01_run-MA479895.nwb
+======================================================================
+
+File info:
+  Samples: 6,500 (0.2 minutes)
+  Channels: 58
+  Sampling rate: 500.0 Hz
+  Data size: 0.00 GB (float32)
+
+Creating bipolar pairs...
+  Created 51 bipolar pairs from 58 electrodes
+
+Computing band power (chunked processing)...
+
+  Time-varying band power with Welch's method:
+    Time bin size: 60.0s (30,000 samples)
+    Welch segment size: 2.0s (1000 samples)
+    Welch overlap: 50% (500 samples)
+    Frequency resolution: 0.50 Hz
+    Frequency range: 0-250.0 Hz (501 bins)
+    Note: nfft adjusted from 680 to 1000 (nfft must be ≥ nperseg)
+    Total time bins: 1
+    Chunk 1/1 (100.0%)
+  ✓ Final shape: (1, 51, 6)
+    (1 time bins × 51 channels × 6 bands)
+
+Creating output NWB...
+
+Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-111/ses-01/preprocessed/sub-111_ses-01_run-MA479895_bipolar_psd.nwb
+
+✓ COMPLETED in 1.6s (0.0 min)
+  Output size: 0.3 MB
+✓ File 4/20 completed successfully
+
+======================================================================
+BATCH FILE 5/20: sub-111_ses-01_run-MA479897.nwb
+Overall: 1445/3205
+======================================================================
+======================================================================
+PROCESSING: sub-111_ses-01_run-MA479897.nwb
+======================================================================
+
+File info:
+  Samples: 2,492,000 (83.1 minutes)
+  Channels: 58
+  Sampling rate: 500.0 Hz
+  Data size: 0.54 GB (float32)
+
+Creating bipolar pairs...
+  Created 51 bipolar pairs from 58 electrodes
+
+Computing band power (chunked processing)...
+
+  Time-varying band power with Welch's method:
+    Time bin size: 60.0s (30,000 samples)
+    Welch segment size: 2.0s (1000 samples)
+    Welch overlap: 50% (500 samples)
+    Frequency resolution: 0.50 Hz
+    Frequency range: 0-250.0 Hz (501 bins)
+    Note: nfft adjusted from 680 to 1000 (nfft must be ≥ nperseg)
+    Total time bins: 84
+    Chunk 1/84 (1.2%)    Chunk 2/84 (2.4%)    Chunk 3/84 (3.6%)    Chunk 4/84 (4.8%)    Chunk 5/84 (6.0%)    Chunk 6/84 (7.1%)    Chunk 7/84 (8.3%)    Chunk 8/84 (9.5%)    Chunk 9/84 (10.7%)    Chunk 10/84 (11.9%)    Chunk 11/84 (13.1%)    Chunk 12/84 (14.3%)    Chunk 13/84 (15.5%)    Chunk 14/84 (16.7%)    Chunk 15/84 (17.9%)    Chunk 16/84 (19.0%)    Chunk 17/84 (20.2%)    Chunk 18/84 (21.4%)    Chunk 19/84 (22.6%)    Chunk 20/84 (23.8%)    Chunk 21/84 (25.0%)    Chunk 22/84 (26.2%)    Chunk 23/84 (27.4%)    Chunk 24/84 (28.6%)    Chunk 25/84 (29.8%)    Chunk 26/84 (31.0%)    Chunk 27/84 (32.1%)    Chunk 28/84 (33.3%)    Chunk 29/84 (34.5%)    Chunk 30/84 (35.7%)    Chunk 31/84 (36.9%)    Chunk 32/84 (38.1%)    Chunk 33/84 (39.3%)    Chunk 34/84 (40.5%)    Chunk 35/84 (41.7%)    Chunk 36/84 (42.9%)    Chunk 37/84 (44.0%)    Chunk 38/84 (45.2%)    Chunk 39/84 (46.4%)    Chunk 40/84 (47.6%)    Chunk 41/84 (48.8%)    Chunk 42/84 (50.0%)    Chunk 43/84 (51.2%)    Chunk 44/84 (52.4%)    Chunk 45/84 (53.6%)    Chunk 46/84 (54.8%)    Chunk 47/84 (56.0%)    Chunk 48/84 (57.1%)    Chunk 49/84 (58.3%)    Chunk 50/84 (59.5%)    Chunk 51/84 (60.7%)    Chunk 52/84 (61.9%)    Chunk 53/84 (63.1%)    Chunk 54/84 (64.3%)    Chunk 55/84 (65.5%)    Chunk 56/84 (66.7%)    Chunk 57/84 (67.9%)    Chunk 58/84 (69.0%)    Chunk 59/84 (70.2%)    Chunk 60/84 (71.4%)    Chunk 61/84 (72.6%)    Chunk 62/84 (73.8%)    Chunk 63/84 (75.0%)    Chunk 64/84 (76.2%)    Chunk 65/84 (77.4%)    Chunk 66/84 (78.6%)    Chunk 67/84 (79.8%)    Chunk 68/84 (81.0%)    Chunk 69/84 (82.1%)    Chunk 70/84 (83.3%)    Chunk 71/84 (84.5%)    Chunk 72/84 (85.7%)    Chunk 73/84 (86.9%)    Chunk 74/84 (88.1%)    Chunk 75/84 (89.3%)    Chunk 76/84 (90.5%)    Chunk 77/84 (91.7%)    Chunk 78/84 (92.9%)    Chunk 79/84 (94.0%)    Chunk 80/84 (95.2%)    Chunk 81/84 (96.4%)    Chunk 82/84 (97.6%)    Chunk 83/84 (98.8%)    Chunk 84/84 (100.0%)
+  ✓ Final shape: (84, 51, 6)
+    (84 time bins × 51 channels × 6 bands)
+
+Creating output NWB...
+
+Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-111/ses-01/preprocessed/sub-111_ses-01_run-MA479897_bipolar_psd.nwb
+
+✓ COMPLETED in 16.5s (0.3 min)
+  Output size: 0.4 MB
+✓ File 5/20 completed successfully
+
+======================================================================
+BATCH FILE 6/20: sub-116_ses-01_run-DA5265MC.nwb
+Overall: 1446/3205
+======================================================================
+======================================================================
+PROCESSING: sub-116_ses-01_run-DA5265MC.nwb
+======================================================================
+==========================================
+Job finished with exit code: 1
+==========================================
