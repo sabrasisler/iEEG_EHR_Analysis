@@ -14,8 +14,11 @@ no re-classification, no full-file loads). Two things this does efficiently:
    full channels x samples array.
 
 Usage:
-  python -m qc_scripts.plot_flagged_runs --targets 093:LOF10,093:RINS7
+  python -m qc_scripts.plot_flagged_runs --targets 093:LOF10,093:RINS7 --n-runs 2
   python -m qc_scripts.plot_flagged_runs --find-flatline-examples 2
+  python -m qc_scripts.plot_flagged_runs \
+      --review-csv /path/to/summary/flagged_for_review.csv --n-runs 2 \
+      --output-dir /path/to/alt/root
 """
 
 import argparse
@@ -35,24 +38,24 @@ STATUS_COLORS = {
     'gross_artifact': 'orange',
 }
 
-OUT_DIR = config.PLOTS_DIR / 'flagged_examples'
+def _out_dir():
+    return config.PLOTS_DIR / 'flagged_examples'
 
 
 def _per_window_path(subject, artifact_type):
     return config.PER_WINDOW_DIR / f'sub-{subject}_{artifact_type}.csv'
 
 
-def best_run_for_channel(subject, channel, artifact_type, chunksize=500_000):
+def top_runs_for_channel(subject, channel, artifact_type, n=1, chunksize=500_000):
     """
     Stream a per-window CSV in chunks, filtering to `channel`, without ever
-    loading the full (potentially 900MB+) file into memory. Returns
-    (run_id, windows_df) for the run with the most excluded windows for this
-    channel/artifact type, or (None, None) if the channel has no exclusions
-    at all for this artifact type.
+    loading the full (potentially 900MB+) file into memory. Returns up to `n`
+    (run_id, windows_df) pairs, most-excluded-windows first, or [] if the
+    channel has no exclusions at all for this artifact type.
     """
     path = _per_window_path(subject, artifact_type)
     if not path.exists():
-        return None, None
+        return []
 
     usecols = ['channel', 'run_id', 'window_start_time', 'window_end_time', 'excluded']
     matches = []
@@ -61,14 +64,20 @@ def best_run_for_channel(subject, channel, artifact_type, chunksize=500_000):
         if len(sub):
             matches.append(sub)
     if not matches:
-        return None, None
+        return []
 
     df = pd.concat(matches, ignore_index=True)
     counts = df[df['excluded']].groupby('run_id').size()
     if counts.empty:
-        return None, None
-    best_run = counts.idxmax()
-    return best_run, df[df['run_id'] == best_run]
+        return []
+    top_runs = counts.sort_values(ascending=False).head(n).index
+    return [(run, df[df['run_id'] == run]) for run in top_runs]
+
+
+def best_run_for_channel(subject, channel, artifact_type, chunksize=500_000):
+    """Back-compat single-run wrapper around top_runs_for_channel."""
+    top = top_runs_for_channel(subject, channel, artifact_type, n=1, chunksize=chunksize)
+    return top[0] if top else (None, None)
 
 
 def find_flatline_examples(subjects, n_examples=2, chunksize=500_000):
@@ -201,8 +210,9 @@ def plot_channel_run(subject, channel, run, session='01', highlight_types=None):
     ax.set_title(f"sub-{subject} ses-{session} {run}  channel={channel}", fontsize=10)
     fig.tight_layout()
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUT_DIR / f"sub-{subject}_{run}_{channel}.png"
+    out_dir = _out_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"sub-{subject}_{run}_{channel}.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"  Saved {out_path}  (counts: {counts})")
@@ -215,6 +225,12 @@ def main():
     ap.add_argument('--artifact-type', default=None,
                      help='Restrict --targets run-selection to one artifact type '
                           '(default: try saturation, then gross_artifact, then flatline)')
+    ap.add_argument('--n-runs', type=int, default=1,
+                     help='Number of runs (most-excluded-first) to plot per --targets entry (default: 1)')
+    ap.add_argument('--review-csv', default=None,
+                     help='Path to a flagged_for_review.csv (subject_id,channel,artifact_type,'
+                          'pct_windows_excluded) — plot --n-runs runs for each row, using that '
+                          "row's own artifact_type instead of guessing one")
     ap.add_argument('--find-flatline-examples', type=int, default=0,
                      help='Also scan available subjects for N channels/runs with flatlined periods')
     ap.add_argument('--random', type=int, default=0,
@@ -223,7 +239,13 @@ def main():
     ap.add_argument('--seed', type=int, default=None,
                      help='Seed for --random selection (default: unseeded/non-reproducible)')
     ap.add_argument('--session', default='01')
+    ap.add_argument('--output-dir', default=None,
+                     help=f'Alternate output root to read per-window CSVs from / write plots to '
+                          f'(default: {config.OUTPUT_DIR})')
     args = ap.parse_args()
+
+    if args.output_dir:
+        config.set_output_dir(args.output_dir)
 
     available_subjects = sorted({p.stem.split('_')[0].replace('sub-', '')
                                   for p in config.PER_WINDOW_DIR.glob('sub-*.csv')})
@@ -236,19 +258,37 @@ def main():
 
             preferred_order = [args.artifact_type] if args.artifact_type else \
                 ['saturation', 'gross_artifact', 'flatline']
-            run, windows = None, None
+            top_runs, picked_type = [], None
             for artifact_type in preferred_order:
                 if artifact_type is None:
                     continue
-                run, windows = best_run_for_channel(subject, channel, artifact_type)
-                if run is not None:
-                    print(f"  Picked run-{run} (most exclusions for '{artifact_type}')")
+                top_runs = top_runs_for_channel(subject, channel, artifact_type, n=args.n_runs)
+                if top_runs:
+                    picked_type = artifact_type
                     break
-            if run is None:
+            if not top_runs:
                 print(f"  No exclusions found for {channel} in any artifact type, skipping.")
                 continue
 
-            plot_channel_run(subject, channel, run, session=args.session)
+            print(f"  Picked {len(top_runs)} run(s) (most exclusions for '{picked_type}'): "
+                  f"{[r for r, _ in top_runs]}")
+            for run, _ in top_runs:
+                plot_channel_run(subject, channel, run, session=args.session)
+
+    if args.review_csv:
+        review = pd.read_csv(args.review_csv)
+        for _, row in review.iterrows():
+            subject = row['subject_id'].replace('sub-', '')
+            channel = row['channel']
+            artifact_type = row['artifact_type']
+            print(f"sub-{subject} / {channel} / {artifact_type} "
+                  f"({row['pct_windows_excluded']:.4f}% excluded):")
+            top_runs = top_runs_for_channel(subject, channel, artifact_type, n=args.n_runs)
+            if not top_runs:
+                print(f"  No exclusions found, skipping.")
+                continue
+            for run, _ in top_runs:
+                plot_channel_run(subject, channel, run, session=args.session)
 
     if args.find_flatline_examples:
         print(f"\nScanning for {args.find_flatline_examples} flatline example(s)...")
