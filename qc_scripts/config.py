@@ -75,11 +75,12 @@ FLATLINE_WINDOW_SEC = 2.0
 FLATLINE_VAR_THRESH = 0.5e-12   # V^2 — same default as raw_voltage_qc.FLATLINE_VAR_THRESHOLD
 
 # ============================================================================
-# STEP 3: NON-NEURAL GROSS ARTIFACT (session-level)
+# STEP 3: NON-NEURAL GROSS ARTIFACT (session-relative high-variance/amplitude
+# bursts, e.g. unplug/replug — NOT DC-offset/drift; see detect_gross_artifact.py)
 # ============================================================================
 
 GROSS_WINDOW_SEC = 60.0
-GROSS_STD_THRESH = 5.0
+GROSS_STD_THRESH = 5.0   # one-sided: only anomalously HIGH variance is excluded
 
 # ============================================================================
 # SUMMARY / REVIEW FLAGGING

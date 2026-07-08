@@ -126,9 +126,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--output-dir', default=None,
                      help=f'Alternate output root (default: {config.OUTPUT_DIR})')
+    ap.add_argument('--gross-std-thresh', type=float, default=None,
+                     help='Override the gross_artifact threshold line drawn on its plot '
+                          f'(default: {config.GROSS_STD_THRESH}) -- purely cosmetic, does not '
+                          "recompute 'excluded'; use reclassify_gross_artifact_threshold.py for that")
     args = ap.parse_args()
     if args.output_dir:
         config.set_output_dir(args.output_dir)
+    if args.gross_std_thresh is not None:
+        THRESHOLDS['gross_artifact'] = args.gross_std_thresh
 
     config.ensure_output_dirs()
     needed_cols = ['subject_id', 'channel', 'artifact_type', 'excluded', 'metric_value']

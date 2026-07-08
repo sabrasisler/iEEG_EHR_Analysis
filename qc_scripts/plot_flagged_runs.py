@@ -105,6 +105,55 @@ def find_flatline_examples(subjects, n_examples=2, chunksize=500_000):
     return [(subject, ch, run) for _, subject, ch, run in candidates[:n_examples]]
 
 
+def find_random_any_examples(subjects, n_examples, seed=None, max_chunks_per_file=2,
+                              chunksize=500_000, artifact_type='saturation'):
+    """
+    Sample N random (subject, channel, run) combos with NO requirement that
+    they have any exclusion at all -- unlike find_random_examples, this is
+    for seeing what typical/clean behavior looks like, not just artifacts.
+    Uses one artifact type's per-window CSV (default saturation) purely as a
+    cheap source of (channel, run_id) pairs -- every channel/run is a row in
+    every artifact type's file, exclusion status is irrelevant here.
+    """
+    rng = random.Random(seed)
+    subjects_shuffled = list(subjects)
+    rng.shuffle(subjects_shuffled)
+
+    candidates = []
+    for subject in subjects_shuffled:
+        path = _per_window_path(subject, artifact_type)
+        if not path.exists():
+            continue
+        usecols = ['channel', 'run_id']
+        seen = set()
+        for chunk_i, chunk in enumerate(pd.read_csv(path, usecols=usecols, chunksize=chunksize)):
+            # usecols preserves the FILE's column order, not this list's order -- reindex explicitly
+            for ch, run in chunk[['channel', 'run_id']].drop_duplicates().itertuples(index=False):
+                seen.add((subject, ch, run))
+            if chunk_i + 1 >= max_chunks_per_file:
+                break
+        candidates.extend(seen)
+        # keep visiting subjects for diversity even once we have "enough" candidates --
+        # a single subject's file alone can trivially exceed n_examples*5
+        if len(candidates) >= n_examples * 5 and len({c[0] for c in candidates}) >= min(10, len(subjects_shuffled)):
+            break
+
+    rng.shuffle(candidates)
+    # spread picks across subjects rather than letting one subject's large pool dominate
+    by_subject = {}
+    for c in candidates:
+        by_subject.setdefault(c[0], []).append(c)
+    subjects_order = list(by_subject.keys())
+    rng.shuffle(subjects_order)
+    picked, i = [], 0
+    while len(picked) < n_examples and any(by_subject.values()):
+        subj = subjects_order[i % len(subjects_order)]
+        if by_subject[subj]:
+            picked.append(by_subject[subj].pop())
+        i += 1
+    return picked
+
+
 def find_random_examples(subjects, artifact_types, n_examples, seed=None,
                           max_chunks_per_file=5, chunksize=500_000):
     """
@@ -236,8 +285,11 @@ def main():
     ap.add_argument('--random', type=int, default=0,
                      help='Plot N random subject/channel/run combos with at least one exclusion, '
                           'sampled across all artifact types')
+    ap.add_argument('--random-any', type=int, default=0,
+                     help='Plot N truly random subject/channel/run combos with NO exclusion '
+                          'requirement -- to see typical/clean behavior, not just artifacts')
     ap.add_argument('--seed', type=int, default=None,
-                     help='Seed for --random selection (default: unseeded/non-reproducible)')
+                     help='Seed for --random/--random-any selection (default: unseeded/non-reproducible)')
     ap.add_argument('--session', default='01')
     ap.add_argument('--output-dir', default=None,
                      help=f'Alternate output root to read per-window CSVs from / write plots to '
@@ -303,6 +355,14 @@ def main():
                                          seed=args.seed)
         for subject, channel, run, artifact_type in examples:
             print(f"sub-{subject} / {channel} / {run}  (found via '{artifact_type}'):")
+            plot_channel_run(subject, channel, run, session=args.session)
+
+    if args.random_any:
+        print(f"\nSampling {args.random_any} truly random example(s) (seed={args.seed}, "
+              f"no exclusion requirement)...")
+        examples = find_random_any_examples(available_subjects, args.random_any, seed=args.seed)
+        for subject, channel, run in examples:
+            print(f"sub-{subject} / {channel} / {run}:")
             plot_channel_run(subject, channel, run, session=args.session)
 
 
