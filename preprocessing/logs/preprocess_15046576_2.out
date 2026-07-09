@@ -1,30 +1,0 @@
-======================================================================
-PROCESSING: sub-256_ses-01_run-IA619433.nwb
-======================================================================
-
-File info:
-  Samples: 14,400,000 (120.0 minutes)
-  Channels: 214
-  Sampling rate: 2000.0 Hz
-  Data size: 11.48 GB (float32)
-
-Creating bipolar pairs...
-  Created 199 bipolar pairs from 214 electrodes
-
-Computing band power (chunked processing)...
-
-  Memory-efficient processing:
-    Chunk size: 60s (120,000 samples)
-    Chunk overlap: 500 samples
-    Estimated output windows: ~57599
-    Chunk 1/121 (0.8%) - 479 windows    Chunk 2/121 (1.7%) - 478 windows    Chunk 3/121 (2.5%) - 478 windows    Chunk 4/121 (3.3%) - 478 windows    Chunk 5/121 (4.1%) - 478 windows    Chunk 6/121 (5.0%) - 478 windows    Chunk 7/121 (5.8%) - 478 windows    Chunk 8/121 (6.6%) - 478 windows    Chunk 9/121 (7.4%) - 478 windows    Chunk 10/121 (8.3%) - 478 windows    Chunk 11/121 (9.1%) - 478 windows    Chunk 12/121 (9.9%) - 478 windows    Chunk 13/121 (10.7%) - 478 windows    Chunk 14/121 (11.6%) - 478 windows    Chunk 15/121 (12.4%) - 478 windows    Chunk 16/121 (13.2%) - 478 windows    Chunk 17/121 (14.0%) - 478 windows    Chunk 18/121 (14.9%) - 478 windows    Chunk 19/121 (15.7%) - 478 windows    Chunk 20/121 (16.5%) - 478 windows    Chunk 21/121 (17.4%) - 478 windows    Chunk 22/121 (18.2%) - 478 windows    Chunk 23/121 (19.0%) - 478 windows    Chunk 24/121 (19.8%) - 478 windows    Chunk 25/121 (20.7%) - 478 windows    Chunk 26/121 (21.5%) - 478 windows    Chunk 27/121 (22.3%) - 478 windows    Chunk 28/121 (23.1%) - 478 windows    Chunk 29/121 (24.0%) - 478 windows    Chunk 30/121 (24.8%) - 478 windows    Chunk 31/121 (25.6%) - 478 windows    Chunk 32/121 (26.4%) - 478 windows    Chunk 33/121 (27.3%) - 478 windows    Chunk 34/121 (28.1%) - 478 windows    Chunk 35/121 (28.9%) - 478 windows    Chunk 36/121 (29.8%) - 478 windows    Chunk 37/121 (30.6%) - 478 windows    Chunk 38/121 (31.4%) - 478 windows    Chunk 39/121 (32.2%) - 478 windows    Chunk 40/121 (33.1%) - 478 windows    Chunk 41/121 (33.9%) - 478 windows    Chunk 42/121 (34.7%) - 478 windows    Chunk 43/121 (35.5%) - 478 windows    Chunk 44/121 (36.4%) - 478 windows    Chunk 45/121 (37.2%) - 478 windows    Chunk 46/121 (38.0%) - 478 windows    Chunk 47/121 (38.8%) - 478 windows    Chunk 48/121 (39.7%) - 478 windows    Chunk 49/121 (40.5%) - 478 windows    Chunk 50/121 (41.3%) - 478 windows    Chunk 51/121 (42.1%) - 478 windows    Chunk 52/121 (43.0%) - 478 windows    Chunk 53/121 (43.8%) - 478 windows    Chunk 54/121 (44.6%) - 478 windows    Chunk 55/121 (45.5%) - 478 windows    Chunk 56/121 (46.3%) - 478 windows    Chunk 57/121 (47.1%) - 478 windows    Chunk 58/121 (47.9%) - 478 windows    Chunk 59/121 (48.8%) - 478 windows    Chunk 60/121 (49.6%) - 478 windows    Chunk 61/121 (50.4%) - 478 windows    Chunk 62/121 (51.2%) - 478 windows    Chunk 63/121 (52.1%) - 478 windows    Chunk 64/121 (52.9%) - 478 windows    Chunk 65/121 (53.7%) - 478 windows    Chunk 66/121 (54.5%) - 478 windows    Chunk 67/121 (55.4%) - 478 windows    Chunk 68/121 (56.2%) - 478 windows    Chunk 69/121 (57.0%) - 478 windows    Chunk 70/121 (57.9%) - 478 windows    Chunk 71/121 (58.7%) - 478 windows    Chunk 72/121 (59.5%) - 478 windows    Chunk 73/121 (60.3%) - 478 windows    Chunk 74/121 (61.2%) - 478 windows    Chunk 75/121 (62.0%) - 478 windows    Chunk 76/121 (62.8%) - 478 windows    Chunk 77/121 (63.6%) - 478 windows    Chunk 78/121 (64.5%) - 478 windows    Chunk 79/121 (65.3%) - 478 windows    Chunk 80/121 (66.1%) - 478 windows    Chunk 81/121 (66.9%) - 478 windows    Chunk 82/121 (67.8%) - 478 windows    Chunk 83/121 (68.6%) - 478 windows    Chunk 84/121 (69.4%) - 478 windows    Chunk 85/121 (70.2%) - 478 windows    Chunk 86/121 (71.1%) - 478 windows    Chunk 87/121 (71.9%) - 478 windows    Chunk 88/121 (72.7%) - 478 windows    Chunk 89/121 (73.6%) - 478 windows    Chunk 90/121 (74.4%) - 478 windows    Chunk 91/121 (75.2%) - 478 windows    Chunk 92/121 (76.0%) - 478 windows    Chunk 93/121 (76.9%) - 478 windows    Chunk 94/121 (77.7%) - 478 windows    Chunk 95/121 (78.5%) - 478 windows    Chunk 96/121 (79.3%) - 478 windows    Chunk 97/121 (80.2%) - 478 windows    Chunk 98/121 (81.0%) - 478 windows    Chunk 99/121 (81.8%) - 478 windows    Chunk 100/121 (82.6%) - 478 windows    Chunk 101/121 (83.5%) - 478 windows    Chunk 102/121 (84.3%) - 478 windows    Chunk 103/121 (85.1%) - 478 windows    Chunk 104/121 (86.0%) - 478 windows    Chunk 105/121 (86.8%) - 478 windows    Chunk 106/121 (87.6%) - 478 windows    Chunk 107/121 (88.4%) - 478 windows    Chunk 108/121 (89.3%) - 478 windows    Chunk 109/121 (90.1%) - 478 windows    Chunk 110/121 (90.9%) - 478 windows    Chunk 111/121 (91.7%) - 478 windows    Chunk 112/121 (92.6%) - 478 windows    Chunk 113/121 (93.4%) - 478 windows    Chunk 114/121 (94.2%) - 478 windows    Chunk 115/121 (95.0%) - 478 windows    Chunk 116/121 (95.9%) - 478 windows    Chunk 117/121 (96.7%) - 478 windows    Chunk 118/121 (97.5%) - 478 windows    Chunk 119/121 (98.3%) - 478 windows    Chunk 120/121 (99.2%) - 478 windows    Chunk 121/121 (100.0%) - 238 windows
-  ✓ Final shape: (57599, 199, 6)
-    (57599 windows × 199 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-256/ses-01/preprocessed/sub-256_ses-01_run-IA619433_bipolar_psd.nwb
-
-✓ COMPLETED in 355.2s (5.9 min)
-  Output size: 263.0 MB
-Exit code: 0

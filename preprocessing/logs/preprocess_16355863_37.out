@@ -1,802 +1,0 @@
-==========================================
-Job Array ID: 16355863
-Task ID: 37
-Batch size: 20 (sequential)
-nperseg: 1000 (freq resolution: 0.5 Hz)
-max_freq: 170 Hz
-==========================================
-======================================================================
-BATCH JOB: Processing files 721 to 740
-Batch size: 20 | Total files: 1525
-======================================================================
-
-======================================================================
-BATCH FILE 1/20: sub-167_ses-01_run-EA1893C8.nwb
-Overall: 721/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893C8.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893C8_bipolar_psd.nwb
-
-✓ COMPLETED in 60.7s (1.0 min)
-  Output size: 0.8 MB
-✓ File 1/20 completed successfully
-
-======================================================================
-BATCH FILE 2/20: sub-167_ses-01_run-EA1893C9.nwb
-Overall: 722/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893C9.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893C9_bipolar_psd.nwb
-
-✓ COMPLETED in 57.3s (1.0 min)
-  Output size: 0.8 MB
-✓ File 2/20 completed successfully
-
-======================================================================
-BATCH FILE 3/20: sub-167_ses-01_run-EA1893CA.nwb
-Overall: 723/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CA.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CA_bipolar_psd.nwb
-
-✓ COMPLETED in 57.7s (1.0 min)
-  Output size: 0.8 MB
-✓ File 3/20 completed successfully
-
-======================================================================
-BATCH FILE 4/20: sub-167_ses-01_run-EA1893CB.nwb
-Overall: 724/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CB.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CB_bipolar_psd.nwb
-
-✓ COMPLETED in 58.5s (1.0 min)
-  Output size: 0.8 MB
-✓ File 4/20 completed successfully
-
-======================================================================
-BATCH FILE 5/20: sub-167_ses-01_run-EA1893CC.nwb
-Overall: 725/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CC.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CC_bipolar_psd.nwb
-
-✓ COMPLETED in 58.3s (1.0 min)
-  Output size: 0.8 MB
-✓ File 5/20 completed successfully
-
-======================================================================
-BATCH FILE 6/20: sub-167_ses-01_run-EA1893CD.nwb
-Overall: 726/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CD.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CD_bipolar_psd.nwb
-
-✓ COMPLETED in 56.6s (0.9 min)
-  Output size: 0.8 MB
-✓ File 6/20 completed successfully
-
-======================================================================
-BATCH FILE 7/20: sub-167_ses-01_run-EA1893CE.nwb
-Overall: 727/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CE.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CE_bipolar_psd.nwb
-
-✓ COMPLETED in 56.9s (0.9 min)
-  Output size: 0.8 MB
-✓ File 7/20 completed successfully
-
-======================================================================
-BATCH FILE 8/20: sub-167_ses-01_run-EA1893CF.nwb
-Overall: 728/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CF.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CF_bipolar_psd.nwb
-
-✓ COMPLETED in 56.7s (0.9 min)
-  Output size: 0.8 MB
-✓ File 8/20 completed successfully
-
-======================================================================
-BATCH FILE 9/20: sub-167_ses-01_run-EA1893CG.nwb
-Overall: 729/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CG.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CG_bipolar_psd.nwb
-
-✓ COMPLETED in 54.9s (0.9 min)
-  Output size: 0.8 MB
-✓ File 9/20 completed successfully
-
-======================================================================
-BATCH FILE 10/20: sub-167_ses-01_run-EA1893CH.nwb
-Overall: 730/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CH.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CH_bipolar_psd.nwb
-
-✓ COMPLETED in 57.3s (1.0 min)
-  Output size: 0.8 MB
-✓ File 10/20 completed successfully
-
-======================================================================
-BATCH FILE 11/20: sub-167_ses-01_run-EA1893CI.nwb
-Overall: 731/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CI.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CI_bipolar_psd.nwb
-
-✓ COMPLETED in 60.1s (1.0 min)
-  Output size: 0.8 MB
-✓ File 11/20 completed successfully
-
-======================================================================
-BATCH FILE 12/20: sub-167_ses-01_run-EA1893CJ.nwb
-Overall: 732/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CJ.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CJ_bipolar_psd.nwb
-
-✓ COMPLETED in 60.2s (1.0 min)
-  Output size: 0.8 MB
-✓ File 12/20 completed successfully
-
-======================================================================
-BATCH FILE 13/20: sub-167_ses-01_run-EA1893CK.nwb
-Overall: 733/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CK.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CK_bipolar_psd.nwb
-
-✓ COMPLETED in 60.1s (1.0 min)
-  Output size: 0.8 MB
-✓ File 13/20 completed successfully
-
-======================================================================
-BATCH FILE 14/20: sub-167_ses-01_run-EA1893CL.nwb
-Overall: 734/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CL.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CL_bipolar_psd.nwb
-
-✓ COMPLETED in 58.7s (1.0 min)
-  Output size: 0.8 MB
-✓ File 14/20 completed successfully
-
-======================================================================
-BATCH FILE 15/20: sub-167_ses-01_run-EA1893CM.nwb
-Overall: 735/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CM.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CM_bipolar_psd.nwb
-
-✓ COMPLETED in 56.4s (0.9 min)
-  Output size: 0.8 MB
-✓ File 15/20 completed successfully
-
-======================================================================
-BATCH FILE 16/20: sub-167_ses-01_run-EA1893CN.nwb
-Overall: 736/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CN.nwb
-======================================================================
-
-File info:
-  Samples: 2,640,000 (44.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 1.65 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 44
-    Chunk 1/44 (2.3%)    Chunk 2/44 (4.5%)    Chunk 3/44 (6.8%)    Chunk 4/44 (9.1%)    Chunk 5/44 (11.4%)    Chunk 6/44 (13.6%)    Chunk 7/44 (15.9%)    Chunk 8/44 (18.2%)    Chunk 9/44 (20.5%)    Chunk 10/44 (22.7%)    Chunk 11/44 (25.0%)    Chunk 12/44 (27.3%)    Chunk 13/44 (29.5%)    Chunk 14/44 (31.8%)    Chunk 15/44 (34.1%)    Chunk 16/44 (36.4%)    Chunk 17/44 (38.6%)    Chunk 18/44 (40.9%)    Chunk 19/44 (43.2%)    Chunk 20/44 (45.5%)    Chunk 21/44 (47.7%)    Chunk 22/44 (50.0%)    Chunk 23/44 (52.3%)    Chunk 24/44 (54.5%)    Chunk 25/44 (56.8%)    Chunk 26/44 (59.1%)    Chunk 27/44 (61.4%)    Chunk 28/44 (63.6%)    Chunk 29/44 (65.9%)    Chunk 30/44 (68.2%)    Chunk 31/44 (70.5%)    Chunk 32/44 (72.7%)    Chunk 33/44 (75.0%)    Chunk 34/44 (77.3%)    Chunk 35/44 (79.5%)    Chunk 36/44 (81.8%)    Chunk 37/44 (84.1%)    Chunk 38/44 (86.4%)    Chunk 39/44 (88.6%)    Chunk 40/44 (90.9%)    Chunk 41/44 (93.2%)    Chunk 42/44 (95.5%)    Chunk 43/44 (97.7%)    Chunk 44/44 (100.0%)
-  ✓ Final shape: (44, 156, 6)
-    (44 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CN_bipolar_psd.nwb
-
-✓ COMPLETED in 45.3s (0.8 min)
-  Output size: 0.7 MB
-✓ File 16/20 completed successfully
-
-======================================================================
-BATCH FILE 17/20: sub-167_ses-01_run-EA1893CQ.nwb
-Overall: 737/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CQ.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CQ_bipolar_psd.nwb
-
-✓ COMPLETED in 57.0s (0.9 min)
-  Output size: 0.8 MB
-✓ File 17/20 completed successfully
-
-======================================================================
-BATCH FILE 18/20: sub-167_ses-01_run-EA1893CR.nwb
-Overall: 738/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CR.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CR_bipolar_psd.nwb
-
-✓ COMPLETED in 58.8s (1.0 min)
-  Output size: 0.8 MB
-✓ File 18/20 completed successfully
-
-======================================================================
-BATCH FILE 19/20: sub-167_ses-01_run-EA1893CS.nwb
-Overall: 739/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CS.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CS_bipolar_psd.nwb
-
-✓ COMPLETED in 56.3s (0.9 min)
-  Output size: 0.8 MB
-✓ File 19/20 completed successfully
-
-======================================================================
-BATCH FILE 20/20: sub-167_ses-01_run-EA1893CT.nwb
-Overall: 740/1525
-======================================================================
-======================================================================
-PROCESSING: sub-167_ses-01_run-EA1893CT.nwb
-======================================================================
-
-File info:
-  Samples: 3,600,000 (60.0 minutes)
-  Channels: 168
-  Sampling rate: 1000.0 Hz
-  Data size: 2.25 GB (float32)
-
-Creating bipolar pairs...
-  Created 156 bipolar pairs from 168 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 60
-    Chunk 1/60 (1.7%)    Chunk 2/60 (3.3%)    Chunk 3/60 (5.0%)    Chunk 4/60 (6.7%)    Chunk 5/60 (8.3%)    Chunk 6/60 (10.0%)    Chunk 7/60 (11.7%)    Chunk 8/60 (13.3%)    Chunk 9/60 (15.0%)    Chunk 10/60 (16.7%)    Chunk 11/60 (18.3%)    Chunk 12/60 (20.0%)    Chunk 13/60 (21.7%)    Chunk 14/60 (23.3%)    Chunk 15/60 (25.0%)    Chunk 16/60 (26.7%)    Chunk 17/60 (28.3%)    Chunk 18/60 (30.0%)    Chunk 19/60 (31.7%)    Chunk 20/60 (33.3%)    Chunk 21/60 (35.0%)    Chunk 22/60 (36.7%)    Chunk 23/60 (38.3%)    Chunk 24/60 (40.0%)    Chunk 25/60 (41.7%)    Chunk 26/60 (43.3%)    Chunk 27/60 (45.0%)    Chunk 28/60 (46.7%)    Chunk 29/60 (48.3%)    Chunk 30/60 (50.0%)    Chunk 31/60 (51.7%)    Chunk 32/60 (53.3%)    Chunk 33/60 (55.0%)    Chunk 34/60 (56.7%)    Chunk 35/60 (58.3%)    Chunk 36/60 (60.0%)    Chunk 37/60 (61.7%)    Chunk 38/60 (63.3%)    Chunk 39/60 (65.0%)    Chunk 40/60 (66.7%)    Chunk 41/60 (68.3%)    Chunk 42/60 (70.0%)    Chunk 43/60 (71.7%)    Chunk 44/60 (73.3%)    Chunk 45/60 (75.0%)    Chunk 46/60 (76.7%)    Chunk 47/60 (78.3%)    Chunk 48/60 (80.0%)    Chunk 49/60 (81.7%)    Chunk 50/60 (83.3%)    Chunk 51/60 (85.0%)    Chunk 52/60 (86.7%)    Chunk 53/60 (88.3%)    Chunk 54/60 (90.0%)    Chunk 55/60 (91.7%)    Chunk 56/60 (93.3%)    Chunk 57/60 (95.0%)    Chunk 58/60 (96.7%)    Chunk 59/60 (98.3%)    Chunk 60/60 (100.0%)
-  ✓ Final shape: (60, 156, 6)
-    (60 time bins × 156 channels × 6 bands)
-
-Creating output NWB...
-
-Writing to: /oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB/sub-167/ses-01/preprocessed/sub-167_ses-01_run-EA1893CT_bipolar_psd.nwb
-
-✓ COMPLETED in 56.1s (0.9 min)
-  Output size: 0.8 MB
-✓ File 20/20 completed successfully
-
-======================================================================
-BATCH SUMMARY
-======================================================================
-Total processed: 20
-Succeeded: 20
-Failed: 0
-======================================================================
-==========================================
-Job finished with exit code: 0
-==========================================

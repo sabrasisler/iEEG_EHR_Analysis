@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
+# logs anywhere (Slurm .out/.err + logs/ dirs) — never source, keep out of provenance
 logs/
-qc_scripts/logs/
+**/logs/
+*.out
+*.err
 # ad hoc scratch + generated data (not source)
 qc_scripts/tmp_*
 qc_scripts/*.csv

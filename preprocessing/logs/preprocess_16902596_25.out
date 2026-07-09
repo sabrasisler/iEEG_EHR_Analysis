@@ -1,42 +1,0 @@
-==========================================
-Job Array ID: 16902596
-Task ID: 25
-Batch size: 20 (sequential)
-nperseg: 1000 (freq resolution: 0.5 Hz)
-max_freq: 170 Hz
-==========================================
-======================================================================
-BATCH JOB: Processing files 481 to 500
-Batch size: 20 | Total files: 3205
-======================================================================
-
-======================================================================
-BATCH FILE 1/20: sub-071_ses-01_run-BA620012.nwb
-Overall: 481/3205
-======================================================================
-======================================================================
-PROCESSING: sub-071_ses-01_run-BA620012.nwb
-======================================================================
-
-File info:
-  Samples: 6,600,100 (110.0 minutes)
-  Channels: 40
-  Sampling rate: 1000.0 Hz
-  Data size: 0.98 GB (float32)
-
-Creating bipolar pairs...
-  Created 35 bipolar pairs from 40 electrodes
-
-Computing band power (chunked processing)...
-
-  Time-varying band power with Welch's method:
-    Time bin size: 60.0s (60,000 samples)
-    Welch segment size: 1.0s (1000 samples)
-    Welch overlap: 50% (500 samples)
-    Frequency resolution: 1.00 Hz
-    Frequency range: 0-500.0 Hz (501 bins)
-    Note: nfft adjusted from 340 to 1000 (nfft must be ≥ nperseg)
-    Total time bins: 111
-    Chunk 1/111 (0.9%)    Chunk 2/111 (1.8%)    Chunk 3/111 (2.7%)    Chunk 4/111 (3.6%)    Chunk 5/111 (4.5%)    Chunk 6/111 (5.4%)    Chunk 7/111 (6.3%)    Chunk 8/111 (7.2%)    Chunk 9/111 (8.1%)    Chunk 10/111 (9.0%)    Chunk 11/111 (9.9%)    Chunk 12/111 (10.8%)    Chunk 13/111 (11.7%)    Chunk 14/111 (12.6%)    Chunk 15/111 (13.5%)    Chunk 16/111 (14.4%)    Chunk 17/111 (15.3%)    Chunk 18/111 (16.2%)    Chunk 19/111 (17.1%)    Chunk 20/111 (18.0%)    Chunk 21/111 (18.9%)    Chunk 22/111 (19.8%)    Chunk 23/111 (20.7%)    Chunk 24/111 (21.6%)    Chunk 25/111 (22.5%)    Chunk 26/111 (23.4%)    Chunk 27/111 (24.3%)    Chunk 28/111 (25.2%)    Chunk 29/111 (26.1%)    Chunk 30/111 (27.0%)    Chunk 31/111 (27.9%)    Chunk 32/111 (28.8%)    Chunk 33/111 (29.7%)    Chunk 34/111 (30.6%)    Chunk 35/111 (31.5%)    Chunk 36/111 (32.4%)    Chunk 37/111 (33.3%)    Chunk 38/111 (34.2%)    Chunk 39/111 (35.1%)    Chunk 40/111 (36.0%)    Chunk 41/111 (36.9%)    Chunk 42/111 (37.8%)    Chunk 43/111 (38.7%)    Chunk 44/111 (39.6%)    Chunk 45/111 (40.5%)    Chunk 46/111 (41.4%)    Chunk 47/111 (42.3%)    Chunk 48/111 (43.2%)    Chunk 49/111 (44.1%)    Chunk 50/111 (45.0%)    Chunk 51/111 (45.9%)    Chunk 52/111 (46.8%)    Chunk 53/111 (47.7%)    Chunk 54/111 (48.6%)    Chunk 55/111 (49.5%)    Chunk 56/111 (50.5%)    Chunk 57/111 (51.4%)    Chunk 58/111 (52.3%)    Chunk 59/111 (53.2%)    Chunk 60/111 (54.1%)    Chunk 61/111 (55.0%)    Chunk 62/111 (55.9%)    Chunk 63/111 (56.8%)    Chunk 64/111 (57.7%)    Chunk 65/111 (58.6%)    Chunk 66/111 (59.5%)    Chunk 67/111 (60.4%)    Chunk 68/111 (61.3%)    Chunk 69/111 (62.2%)    Chunk 70/111 (63.1%)    Chunk 71/111 (64.0%)    Chunk 72/111 (64.9%)    Chunk 73/111 (65.8%)    Chunk 74/111 (66.7%)    Chunk 75/111 (67.6%)    Chunk 76/111 (68.5%)    Chunk 77/111 (69.4%)    Chunk 78/111 (70.3%)    Chunk 79/111 (71.2%)    Chunk 80/111 (72.1%)    Chunk 81/111 (73.0%)    Chunk 82/111 (73.9%)    Chunk 83/111 (74.8%)    Chunk 84/111 (75.7%)    Chunk 85/111 (76.6%)    Chunk 86/111 (77.5%)    Chunk 87/111 (78.4%)    Chunk 88/111 (79.3%)    Chunk 89/111 (80.2%)    Chunk 90/111 (81.1%)    Chunk 91/111 (82.0%)    Chunk 92/111 (82.9%)    Chunk 93/111 (83.8%)    Chunk 94/111 (84.7%)    Chunk 95/111 (85.6%)    Chunk 96/111 (86.5%)    Chunk 97/111 (87.4%)    Chunk 98/111 (88.3%)    Chunk 99/111 (89.2%)    Chunk 100/111 (90.1%)    Chunk 101/111 (91.0%)    Chunk 102/111 (91.9%)    Chunk 103/111 (92.8%)    Chunk 104/111 (93.7%)    Chunk 105/111 (94.6%)    Chunk 106/111 (95.5%)    Chunk 107/111 (96.4%)    Chunk 108/111 (97.3%)    Chunk 109/111 (98.2%)    Chunk 110/111 (99.1%)==========================================
-Job finished with exit code: 1
-==========================================
