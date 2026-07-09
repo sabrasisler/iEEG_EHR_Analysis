@@ -126,8 +126,11 @@ def classify_saturation_with_rail(trace_v, sfreq, rail, window_sec=None, min_sam
     """
     Pure classification against an already-resolved rail — no inference here.
     trace_v: 1D array, raw voltage in volts, for one channel, one run.
-    Returns a dict of per-window arrays: window_start, window_end, excluded,
-    metric_value (fraction of samples in the window at/beyond the rail).
+    Returns a dict of per-window arrays: window_start, window_end,
+    metric_value (fraction of samples in the window at/beyond the rail), and
+    window_max_abs (per-window max |v|, rail-independent). `excluded` is kept
+    for internal callers but is NOT stored by the pipeline — the exclusion
+    decision (pct / min_samples on metric_value) is applied in build_exclusions.py.
     """
     window_sec = window_sec if window_sec is not None else config.SAT_WINDOW_SEC
     min_samples = min_samples if min_samples is not None else config.SAT_MIN_SAMPLES
@@ -136,6 +139,8 @@ def classify_saturation_with_rail(trace_v, sfreq, rail, window_sec=None, min_sam
     n_windows = len(trace_v) // samples_per_window
     usable = n_windows * samples_per_window
     windows = trace_v[:usable].reshape(n_windows, samples_per_window)
+
+    window_max_abs = np.abs(windows).max(axis=1) if n_windows else np.zeros(0)
 
     if rail is None:
         metric_value = np.zeros(n_windows)
@@ -153,15 +158,16 @@ def classify_saturation_with_rail(trace_v, sfreq, rail, window_sec=None, min_sam
         'window_end': window_end,
         'excluded': excluded,
         'metric_value': metric_value,
+        'window_max_abs': window_max_abs,
     }
 
 
 def zero_result_like(result):
     """
-    A same-shaped result with everything unexcluded/zero — for a run whose
-    own local peak is strictly below the resolved session rail, where we
-    already know (without touching the raw samples) that zero windows can
-    possibly be saturated.
+    A same-shaped result with a zero saturation fraction — for a run whose own
+    local peak is strictly below the resolved session rail (or has no rail),
+    where zero samples can reach the rail. window_max_abs is preserved (it's
+    rail-independent and still the true per-window peak).
     """
     n = len(result['window_start'])
     return {
@@ -169,4 +175,5 @@ def zero_result_like(result):
         'window_end': result['window_end'],
         'excluded': np.zeros(n, dtype=bool),
         'metric_value': np.zeros(n),
+        'window_max_abs': result.get('window_max_abs', np.zeros(n)),
     }

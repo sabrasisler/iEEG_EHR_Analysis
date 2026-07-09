@@ -1,122 +1,94 @@
 #!/usr/bin/env python3
 """
-Distributional sanity-check plots: pooled metric_value histograms with the
-threshold drawn as a vertical line, one plot per artifact type.
+Distributional sanity-check plots of each detector's continuous metric,
+computed with a STREAMING histogram (two cheap passes over the 2s metric CSVs in
+metrics/per_window/) so it never concatenates the whole cohort into memory —
+that all-subjects concat is what OOM'd the previous version at 64/150GB.
 
-Metric values are z-scored per-subject before pooling (except saturation's
-fraction-saturated metric and flatline's variance, both of which are compared
-against a single fixed absolute threshold rather than a per-subject baseline
-— z-scoring them would put the threshold line at a meaningless position on
-the x-axis). All plots use a log-scale y-axis and, for flatline, a log-scale
-x-axis too, since the near-zero/clean-window mode otherwise swamps the tail
-these plots exist to show.
+Pass 1 finds the value range; pass 2 accumulates counts into fixed bins. Log-y
+throughout; log-x for the variance-based metrics (flatline, gross_artifact),
+whose values span many orders of magnitude. For flatline/square_wave the config
+default threshold is drawn (those thresholds act directly on the plotted metric);
+saturation's percent and gross's z-threshold act on transformed quantities so no
+line is drawn there.
 
 Usage:
-  python -m qc_scripts.plot_distributions
-  python -m qc_scripts.plot_distributions --output-dir /path/to/alt/root
+  python -m qc_scripts.plot_distributions --level-root /path/to/qc/raw_voltage [--output-dir DIR]
 """
 
 import argparse
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import numpy as np
 
 from qc_scripts import config
-from qc_scripts.summarize_exclusions import load_per_window
 
-THRESHOLDS = {
-    'saturation': None,        # per-channel inferred rail, no single global threshold to draw
+LOG_X = {'saturation': False, 'flatline': True, 'square_wave': False, 'gross_artifact': True}
+THRESHOLD_LINE = {   # only where the threshold acts directly on the plotted metric
     'flatline': config.FLATLINE_VAR_THRESH,
-    'gross_artifact': config.GROSS_STD_THRESH,
+    'square_wave': config.SQUARE_FRAC_THRESH,
 }
-
-ZSCORE = {
-    'saturation': False,
-    'flatline': False,      # fixed absolute threshold, not per-subject-relative
-    'gross_artifact': True,
-}
-
-LOG_X = {
-    'saturation': False,
-    'flatline': True,       # variance spans many orders of magnitude
-    'gross_artifact': False,
-}
+CHUNK = 500_000
+NBINS = 100
 
 
-def zscore_per_subject(df):
-    """
-    Z-score df['metric_value'] within each subject_id group. Uses
-    groupby().transform() (not apply()) so the result is guaranteed to be a
-    flat Series aligned to df's original index.
-    """
-    grouped = df.groupby('subject_id')['metric_value']
-    mean = grouped.transform('mean')
-    std = grouped.transform('std').replace(0, np.nan)
-    return ((df['metric_value'] - mean) / std).fillna(0.0)
+def _metric_csvs(level_root, artifact_type):
+    return sorted(config.metrics_per_window_dir(level_root).glob(f'sub-*_{artifact_type}.csv'))
 
 
-def plot_artifact_type(artifact_type, df):
-    df = df[['subject_id', 'metric_value']].copy()
-    df['metric_value'] = df['metric_value'].replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=['metric_value'])
+def _range(csvs, log_x):
+    lo, hi = np.inf, -np.inf
+    for csv in csvs:
+        for chunk in pd.read_csv(csv, usecols=['metric_value'], chunksize=CHUNK):
+            v = chunk['metric_value'].to_numpy(dtype=float)
+            v = v[np.isfinite(v)]
+            if log_x:
+                v = v[v > 0]
+            if v.size:
+                lo = min(lo, v.min()); hi = max(hi, v.max())
+    return lo, hi
 
-    if ZSCORE[artifact_type]:
-        values = zscore_per_subject(df)
-        xlabel = f'{artifact_type} metric (z-scored per subject)'
-    else:
-        values = df['metric_value']
-        xlabel = {
-            'saturation': f'{artifact_type} metric (fraction of samples saturated)',
-            'flatline': f'{artifact_type} metric (variance, V^2, log scale)',
-        }.get(artifact_type, f'{artifact_type} metric')
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
 
+def plot_type(level_root, artifact_type, out_dir):
+    csvs = _metric_csvs(level_root, artifact_type)
+    if not csvs:
+        print(f"No metric CSVs for '{artifact_type}', skipping.")
+        return
     log_x = LOG_X[artifact_type]
-    if log_x:
-        values = values[values > 0]  # log-scale can't show non-positive values
-        bins = np.logspace(np.log10(values.min()), np.log10(values.max()), 100)
-    else:
-        bins = 100
+    lo, hi = _range(csvs, log_x)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        print(f"[{artifact_type}] no plottable range ({lo}..{hi}), skipping.")
+        return
+    bins = (np.logspace(np.log10(lo), np.log10(hi), NBINS) if log_x
+            else np.linspace(lo, hi, NBINS))
+    counts = np.zeros(len(bins) - 1, dtype=np.int64)
+    for csv in csvs:
+        for chunk in pd.read_csv(csv, usecols=['metric_value'], chunksize=CHUNK):
+            v = chunk['metric_value'].to_numpy(dtype=float)
+            v = v[np.isfinite(v)]
+            if log_x:
+                v = v[v > 0]
+            counts += np.histogram(v, bins=bins)[0]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(values, bins=bins, color='steelblue', alpha=0.8)
+    ax.bar(bins[:-1], counts, width=np.diff(bins), align='edge', color='steelblue', alpha=0.8)
     ax.set_yscale('log')
     if log_x:
         ax.set_xscale('log')
-
-    threshold = THRESHOLDS[artifact_type]
-    if threshold is not None:
-        ax.axvline(threshold, color='crimson', linestyle='--', linewidth=1.5,
-                    label=f'threshold = {threshold:.3g}')
+    thr = THRESHOLD_LINE.get(artifact_type)
+    if thr is not None:
+        ax.axvline(thr, color='crimson', linestyle='--', linewidth=1.5, label=f'threshold = {thr:.3g}')
         ax.legend()
-
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel('Count (pooled across subjects/channels/windows), log scale')
+    ax.set_xlabel(f'{artifact_type} metric_value')
+    ax.set_ylabel('Count (pooled subjects/channels/windows), log scale')
     ax.set_title(f'Metric distribution: {artifact_type}')
     fig.tight_layout()
-
-    out_path = config.PLOTS_DIR / f'metric_distribution_{artifact_type}.png'
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"Saved {out_path}")
-
-
-def plot_exclusion_rate_hist(artifact_type, df):
-    from qc_scripts.summarize_exclusions import summarize
-    summary = summarize(df[['subject_id', 'channel', 'artifact_type', 'excluded']])
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(summary['pct_windows_excluded'], bins=50, color='darkorange', alpha=0.8)
-    ax.set_yscale('log')
-    ax.set_xlabel('% windows excluded (per subject/channel)')
-    ax.set_ylabel('Count, log scale')
-    ax.set_title(f'Exclusion rate distribution: {artifact_type}')
-    fig.tight_layout()
-
-    out_path = config.PLOTS_DIR / f'exclusion_rate_hist_{artifact_type}.png'
+    out_path = Path(out_dir) / f'metric_distribution_{artifact_type}.png'
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"Saved {out_path}")
@@ -124,28 +96,13 @@ def plot_exclusion_rate_hist(artifact_type, df):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--level-root', default=str(config.DEFAULT_LEVEL_ROOT))
     ap.add_argument('--output-dir', default=None,
-                     help=f'Alternate output root (default: {config.OUTPUT_DIR})')
-    ap.add_argument('--gross-std-thresh', type=float, default=None,
-                     help='Override the gross_artifact threshold line drawn on its plot '
-                          f'(default: {config.GROSS_STD_THRESH}) -- purely cosmetic, does not '
-                          "recompute 'excluded'; use reclassify_gross_artifact_threshold.py for that")
+                     help='Where to write plots (default: <level-root>/metrics/plots)')
     args = ap.parse_args()
-    if args.output_dir:
-        config.set_output_dir(args.output_dir)
-    if args.gross_std_thresh is not None:
-        THRESHOLDS['gross_artifact'] = args.gross_std_thresh
-
-    config.ensure_output_dirs()
-    needed_cols = ['subject_id', 'channel', 'artifact_type', 'excluded', 'metric_value']
+    out_dir = args.output_dir or (config.metrics_root(args.level_root) / 'plots')
     for artifact_type in config.ARTIFACT_TYPES:
-        df = load_per_window(artifact_type, usecols=needed_cols)
-        if df is None:
-            print(f"No per-window data found for '{artifact_type}', skipping.")
-            continue
-        plot_artifact_type(artifact_type, df)
-        plot_exclusion_rate_hist(artifact_type, df)
-        del df
+        plot_type(args.level_root, artifact_type, out_dir)
 
 
 if __name__ == '__main__':

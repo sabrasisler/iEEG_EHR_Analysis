@@ -63,13 +63,21 @@ from qc_scripts.detect_saturation import (
     classify_saturation_with_rail, zero_result_like,
 )
 from qc_scripts.detect_flatline import classify_flatline
+from qc_scripts.detect_square_wave import classify_square_wave
 from qc_scripts.detect_gross_artifact import (
     new_accumulator, accumulate_and_cache_window_means, finalize_baseline,
-    classify_from_cached_means,
 )
 
 
-def _rows_from_result(subject, channel, session, run, artifact_type, result, extra=None):
+def _rows_from_result(subject, channel, session, run, artifact_type, result,
+                      array_cols=(), extra=None):
+    """
+    Build per-window rows storing the CONTINUOUS METRIC ONLY (no `excluded`) —
+    thresholding is deferred to build_exclusions.py (metric/threshold split).
+    `array_cols` names extra per-window arrays in `result` to carry (e.g.
+    'range' for square_wave, 'window_max_abs' for saturation); `extra` is a
+    dict of scalars broadcast across all rows (e.g. rail_value, session_mean).
+    """
     n = len(result['window_start'])
     row = {
         'subject_id': [f'sub-{subject}'] * n,
@@ -79,9 +87,10 @@ def _rows_from_result(subject, channel, session, run, artifact_type, result, ext
         'window_start_time': result['window_start'],
         'window_end_time': result['window_end'],
         'artifact_type': [artifact_type] * n,
-        'excluded': result['excluded'],
         'metric_value': result['metric_value'],
     }
+    for col in array_cols:
+        row[col] = result[col]
     if extra:
         for k, v in extra.items():
             row[k] = [v] * n
@@ -137,12 +146,17 @@ def process_session(subject, session, runs):
         run_order.append((session_, run))
         loaded_runs.append((session_, run, nwb_path))
         flat_batch = []
+        square_batch = []
 
         for ch_idx, channel in enumerate(channel_names):
             trace_v = data_v[:, ch_idx]
 
             flat = classify_flatline(trace_v, sfreq)
             flat_batch.append(_rows_from_result(subject, channel, session_, run, 'flatline', flat))
+
+            sq = classify_square_wave(trace_v, sfreq)
+            square_batch.append(_rows_from_result(subject, channel, session_, run, 'square_wave',
+                                                   sq, array_cols=['range']))
 
             abs_max, count = local_extreme_stats(trace_v)
             sat_stats_by_channel.setdefault(channel, []).append((run, abs_max, count))
@@ -155,7 +169,8 @@ def process_session(subject, session, runs):
             gross_cached_means[(run, channel)] = cached
 
         config.append_table(pd.concat(flat_batch, ignore_index=True), _output_path(subject, 'flatline'))
-        del data_v, flat_batch
+        config.append_table(pd.concat(square_batch, ignore_index=True), _output_path(subject, 'square_wave'))
+        del data_v, flat_batch, square_batch
 
     # --- Resolve baselines/rails: pure arithmetic on cached stats, no data access ---
     gross_baselines = {channel: finalize_baseline(acc) for channel, acc in gross_accumulators.items()}
@@ -213,6 +228,7 @@ def process_session(subject, session, runs):
     for session_, run in run_order:
         sat_batch = [
             _rows_from_result(subject, channel, session_, run, 'saturation', result,
+                               array_cols=['window_max_abs'],
                                extra={'rail_value': rail, 'rail_source': rail_source})
             for (r, channel), (result, rail, rail_source) in sat_result_by_run_channel.items()
             if r == run
@@ -220,20 +236,58 @@ def process_session(subject, session, runs):
         if sat_batch:
             config.append_table(pd.concat(sat_batch, ignore_index=True), _output_path(subject, 'saturation'))
 
-    # --- Gross-artifact classification (no reload — uses cached means from the single read) ---
+    # --- Gross-artifact: store the RAW per-window variance + session baseline (no reload,
+    #     no thresholding). build_exclusions.py computes z = (var - mean)/std and applies std_thresh. ---
     for session_, run in run_order:
         gross_batch = []
         for (r, channel), cached in gross_cached_means.items():
             if r != run:
                 continue
             session_mean, session_std = gross_baselines[channel]
-            gross = classify_from_cached_means(cached, session_mean, session_std)
+            gross = {
+                'window_start': cached['window_start'],
+                'window_end': cached['window_end'],
+                'metric_value': cached['window_variance'],
+            }
             gross_batch.append(_rows_from_result(
                 subject, channel, session_, run, 'gross_artifact', gross,
                 extra={'session_mean': session_mean, 'session_std': session_std}))
         if gross_batch:
             config.append_table(pd.concat(gross_batch, ignore_index=True),
                                  _output_path(subject, 'gross_artifact'))
+
+
+def _write_manifest(subjects):
+    """Provenance/params sidecar next to the metric CSVs (config.OUTPUT_DIR is the
+    metrics/ dir). Detection-time params only — thresholds live with build_exclusions."""
+    import json
+    prov = config.warn_if_dirty()
+    manifest = {
+        'subjects': subjects,
+        'artifact_types': config.ARTIFACT_TYPES,
+        'detection_params': {
+            'sat_window_sec': config.SAT_WINDOW_SEC,
+            'sat_agreement_threshold': config.SAT_AGREEMENT_THRESHOLD,
+            'sat_min_repeats': config.SAT_MIN_REPEATS,
+            'flatline_window_sec': config.FLATLINE_WINDOW_SEC,
+            'square_window_sec': config.SQUARE_WINDOW_SEC,
+            'square_eps_frac': config.SQUARE_EPS_FRAC,
+            'gross_window_sec': config.GROSS_WINDOW_SEC,
+        },
+        'git': prov,
+    }
+    path = config.OUTPUT_DIR / 'manifest.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # merge subject lists across incremental runs rather than clobbering
+    if path.exists():
+        try:
+            prev = json.load(open(path))
+            manifest['subjects'] = sorted(set(prev.get('subjects', [])) | set(subjects))
+        except Exception:
+            pass
+    with open(path, 'w') as f:
+        json.dump(manifest, f, indent=2, default=str)
+    print(f"  Wrote {path}", flush=True)
 
 
 def run(subjects):
@@ -256,6 +310,8 @@ def run(subjects):
             n_rows = sum(1 for _ in open(out_path)) - 1 if out_path.exists() else 0
             print(f"  Wrote {out_path} ({n_rows} rows)", flush=True)
 
+    _write_manifest(subjects)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -265,12 +321,18 @@ def main():
                      help='Comma-separated explicit subject IDs, e.g. 217,222 (overrides --n-subjects)')
     ap.add_argument('--seed', type=int, default=None,
                      help=f'Random seed for subject sampling (default: {config.RANDOM_SEED})')
+    ap.add_argument('--level-root', default=None,
+                     help=f'QC level root; writes metrics to its metrics/per_window/ '
+                          f'(default: {config.DEFAULT_LEVEL_ROOT})')
     ap.add_argument('--output-dir', default=None,
-                     help=f'Alternate output root (default: {config.OUTPUT_DIR})')
+                     help='(alternative to --level-root) write per_window/ directly under this dir')
     args = ap.parse_args()
 
     if args.output_dir:
         config.set_output_dir(args.output_dir)
+    else:
+        level_root = args.level_root or config.DEFAULT_LEVEL_ROOT
+        config.set_output_dir(config.metrics_root(level_root))
 
     subject_list = args.subjects.split(',') if args.subjects else None
     subjects = io_utils.sample_subjects(n_subjects=args.n_subjects, subject_list=subject_list,

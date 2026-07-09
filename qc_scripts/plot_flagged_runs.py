@@ -23,6 +23,7 @@ Usage:
 
 import argparse
 import random
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -30,13 +31,34 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from qc_scripts import config, io_utils
+from qc_scripts import config, io_utils, build_exclusions
 
+# seaborn "deep" palette (first four): applied uniformly across artifact types.
 STATUS_COLORS = {
-    'saturation': 'crimson',
-    'flatline': 'dimgray',
-    'gross_artifact': 'orange',
+    'saturation': '#4c72b0',      # blue
+    'flatline': '#dd8452',        # orange
+    'square_wave': '#c44e52',     # red
+    'gross_artifact': '#55a868',  # green
 }
+
+# Columns to read per type to recompute `excluded` on the fly (detection CSVs
+# store metrics only now — no `excluded` column). Threshold logic is shared with
+# build_exclusions so the shading matches the exclusion step exactly.
+_READ_COLS = {
+    'flatline':       ['channel', 'run_id', 'window_start_time', 'window_end_time', 'metric_value'],
+    'square_wave':    ['channel', 'run_id', 'window_start_time', 'window_end_time', 'metric_value', 'range'],
+    'saturation':     ['channel', 'run_id', 'window_start_time', 'window_end_time', 'metric_value'],
+    'gross_artifact': ['channel', 'run_id', 'window_start_time', 'window_end_time', 'metric_value',
+                       'session_mean', 'session_std'],
+}
+
+
+def _excluded(df, artifact_type):
+    """Recompute the per-window boolean from the stored metric at config-default
+    thresholds (same logic build_exclusions applies), for 2s-precision shading."""
+    params = build_exclusions.default_params(artifact_type)
+    return build_exclusions.compute_excluded(artifact_type, df, params).to_numpy()
+
 
 def _out_dir():
     return config.PLOTS_DIR / 'flagged_examples'
@@ -57,7 +79,7 @@ def top_runs_for_channel(subject, channel, artifact_type, n=1, chunksize=500_000
     if not path.exists():
         return []
 
-    usecols = ['channel', 'run_id', 'window_start_time', 'window_end_time', 'excluded']
+    usecols = _READ_COLS[artifact_type]
     matches = []
     for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
         sub = chunk[chunk['channel'] == channel]
@@ -67,6 +89,7 @@ def top_runs_for_channel(subject, channel, artifact_type, n=1, chunksize=500_000
         return []
 
     df = pd.concat(matches, ignore_index=True)
+    df['excluded'] = _excluded(df, artifact_type)
     counts = df[df['excluded']].groupby('run_id').size()
     if counts.empty:
         return []
@@ -92,9 +115,11 @@ def find_flatline_examples(subjects, n_examples=2, chunksize=500_000):
         path = _per_window_path(subject, 'flatline')
         if not path.exists():
             continue
-        usecols = ['channel', 'run_id', 'excluded']
+        usecols = _READ_COLS['flatline']
         counts = {}
         for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
+            chunk = chunk.copy()
+            chunk['excluded'] = _excluded(chunk, 'flatline')
             flagged = chunk[chunk['excluded']]
             for (ch, run), n in flagged.groupby(['channel', 'run_id']).size().items():
                 counts[(ch, run)] = counts.get((ch, run), 0) + n
@@ -175,8 +200,10 @@ def find_random_examples(subjects, artifact_types, n_examples, seed=None,
             path = _per_window_path(subject, artifact_type)
             if not path.exists():
                 continue
-            usecols = ['channel', 'run_id', 'excluded']
+            usecols = _READ_COLS[artifact_type]
             for chunk_i, chunk in enumerate(pd.read_csv(path, usecols=usecols, chunksize=chunksize)):
+                chunk = chunk.copy()
+                chunk['excluded'] = _excluded(chunk, artifact_type)
                 flagged = chunk[chunk['excluded']]
                 if len(flagged):
                     sample_n = min(5, len(flagged))
@@ -205,28 +232,46 @@ def get_windows(subject, channel, run, artifact_type, chunksize=500_000):
     path = _per_window_path(subject, artifact_type)
     if not path.exists():
         return None
-    usecols = ['channel', 'run_id', 'window_start_time', 'window_end_time', 'excluded']
+    usecols = _READ_COLS[artifact_type]
     matches = []
     for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
         sub = chunk[(chunk['channel'] == channel) & (chunk['run_id'] == run)]
         if len(sub):
             matches.append(sub)
-    return pd.concat(matches, ignore_index=True) if matches else None
+    if not matches:
+        return None
+    df = pd.concat(matches, ignore_index=True)
+    df['excluded'] = _excluded(df, artifact_type)
+    return df
 
 
-def plot_channel_run(subject, channel, run, session='01', highlight_types=None):
+def plot_channel_run(subject, channel, run, session=None, highlight_types=None):
     """
     Load just this one channel's raw trace for this run, and shade the exact
     windows already flagged for each artifact type in highlight_types
     (default: all three).
+
+    `session` is treated as a HINT, not ground truth -- run IDs are unique
+    within a subject regardless of session (e.g. sub-197's runs all belong
+    to ses-02, not the usual ses-01 default), so if the hinted session
+    doesn't contain this run, every session for the subject is searched and
+    whichever one actually contains it is used instead.
     """
     highlight_types = highlight_types or list(STATUS_COLORS.keys())
+    run_bare = run.replace('run-', '')
 
-    nwb_path = io_utils.get_session_runs(subject, session=session)
-    nwb_path = next((p for s, r, p in nwb_path if r == run.replace('run-', '')), None)
-    if nwb_path is None:
-        print(f"  Could not find NWB path for sub-{subject} run-{run}")
-        return
+    candidates = io_utils.get_session_runs(subject, session=session) if session else []
+    match = next((p for s, r, p in candidates if r == run_bare), None)
+    actual_session = session
+    if match is None:
+        all_runs = io_utils.get_session_runs(subject)  # search every session for this subject
+        found = next(((s, p) for s, r, p in all_runs if r == run_bare), None)
+        if found is None:
+            print(f"  Could not find NWB path for sub-{subject} run-{run}")
+            return
+        actual_session, match = found
+    nwb_path = match
+    session = actual_session
 
     data_v, found_channels, sfreq = io_utils.load_channels_subset(nwb_path, [channel])
     if channel not in found_channels:
@@ -290,14 +335,42 @@ def main():
                           'requirement -- to see typical/clean behavior, not just artifacts')
     ap.add_argument('--seed', type=int, default=None,
                      help='Seed for --random/--random-any selection (default: unseeded/non-reproducible)')
+    ap.add_argument('--exact-csv', default=None,
+                     help='Path to a precomputed targets CSV (columns: subject,session,run,channel) -- '
+                          'plots exactly one row, picked by --exact-index. Built for Slurm array jobs: '
+                          'run build_plot_targets.py once to pick targets (cheap, streams CSVs, no NWB '
+                          'reads), then fan the actual NWB reads out across array tasks, one row each.')
+    ap.add_argument('--exact-index', type=int, default=None,
+                     help='Row index into --exact-csv to plot (e.g. $SLURM_ARRAY_TASK_ID)')
     ap.add_argument('--session', default='01')
+    ap.add_argument('--level-root', default=None,
+                     help=f'QC level root; reads metric CSVs from its metrics/per_window/ '
+                          f'(default: {config.DEFAULT_LEVEL_ROOT})')
+    ap.add_argument('--plots-dir', default=None,
+                     help='Where to write example PNGs (default: <level-root>/metrics/plots). '
+                          'Point at e.g. masks/<label>/plots or _validation for a specific run.')
     ap.add_argument('--output-dir', default=None,
-                     help=f'Alternate output root to read per-window CSVs from / write plots to '
-                          f'(default: {config.OUTPUT_DIR})')
+                     help='(deprecated) sets read+write root to <dir>/per_window & <dir>/plots')
     args = ap.parse_args()
 
     if args.output_dir:
         config.set_output_dir(args.output_dir)
+    else:
+        level_root = args.level_root or config.DEFAULT_LEVEL_ROOT
+        config.set_output_dir(config.metrics_root(level_root))
+    if args.plots_dir:
+        config.PLOTS_DIR = Path(args.plots_dir)
+
+    if args.exact_csv is not None:
+        targets = pd.read_csv(args.exact_csv)
+        row = targets.iloc[args.exact_index]
+        subject = str(row['subject']).replace('sub-', '')
+        session = str(row['session']).replace('ses-', '')
+        run = str(row['run'])  # keep the 'run-XXXX' prefix -- must match run_id in the per-window CSVs
+        channel = row['channel']
+        print(f"[{args.exact_index}] sub-{subject} ses-{session} run-{run} / {channel}:")
+        plot_channel_run(subject, channel, run, session=session)
+        return
 
     available_subjects = sorted({p.stem.split('_')[0].replace('sub-', '')
                                   for p in config.PER_WINDOW_DIR.glob('sub-*.csv')})

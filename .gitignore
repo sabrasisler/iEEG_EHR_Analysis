@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+logs/
+qc_scripts/logs/
+# ad hoc scratch + generated data (not source)
+qc_scripts/tmp_*
+qc_scripts/*.csv
