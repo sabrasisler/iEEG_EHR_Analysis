@@ -23,7 +23,7 @@ import json
 
 import pandas as pd
 
-from qc_scripts import config
+from qc_scripts import config, build_exclusions
 
 BIN_SEC = 60.0
 KEY = ['subject_id', 'session_id', 'run_id', 'channel', 'bin_start']
@@ -34,11 +34,13 @@ def main():
     ap.add_argument('--level-root', default=str(config.DEFAULT_LEVEL_ROOT))
     ap.add_argument('--label', required=True, help='Mask label (output folder name)')
     for t in config.ARTIFACT_TYPES:
-        ap.add_argument(f'--{t}', default='default',
-                         help=f'Which {t} exclusion label to combine (default: default)')
+        auto = build_exclusions.label_for(t, build_exclusions.default_params(t))
+        ap.add_argument(f'--{t}', default=None,
+                         help=f'Which {t} exclusion label to combine (default: config-default {auto})')
     args = ap.parse_args()
 
-    chosen = {t: getattr(args, t) for t in config.ARTIFACT_TYPES}
+    chosen = {t: (getattr(args, t) or build_exclusions.label_for(t, build_exclusions.default_params(t)))
+              for t in config.ARTIFACT_TYPES}
     type_dirs = {t: config.exclusion_dir(args.level_root, t, lbl) for t, lbl in chosen.items()}
     for t, d in type_dirs.items():
         if not d.exists():

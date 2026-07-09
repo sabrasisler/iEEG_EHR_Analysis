@@ -46,6 +46,20 @@ USECOLS = {
 }
 
 
+def label_for(artifact_type, p):
+    """A self-documenting folder label derived from the type's threshold(s), so
+    you can read the parameters off the path instead of an opaque 'default'."""
+    if artifact_type == 'flatline':
+        return f"var{p['var_thresh']:g}"
+    if artifact_type == 'square_wave':
+        return f"frac{p['frac_thresh']:g}"
+    if artifact_type == 'saturation':
+        return f"pct{p['sat_frac_thresh']:g}"
+    if artifact_type == 'gross_artifact':
+        return f"std{p['std_thresh']:g}"
+    raise ValueError(artifact_type)
+
+
 def default_params(artifact_type):
     if artifact_type == 'flatline':
         return {'var_thresh': config.FLATLINE_VAR_THRESH}
@@ -140,7 +154,9 @@ def main():
                      help=f'QC level root (default: {config.DEFAULT_LEVEL_ROOT})')
     ap.add_argument('--artifact-type', required=True,
                      help="One of saturation/flatline/square_wave/gross_artifact, or 'all'")
-    ap.add_argument('--label', default='default', help='Parameter-set label (folder name)')
+    ap.add_argument('--label', default=None,
+                     help='Folder label (default: auto from the threshold, e.g. std5 / var5e-13 / '
+                          'frac0.9 / pct0 — self-documenting rather than an opaque "default")')
     # per-type threshold overrides (else config defaults)
     ap.add_argument('--var-thresh', type=float, default=None)
     ap.add_argument('--frac-thresh', type=float, default=None)
@@ -159,8 +175,9 @@ def main():
         for k in params:
             if overrides.get(k) is not None:
                 params[k] = overrides[k]
-        print(f"=== build_exclusions: {artifact_type} (label={args.label}) params={params} ===", flush=True)
-        run_type(args.level_root, artifact_type, args.label, params)
+        label = args.label or label_for(artifact_type, params)
+        print(f"=== build_exclusions: {artifact_type} (label={label}) params={params} ===", flush=True)
+        run_type(args.level_root, artifact_type, label, params)
 
 
 if __name__ == '__main__':
