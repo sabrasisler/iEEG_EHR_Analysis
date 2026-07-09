@@ -259,35 +259,35 @@ def process_session(subject, session, runs):
 
 def _write_manifest(subjects):
     """Provenance/params sidecar next to the metric CSVs (config.OUTPUT_DIR is the
-    metrics/ dir). Detection-time params only — thresholds live with build_exclusions."""
+    metrics/ dir). Detection-time params only — thresholds live with build_exclusions.
+
+    Writes ONE manifest per subject under metrics/manifests/ rather than a shared
+    manifest.json: parallel Slurm array tasks (one subject each) would otherwise
+    race on read-merge-write of a single file and corrupt/lose entries."""
     import json
     prov = config.warn_if_dirty()
-    manifest = {
-        'subjects': subjects,
-        'artifact_types': config.ARTIFACT_TYPES,
-        'detection_params': {
-            'sat_window_sec': config.SAT_WINDOW_SEC,
-            'sat_agreement_threshold': config.SAT_AGREEMENT_THRESHOLD,
-            'sat_min_repeats': config.SAT_MIN_REPEATS,
-            'flatline_window_sec': config.FLATLINE_WINDOW_SEC,
-            'square_window_sec': config.SQUARE_WINDOW_SEC,
-            'square_eps_frac': config.SQUARE_EPS_FRAC,
-            'gross_window_sec': config.GROSS_WINDOW_SEC,
-        },
-        'git': prov,
+    detection_params = {
+        'sat_window_sec': config.SAT_WINDOW_SEC,
+        'sat_agreement_threshold': config.SAT_AGREEMENT_THRESHOLD,
+        'sat_min_repeats': config.SAT_MIN_REPEATS,
+        'flatline_window_sec': config.FLATLINE_WINDOW_SEC,
+        'square_window_sec': config.SQUARE_WINDOW_SEC,
+        'square_eps_frac': config.SQUARE_EPS_FRAC,
+        'gross_window_sec': config.GROSS_WINDOW_SEC,
     }
-    path = config.OUTPUT_DIR / 'manifest.json'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # merge subject lists across incremental runs rather than clobbering
-    if path.exists():
-        try:
-            prev = json.load(open(path))
-            manifest['subjects'] = sorted(set(prev.get('subjects', [])) | set(subjects))
-        except Exception:
-            pass
-    with open(path, 'w') as f:
-        json.dump(manifest, f, indent=2, default=str)
-    print(f"  Wrote {path}", flush=True)
+    mdir = config.OUTPUT_DIR / 'manifests'
+    mdir.mkdir(parents=True, exist_ok=True)
+    for subject in subjects:
+        manifest = {
+            'subject': f'sub-{subject}',
+            'artifact_types': config.ARTIFACT_TYPES,
+            'detection_params': detection_params,
+            'git': prov,
+        }
+        path = mdir / f'sub-{subject}.json'
+        with open(path, 'w') as f:
+            json.dump(manifest, f, indent=2, default=str)
+        print(f"  Wrote {path}", flush=True)
 
 
 def run(subjects):
