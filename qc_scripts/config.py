@@ -4,11 +4,18 @@ non-neural gross artifact). All thresholds/paths live here — no magic numbers
 in the detection/analysis modules.
 """
 
+import datetime
 import json
 import subprocess
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent.parent   # the git repo root (parent of qc_scripts/)
+
+
+def run_timestamp():
+    """Local date+time a script ran, ISO-8601 with tz offset — recorded in every
+    sidecar (run_info/*.json, params.json) so you can tell when outputs were made."""
+    return datetime.datetime.now().astimezone().isoformat()
 
 # ============================================================================
 # PATHS
@@ -32,8 +39,11 @@ def metrics_root(level_root):
 def metrics_per_window_dir(level_root):
     return metrics_root(level_root) / 'per_window'
 
-def metrics_manifest_path(level_root):
-    return metrics_root(level_root) / 'manifest.json'
+def metrics_run_info_dir(level_root):
+    # per-subject JSON records of how the metrics were produced (detection params
+    # + git provenance + run_timestamp). One file per subject to avoid parallel
+    # array tasks racing on a shared file.
+    return metrics_root(level_root) / 'run_info'
 
 def exclusion_dir(level_root, artifact_type, label):
     return Path(level_root) / 'exclusions' / artifact_type / label

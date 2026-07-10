@@ -87,6 +87,7 @@ def main():
         'per_type_labels': chosen,
         'per_type_dirs': {t: str(d) for t, d in type_dirs.items()},
         'n_subjects': len(common),
+        'run_timestamp': config.run_timestamp(),
         'git': prov,
     }
     with open(out_dir / 'params.json', 'w') as f:

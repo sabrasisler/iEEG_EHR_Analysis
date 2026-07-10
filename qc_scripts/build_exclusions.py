@@ -140,7 +140,8 @@ def run_type(level_root, artifact_type, label, params):
         'label': label,
         'bin_sec': BIN_SEC,
         'thresholds': params,
-        'metrics_manifest': str(config.metrics_manifest_path(level_root)),
+        'metrics_run_info': str(config.metrics_run_info_dir(level_root)),
+        'run_timestamp': config.run_timestamp(),
         'git': prov,
     }
     with open(out_dir / 'params.json', 'w') as f:

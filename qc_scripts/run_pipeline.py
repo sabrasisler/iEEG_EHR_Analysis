@@ -257,13 +257,11 @@ def process_session(subject, session, runs):
                                  _output_path(subject, 'gross_artifact'))
 
 
-def _write_manifest(subjects):
-    """Provenance/params sidecar next to the metric CSVs (config.OUTPUT_DIR is the
-    metrics/ dir). Detection-time params only — thresholds live with build_exclusions.
-
-    Writes ONE manifest per subject under metrics/manifests/ rather than a shared
-    manifest.json: parallel Slurm array tasks (one subject each) would otherwise
-    race on read-merge-write of a single file and corrupt/lose entries."""
+def _write_run_info(subjects):
+    """Per-subject record of how the metrics were produced: detection params +
+    git provenance + run_timestamp. Written under metrics/run_info/sub-XXX.json
+    (one file per subject, so parallel Slurm array tasks don't race on a shared
+    file). Thresholds are NOT here — those live with build_exclusions."""
     import json
     prov = config.warn_if_dirty()
     detection_params = {
@@ -275,18 +273,20 @@ def _write_manifest(subjects):
         'square_eps_frac': config.SQUARE_EPS_FRAC,
         'gross_window_sec': config.GROSS_WINDOW_SEC,
     }
-    mdir = config.OUTPUT_DIR / 'manifests'
-    mdir.mkdir(parents=True, exist_ok=True)
+    ts = config.run_timestamp()
+    rdir = config.OUTPUT_DIR / 'run_info'
+    rdir.mkdir(parents=True, exist_ok=True)
     for subject in subjects:
-        manifest = {
+        info = {
             'subject': f'sub-{subject}',
             'artifact_types': config.ARTIFACT_TYPES,
             'detection_params': detection_params,
+            'run_timestamp': ts,
             'git': prov,
         }
-        path = mdir / f'sub-{subject}.json'
+        path = rdir / f'sub-{subject}.json'
         with open(path, 'w') as f:
-            json.dump(manifest, f, indent=2, default=str)
+            json.dump(info, f, indent=2, default=str)
         print(f"  Wrote {path}", flush=True)
 
 
@@ -310,7 +310,7 @@ def run(subjects):
             n_rows = sum(1 for _ in open(out_path)) - 1 if out_path.exists() else 0
             print(f"  Wrote {out_path} ({n_rows} rows)", flush=True)
 
-    _write_manifest(subjects)
+    _write_run_info(subjects)
 
 
 def main():
