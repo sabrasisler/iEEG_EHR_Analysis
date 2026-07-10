@@ -4,6 +4,37 @@ Context for picking this work up in a fresh session. Covers the raw-voltage QC /
 artifact-rejection pipeline in `qc_scripts/`, its file organization, the design
 principles behind it, and how to run each step.
 
+## Current state (as of 2026-07-10)
+
+Pipeline code is complete, committed, and pushed (`master`). A first cohort has
+been processed into `analysis/qc/raw_voltage/`:
+
+- **Metrics** exist for **17 subjects**: `039, 071, 085, 088, 099, 150, 176, 191,
+  193, 198, 205, 207, 211, 217, 227, 244, 248`. `sub-236` was still running its
+  metrics pass at last check (large, 109 runs) — once done, run its rollup
+  (`build_exclusions --subjects 236`) and rebuild the masks to make it 18.
+  Random-draw non-sEEG subjects (`116, 156, 162, 171`, and `034`) produced 0 rows.
+- **Per-type exclusions** exist at the config-default labels
+  (`saturation/pct0`, `flatline/var5e-13`, `square_wave/frac0.9`,
+  `gross_artifact/std5`) plus a swept `gross_artifact/std4`.
+- **Masks**: `masks/baseline/` (all defaults, gross std5) and `masks/gross-std4/`
+  (gross at std4, others default). Both have `summary/` (5 `exclusion_rates_*.csv`
+  + `flagged_for_review.csv`). `baseline` has ~117 flagged example plots;
+  `gross-std4` example plots + `_validation/gross_artifact_std4_vs_5/` diff plots
+  were the last jobs running.
+- **Baseline exclusion rates** (per channel, % of 60s bins, n=2306 channels):
+  saturation mean 0.70% / flatline 0.57% / square_wave 0.66% / gross 0.19% /
+  **any 1.46%** (medians ~0.1–0.4%; heavy right tails — a few channels lose ~⅓).
+  gross std5→std4 raised gross mean 0.19%→0.22% (max 0.68%→1.00%), flagged rows
+  101→116 — a gentle change.
+- **Threshold-label meaning:** `pct0` is **saturation** (`sat_frac_thresh=0` →
+  flag a window if **>0**, i.e. ≥1 sample, hits the rail — the old MIN_SAMPLES=1).
+  It is NOT "flag nothing". `var5e-13`=flatline variance floor, `frac0.9`=square
+  bimodal fraction, `std5`/`std4`=gross z-threshold.
+- **Plotting gotcha:** `plot_flagged_runs --review-csv` over ~100+ flagged
+  channels × 2 runs each ≈ 3h of NWB reads and can hit walltime. Give it ≥5h, or
+  parallelize with `build_plot_targets` + `plot_targets_array.sbatch`.
+
 ## Environment (Sherlock HPC)
 
 - Repo: `/home/groups/ckeller1/sisler/iEEG_EHR_Analysis` (git; remote
