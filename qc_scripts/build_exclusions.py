@@ -112,12 +112,15 @@ def build_one_subject(metric_csv, artifact_type, p, chunksize=500_000):
     return pd.DataFrame(rows).sort_values(['run_id', 'channel', 'bin_start']).reset_index(drop=True)
 
 
-def run_type(level_root, artifact_type, label, params):
+def run_type(level_root, artifact_type, label, params, subjects=None):
     metrics_dir = config.metrics_per_window_dir(level_root)
     out_dir = config.exclusion_dir(level_root, artifact_type, label)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     metric_csvs = sorted(metrics_dir.glob(f'sub-*_{artifact_type}.csv'))
+    if subjects:
+        wanted = {f'sub-{s.replace("sub-", "")}' for s in subjects}
+        metric_csvs = [p for p in metric_csvs if p.name.split('_')[0] in wanted]
     if not metric_csvs:
         print(f"  [{artifact_type}] no metric CSVs in {metrics_dir}, skipping.", flush=True)
         return
@@ -164,11 +167,15 @@ def main():
     ap.add_argument('--min-range', type=float, default=None)
     ap.add_argument('--sat-frac-thresh', type=float, default=None)
     ap.add_argument('--std-thresh', type=float, default=None)
+    ap.add_argument('--subjects', default=None,
+                     help='Comma-separated subject IDs to restrict to (default: all present). '
+                          'Use to skip subjects whose metrics are still being written.')
     args = ap.parse_args()
 
     overrides = {'var_thresh': args.var_thresh, 'frac_thresh': args.frac_thresh,
                  'min_range': args.min_range, 'sat_frac_thresh': args.sat_frac_thresh,
                  'std_thresh': args.std_thresh}
+    subjects = [s.strip() for s in args.subjects.split(',')] if args.subjects else None
 
     types = config.ARTIFACT_TYPES if args.artifact_type == 'all' else [args.artifact_type]
     for artifact_type in types:
@@ -178,7 +185,7 @@ def main():
                 params[k] = overrides[k]
         label = args.label or label_for(artifact_type, params)
         print(f"=== build_exclusions: {artifact_type} (label={label}) params={params} ===", flush=True)
-        run_type(args.level_root, artifact_type, label, params)
+        run_type(args.level_root, artifact_type, label, params, subjects=subjects)
 
 
 if __name__ == '__main__':
