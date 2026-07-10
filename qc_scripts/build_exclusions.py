@@ -26,6 +26,7 @@ Usage:
 """
 
 import argparse
+import os
 import json
 from pathlib import Path
 
@@ -147,8 +148,12 @@ def run_type(level_root, artifact_type, label, params, subjects=None):
         'run_timestamp': config.run_timestamp(),
         'git': prov,
     }
-    with open(out_dir / 'params.json', 'w') as f:
+    # atomic write: concurrent array tasks (one subject each) all write this same
+    # per-(type,label) file — tmp+replace prevents an interleaved/corrupted JSON.
+    tmp = out_dir / f'params.json.{os.getpid()}.tmp'
+    with open(tmp, 'w') as f:
         json.dump(params_out, f, indent=2, default=str)
+    os.replace(tmp, out_dir / 'params.json')
     print(f"  [{artifact_type}] wrote {out_dir / 'params.json'}", flush=True)
 
 
