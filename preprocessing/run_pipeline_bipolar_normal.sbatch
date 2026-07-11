@@ -4,14 +4,17 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64GB
-#SBATCH --array=0-4%6
+#SBATCH --array=0-25%6
 #SBATCH -J bipolar_reref_psd
 #SBATCH -o /home/groups/ckeller1/sisler/iEEG_EHR_Analysis/logs/bipolar_reref_psd_%A_%a.out
 
 # Batches BATCH_SIZE subjects per array task (fewer, longer jobs -- cuts Slurm
 # scheduling/env-load overhead per subject vs. one-array-task-per-subject).
-# --array's upper bound = ceil(n_subjects / BATCH_SIZE) - 1; recompute it
-# whenever preprocessing/subjects_bipolar_normal.txt or BATCH_SIZE changes:
+# preprocessing/subjects_bipolar_normal.txt has 104 subjects (every sub-*/
+# folder under $RAW_DIR that actually contains >=1 raw .nwb file -- 3 folders,
+# 204/243/246, exist but are empty and were excluded). At BATCH_SIZE=4 that's
+# ceil(104/4)-1 = 25, hence --array=0-25%6. Recompute this bound whenever the
+# subject list or BATCH_SIZE changes:
 #   python3 -c "import math; print(math.ceil(N_SUBJECTS/BATCH_SIZE)-1)"
 # --time bumped to 24h (was 12h) since each task now processes multiple
 # subjects sequentially; watch seff/sacct on the first few tasks and adjust.
