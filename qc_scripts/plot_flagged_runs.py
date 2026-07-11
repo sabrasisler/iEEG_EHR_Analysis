@@ -13,6 +13,12 @@ no re-classification, no full-file loads). Two things this does efficiently:
    reads only the requested channel's column out of the NWB file, not the
    full channels x samples array.
 
+Shading itself is read from the 60s mask table (masks/<mask-label>/sub-XXX.csv,
+built by build_mask.py) rather than recomputed from the raw 2s metric CSVs --
+the mask is what the pipeline actually excludes (a whole 60s bin is out if any
+2s sub-window inside it tripped a threshold), so the plot needs to reflect that
+bin-level rollup instead of shading only the exact 2s window that triggered it.
+
 Usage:
   python -m qc_scripts.plot_flagged_runs --targets 093:LOF10,093:RINS7 --n-runs 2
   python -m qc_scripts.plot_flagged_runs --find-flatline-examples 2
@@ -60,12 +66,43 @@ def _excluded(df, artifact_type):
     return build_exclusions.compute_excluded(artifact_type, df, params).to_numpy()
 
 
+# Level root + mask label the shading is read from -- set once in main()
+# via --level-root/--mask-label, defaulting to the pipeline's own defaults.
+MASK_LEVEL_ROOT = config.DEFAULT_LEVEL_ROOT
+MASK_LABEL = 'baseline'
+
+# Subfolder name under config.PLOTS_DIR that PNGs are written into -- set once
+# in main() via --examples-subdir, so e.g. --random-any output can land in a
+# sibling folder ('random_examples') instead of overwriting/mixing with
+# flagged_examples.
+EXAMPLES_SUBDIR = 'flagged_examples'
+
+
 def _out_dir():
-    return config.PLOTS_DIR / 'flagged_examples'
+    return config.PLOTS_DIR / EXAMPLES_SUBDIR
 
 
 def _per_window_path(subject, artifact_type):
     return config.PER_WINDOW_DIR / f'sub-{subject}_{artifact_type}.csv'
+
+
+def _mask_path(subject):
+    return config.mask_dir(MASK_LEVEL_ROOT, MASK_LABEL) / f'sub-{subject}.csv'
+
+
+def get_mask_windows(subject, channel, run):
+    """Read the 60s mask bins (already OR'd: whole bin excluded if any 2s
+    sub-window inside it tripped a threshold) for one channel/run, one row per
+    bin with an `excluded_<type>` bool per artifact type. Returns None if no
+    mask file exists for this subject."""
+    path = _mask_path(subject)
+    if not path.exists():
+        return None
+    df = pd.read_csv(path)
+    sub = df[(df['channel'] == channel) & (df['run_id'] == run)]
+    if sub.empty:
+        return None
+    return sub.rename(columns={'bin_start': 'window_start_time', 'bin_end': 'window_end_time'})
 
 
 def top_runs_for_channel(subject, channel, artifact_type, n=1, chunksize=500_000):
@@ -282,12 +319,12 @@ def plot_channel_run(subject, channel, run, session=None, highlight_types=None):
 
     fig, ax = plt.subplots(figsize=(14, 3))
     counts = {}
+    mask_windows = get_mask_windows(subject, channel, run)
     for artifact_type in highlight_types:
-        windows = get_windows(subject, channel, run, artifact_type)
-        if windows is None:
+        if mask_windows is None:
             counts[artifact_type] = 0
             continue
-        flagged = windows[windows['excluded']]
+        flagged = mask_windows[mask_windows[f'excluded_{artifact_type}']]
         counts[artifact_type] = len(flagged)
         for _, w in flagged.iterrows():
             ax.axvspan(w['window_start_time'], w['window_end_time'],
@@ -351,6 +388,12 @@ def main():
                           'Point at e.g. masks/<label>/plots or _validation for a specific run.')
     ap.add_argument('--output-dir', default=None,
                      help='(deprecated) sets read+write root to <dir>/per_window & <dir>/plots')
+    ap.add_argument('--mask-label', default='baseline',
+                     help='masks/<label>/ to read shading from (default: baseline)')
+    ap.add_argument('--examples-subdir', default='flagged_examples',
+                     help='Subfolder under --plots-dir that PNGs are written into (default: '
+                          "flagged_examples; use e.g. 'random_examples' to keep --random-any "
+                          'output separate)')
     args = ap.parse_args()
 
     if args.output_dir:
@@ -360,6 +403,11 @@ def main():
         config.set_output_dir(config.metrics_root(level_root))
     if args.plots_dir:
         config.PLOTS_DIR = Path(args.plots_dir)
+
+    global MASK_LEVEL_ROOT, MASK_LABEL, EXAMPLES_SUBDIR
+    MASK_LEVEL_ROOT = args.level_root or config.DEFAULT_LEVEL_ROOT
+    MASK_LABEL = args.mask_label
+    EXAMPLES_SUBDIR = args.examples_subdir
 
     if args.exact_csv is not None:
         targets = pd.read_csv(args.exact_csv)
