@@ -16,17 +16,24 @@ been processed into `analysis/qc/raw_voltage/`:
   Random-draw non-sEEG subjects (`116, 156, 162, 171`, and `034`) produced 0 rows.
 - **Per-type exclusions** exist at the config-default labels
   (`saturation/pct0`, `flatline/var5e-13`, `square_wave/frac0.9`,
-  `gross_artifact/std5`) plus a swept `gross_artifact/std4`.
-- **Masks**: `masks/baseline/` (all defaults, gross std5) and `masks/gross-std4/`
-  (gross at std4, others default). Both have `summary/` (5 `exclusion_rates_*.csv`
-  + `flagged_for_review.csv`). `baseline` has ~117 flagged example plots;
-  `gross-std4` example plots + `_validation/gross_artifact_std4_vs_5/` diff plots
-  were the last jobs running.
+  `gross_artifact/std5`) plus swept `gross_artifact/std4` and `gross_artifact/std3`.
+- **Masks**: `masks/baseline/` (all defaults, gross std5), `masks/gross-std4/`
+  (gross at std4, others default), and `masks/gross-std3/` (gross at std3, others
+  default). All have `summary/` (5 `exclusion_rates_*.csv` + `flagged_for_review.csv`).
+  `baseline` has ~117 flagged example plots; `gross-std4` has example plots +
+  `_validation/gross_artifact_std4_vs_5/` diff plots. `gross-std3` has
+  `_validation/gross_artifact_std3_vs_4/` diff plots (12 example channels, mirrors
+  the std4-vs-5 diagnostic via `qc_scripts/tmp_gross_std3_vs_4.py`) but no
+  `plots/flagged_examples/` yet.
 - **Baseline exclusion rates** (per channel, % of 60s bins, n=2306 channels):
   saturation mean 0.70% / flatline 0.57% / square_wave 0.66% / gross 0.19% /
   **any 1.46%** (medians ~0.1–0.4%; heavy right tails — a few channels lose ~⅓).
   gross std5→std4 raised gross mean 0.19%→0.22% (max 0.68%→1.00%), flagged rows
-  101→116 — a gentle change.
+  101→116 — a gentle change. gross std4→std3 raised gross mean further to 0.26%
+  (max 2.03%), any-mean to 1.47%, flagged rows to 118; the std3-vs-4 diff found
+  4810 newly-added bins across 2630 channels (vs. 3413 bins / 2169 channels for
+  std4-vs-5) — std3 is noticeably looser than std4, concentrated in a few noisy
+  channels (e.g. sub-085 RMH1-8 pick up dozens of extra bins each).
 - **Threshold-label meaning:** `pct0` is **saturation** (`sat_frac_thresh=0` →
   flag a window if **>0**, i.e. ≥1 sample, hits the rail — the old MIN_SAMPLES=1).
   It is NOT "flag nothing". `var5e-13`=flatline variance floor, `frac0.9`=square
