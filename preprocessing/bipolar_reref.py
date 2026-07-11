@@ -211,8 +211,32 @@ def _band_average_linear(freqs, psd, bin_edges):
 # Welch PSD, band-averaged into log-spaced bins
 # ============================================================================
 
+def _welch_one_channel(channel_col, sfreq, outer_sec, nperseg, noverlap, bin_edges):
+    """All outer windows' Welch PSD (band-averaged into log bins) for ONE
+    channel's full time series. Runs in a worker process when n_workers > 1 --
+    kept as a free function (not a closure) so it's picklable for
+    ProcessPoolExecutor."""
+    n_samples = channel_col.shape[0]
+    samples_per_outer = max(1, int(round(outer_sec * sfreq)))
+    n_outer = n_samples // samples_per_outer
+    n_bins = len(bin_edges) - 1
+
+    out = np.empty((n_outer, n_bins), dtype=np.float32)
+    for w in range(n_outer):
+        s, e = w * samples_per_outer, (w + 1) * samples_per_outer
+        chunk = channel_col[s:e]
+        freqs, psd = signal.welch(chunk, fs=sfreq, nperseg=min(nperseg, chunk.shape[0]),
+                                   noverlap=min(noverlap, max(0, min(nperseg, chunk.shape[0]) - 1)),
+                                   window='hann', scaling='density')
+        linear_bins = _band_average_linear(freqs, psd, bin_edges)
+        with np.errstate(divide='ignore'):
+            out[w, :] = np.log10(linear_bins)
+    return out
+
+
 def compute_welch_log_bins(bipolar_v, sfreq, outer_sec, inner_sec, overlap_frac,
-                            bin_edges, guard_hz, line_freqs=(60.0, 120.0, 180.0, 240.0)):
+                            bin_edges, guard_hz, line_freqs=(60.0, 120.0, 180.0, 240.0),
+                            n_workers=1):
     """
     For each non-overlapping OUTER window (default 60s), compute a Welch PSD
     using INNER segments (default 2s, 50% overlap) -- i.e. within each 60s
@@ -224,6 +248,15 @@ def compute_welch_log_bins(bipolar_v, sfreq, outer_sec, inner_sec, overlap_frac,
     bin mean for storage (averaging in log space first would bias the
     estimate low, by Jensen's inequality on log -- always average linear,
     THEN log).
+
+    n_workers > 1 parallelizes across CHANNELS (embarrassingly parallel --
+    each channel's full time series is independent) via
+    ProcessPoolExecutor, not threads: scipy.signal.welch's Python-level
+    band-averaging loop doesn't release the GIL enough for threads to scale,
+    so separate processes are used. Default n_workers=1 keeps the original
+    sequential path (this is the code path validated end-to-end on real data
+    before parallelism was added -- n_workers>1 must produce IDENTICAL
+    results, since it's the same per-channel computation just distributed).
 
     Returns:
       log_power: (n_outer_windows, n_pairs, n_bins) float32
@@ -243,16 +276,21 @@ def compute_welch_log_bins(bipolar_v, sfreq, outer_sec, inner_sec, overlap_frac,
     contains_line_noise = line_noise_mask(bin_edges, line_freqs, guard_hz)
 
     log_power = np.zeros((n_outer, n_pairs, n_bins), dtype=np.float32)
-    for w in range(n_outer):
-        s, e = w * samples_per_outer, (w + 1) * samples_per_outer
-        chunk = bipolar_v[s:e]
+    if n_workers <= 1:
         for ch in range(n_pairs):
-            freqs, psd = signal.welch(chunk[:, ch], fs=sfreq, nperseg=min(nperseg, chunk.shape[0]),
-                                       noverlap=min(noverlap, max(0, min(nperseg, chunk.shape[0]) - 1)),
-                                       window='hann', scaling='density')
-            linear_bins = _band_average_linear(freqs, psd, bin_edges)
-            with np.errstate(divide='ignore'):
-                log_power[w, ch, :] = np.log10(linear_bins)
+            log_power[:, ch, :] = _welch_one_channel(
+                bipolar_v[:, ch], sfreq, outer_sec, nperseg, noverlap, bin_edges)
+    else:
+        import concurrent.futures
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futures = {
+                pool.submit(_welch_one_channel, bipolar_v[:, ch], sfreq, outer_sec,
+                            nperseg, noverlap, bin_edges): ch
+                for ch in range(n_pairs)
+            }
+            for future in concurrent.futures.as_completed(futures):
+                ch = futures[future]
+                log_power[:, ch, :] = future.result()
 
     window_start = np.arange(n_outer) * outer_sec
     window_end = window_start + outer_sec

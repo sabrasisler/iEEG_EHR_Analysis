@@ -276,8 +276,35 @@ Design, mirroring the raw_voltage split:
   known raw-voltage artifact doesn't inflate this detector's idea of "normal" variance. No
   combined bipolar mask yet (standalone detector for now).
 
-**Open risk needing a Sherlock smoke test before a real array run** (no pynwb/hdmf available to
-verify this while writing the code): `H5DataIO`-wrapped array chunking actually taking effect on
-`DecompositionSeries.data`, and whether the custom `contains_line_noise` bands-table column
-round-trips correctly. Build a small dummy NWB, write/reread, and check
-`h5py.File(...)['...data'].chunks` before trusting a full per-subject array submission.
+**Validated on real Sherlock data (2026-07-10)** — smoke test + 3 real subjects
+(sub-039, sub-071, sub-085/85 runs):
+- `DecompositionSeries.bands` must be a `FrequencyBandsTable`, not a generic `DynamicTable`
+  (`TypeError` otherwise); its `add_band(..., **extra)` DOES forward arbitrary kwargs (confirmed
+  `contains_line_noise` round-trips correctly), and `H5DataIO` chunking on `.data` takes effect
+  exactly as requested (`h5py` `.chunks` matches).
+- `DecompositionSeries.source_channels` does **NOT** survive an NWB write/read round-trip in the
+  installed pynwb version (reads back `None`) — `bipolar_bands.py` reads channel names from
+  `nwb.electrodes` directly instead, which does survive and is in the same row order.
+- Found and fixed a real, **pre-existing** bug in `config.git_provenance()`: `_git()` used
+  `.strip()` on `git status --porcelain`'s output, which ate the leading space of the FIRST
+  modified file's status code (` M` → `M`), truncating that one file's path by one character in
+  every provenance record ever written (e.g. `"reprocessing/x.py"` instead of
+  `"preprocessing/x.py"`). Fixed to `.rstrip('\n')` — only the trailing newline should be
+  stripped, not meaningful leading whitespace. Affects every prior sidecar JSON's
+  `modified_files[0]` when that file had an unstaged (leading-space) status; not a data-
+  correctness issue, just cosmetic/provenance, and only for historical records (not worth
+  re-running past jobs over).
+- **Multiprocessing across channels** (`compute_welch_log_bins(..., n_workers=N)`,
+  `ProcessPoolExecutor`) produces bitwise-identical output to the sequential path (verified via
+  `np.allclose` with 0.0 max diff) — safe to use for the real run.
+- **Measured timing/memory** (sub-085, 83 usable runs — 2 of 85 registry rows have `n_channels`
+  NaN even in the file registry itself, i.e. pre-existing corrupt/unparseable NWBs, skipped
+  gracefully by design): single-threaded ≈1.8 min/run; **8-worker ≈40 sec/run** (~2.7x speedup, not
+  linear — process-pool overhead). **MaxRSS ≈48GB with 8 workers** vs ≈16-17GB single-threaded —
+  the process pool has real fixed overhead (each worker loads the full scipy/numpy/BLAS stack).
+  `run_pipeline_bipolar_normal.sbatch` bumped to `--mem=64GB` accordingly (was 48GB, too close to
+  the measured peak).
+- An accidental `srun` test without explicit `-n 1` defaulted to 3 concurrent tasks on this
+  cluster, which **tripled every CSV row** via concurrent `config.append_table` writes (no header
+  corruption, just literal 3x duplicate rows) — always pass `--ntasks=1` explicitly; also now set
+  in the sbatch as a defense-in-depth guard.

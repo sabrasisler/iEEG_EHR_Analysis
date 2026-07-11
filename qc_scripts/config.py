@@ -72,7 +72,13 @@ def git_provenance():
                                capture_output=True, text=True)
         except FileNotFoundError:
             return None
-        return r.stdout.strip() if r.returncode == 0 else None
+        # rstrip (not strip): `git status --porcelain`'s leading space is a
+        # significant part of the XY status code (e.g. " M" = unstaged
+        # modification) -- stripping it ate one character off the FIRST
+        # modified file's path whenever that file's status began with a
+        # space, e.g. "M preprocessing/x.py" -> line[3:] == "reprocessing/x.py".
+        # Found via a real provenance JSON showing a truncated filename.
+        return r.stdout.rstrip('\n') if r.returncode == 0 else None
 
     commit = _git('rev-parse', 'HEAD')
     if commit is None:

@@ -194,7 +194,7 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
 
 def process_session(subject, session, runs, outer_sec, inner_sec, overlap_frac,
                      bin_edges, guard_hz, psd_chunk_max_hours, psd_out_root,
-                     skip_variance_metrics, metrics_out_path, prov, ts):
+                     skip_variance_metrics, metrics_out_path, prov, ts, n_workers=1):
     session_pairs_sig = None
     pairs_diverged = False
     diverged_runs = []
@@ -239,7 +239,7 @@ def process_session(subject, session, runs, outer_sec, inner_sec, overlap_frac,
 
         psd_result = bipolar_reref.compute_welch_log_bins(
             bipolar_v, sfreq, outer_sec, inner_sec, overlap_frac, bin_edges, guard_hz,
-            line_freqs=config.PSD_LINE_NOISE_FREQS_HZ)
+            line_freqs=config.PSD_LINE_NOISE_FREQS_HZ, n_workers=n_workers)
         del bipolar_v
 
         welch_params = {
@@ -295,7 +295,7 @@ def _write_run_info(level_root, subject, pairs_diverged, diverged_runs, params, 
 
 
 def run(subjects, level_root, psd_out_root, outer_sec, inner_sec, overlap_frac,
-        n_bins, f_min, f_max, guard_hz, psd_chunk_max_hours, skip_variance_metrics):
+        n_bins, f_min, f_max, guard_hz, psd_chunk_max_hours, skip_variance_metrics, n_workers=1):
     bin_edges = bipolar_reref.log_bin_edges(n_bins, f_min, f_max)
     prov = config.warn_if_dirty()
     ts = config.run_timestamp()
@@ -323,7 +323,8 @@ def run(subjects, level_root, psd_out_root, outer_sec, inner_sec, overlap_frac,
             runs = [(s, r, p) for s, r, p in session_runs if s == session]
             diverged, diverged_runs = process_session(
                 subject, session, runs, outer_sec, inner_sec, overlap_frac, bin_edges, guard_hz,
-                psd_chunk_max_hours, psd_out_root, skip_variance_metrics, metrics_out_path, prov, ts)
+                psd_chunk_max_hours, psd_out_root, skip_variance_metrics, metrics_out_path, prov, ts,
+                n_workers=n_workers)
             subj_pairs_diverged = subj_pairs_diverged or diverged
             subj_diverged_runs.extend(diverged_runs)
 
@@ -350,13 +351,18 @@ def main():
                      help='Cap HDF5 chunk size for unusually long runs (default: None = whole run per channel)')
     ap.add_argument('--skip-variance-metrics', action='store_true',
                      help='Escape hatch to skip writing the (cheap) bipolar variance metric CSV')
+    ap.add_argument('--n-workers', type=int, default=1,
+                     help='Parallelize the Welch PSD computation across this many channels at once '
+                          '(ProcessPoolExecutor). Default 1 = sequential (matches the originally '
+                          'validated single-threaded path). Match to --cpus-per-task in the sbatch.')
     args = ap.parse_args()
 
     subjects = [s.strip() for s in args.subjects.split(',')]
-    print(f"Running bipolar reref+PSD on {len(subjects)} subject(s): {subjects}", flush=True)
+    print(f"Running bipolar reref+PSD on {len(subjects)} subject(s): {subjects} "
+          f"(n_workers={args.n_workers})", flush=True)
     run(subjects, args.level_root, args.psd_out_root, args.outer_sec, args.inner_sec, args.overlap,
         args.n_bins, args.f_min, args.f_max, args.guard_hz, args.psd_chunk_max_hours,
-        args.skip_variance_metrics)
+        args.skip_variance_metrics, n_workers=args.n_workers)
 
 
 if __name__ == '__main__':
