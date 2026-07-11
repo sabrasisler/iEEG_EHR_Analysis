@@ -38,7 +38,14 @@ def load_psd_bins(nwb_path):
     bin_edges = np.concatenate([lo, hi[-1:]])
     contains_line_noise = bands['contains_line_noise'].to_numpy(dtype=bool)
 
-    channel_names = list(decomp.source_channels.table['location'][decomp.source_channels.data[:]])
+    # NOTE: DecompositionSeries.source_channels does NOT survive an NWB
+    # write/read round-trip in the pynwb version installed here (confirmed via
+    # a Sherlock smoke test -- it reads back None even though it was set at
+    # write time). nwb.electrodes itself DOES survive the round-trip, and its
+    # row order matches the PSD's channel axis (electrode_table_region was
+    # built with region=list(range(len(pairs))) in the same order pairs were
+    # re-referenced), so read channel names from there instead.
+    channel_names = list(nwb.electrodes.to_dataframe()['location'])
     rate = float(decomp.rate)
     io.close()
     return log_power, bin_edges, contains_line_noise, channel_names, rate

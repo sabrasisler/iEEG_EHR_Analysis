@@ -31,9 +31,8 @@ import numpy as np
 import pandas as pd
 from pynwb import NWBFile, NWBHDF5IO
 from pynwb.file import Subject
-from pynwb.misc import DecompositionSeries
+from pynwb.misc import DecompositionSeries, FrequencyBandsTable
 from pynwb.base import TimeSeries
-from hdmf.common import DynamicTable
 from hdmf.backends.hdf5.h5_utils import H5DataIO
 
 from qc_scripts import config, io_utils
@@ -134,23 +133,16 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
         name='ecephys', description='Bipolar re-referenced Welch PSD (log-spaced frequency bins)')
 
     n_bins = len(bin_edges) - 1
-    # NB: constructing the bands table explicitly (rather than relying on
-    # DecompositionSeries.add_band's kwarg-forwarding for the custom
-    # `contains_line_noise` column) -- unverified whether add_band forwards
-    # arbitrary kwargs; building the DynamicTable directly sidesteps that.
-    # NEEDS A SHERLOCK SMOKE TEST before a real array run (see plan's open risks).
-    bands_table = DynamicTable(name='bands', description='Log-spaced frequency bins for the bipolar PSD')
-    bands_table.add_column(name='band_name', description='bin index, e.g. bin_00')
-    bands_table.add_column(name='band_limits', description='(low_hz, high_hz) edges of this log bin')
-    bands_table.add_column(name='band_mean', description='geometric-mean center frequency of the bin (Hz)')
-    bands_table.add_column(name='band_stdev', description='half the linear bin width (Hz) -- repurposed '
-                            'here to describe log-bin width since these are log-spaced power bins, not '
-                            'band-pass filter kernels')
+    # DecompositionSeries.bands must be a FrequencyBandsTable (not a generic
+    # DynamicTable) -- confirmed via a Sherlock smoke test. Its add_band has
+    # allow_extra=True, so the custom `contains_line_noise` column (added
+    # before any rows) DOES forward through add_band -- also confirmed live.
+    bands_table = FrequencyBandsTable()
     bands_table.add_column(name='contains_line_noise', description='bin overlaps a line-noise harmonic '
                             '(60/120/180/240 Hz) +/- the configured guard band')
     for i in range(n_bins):
         lo, hi = float(bin_edges[i]), float(bin_edges[i + 1])
-        bands_table.add_row(
+        bands_table.add_band(
             band_name=f'bin_{i:02d}', band_limits=(lo, hi),
             band_mean=float(np.sqrt(lo * hi)), band_stdev=float((hi - lo) / 2),
             contains_line_noise=bool(psd_result['contains_line_noise'][i]),
