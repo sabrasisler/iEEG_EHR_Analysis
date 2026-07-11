@@ -41,7 +41,8 @@ BIN_SEC = 60.0
 USECOLS = {
     'flatline':      ['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value'],
     'square_wave':   ['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value', 'range'],
-    'saturation':    ['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value'],
+    'saturation':    ['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value',
+                      'window_max_abs', 'rail_value'],
     'gross_artifact':['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value',
                       'session_mean', 'session_std'],
 }
@@ -55,7 +56,10 @@ def label_for(artifact_type, p):
     if artifact_type == 'square_wave':
         return f"frac{p['frac_thresh']:g}"
     if artifact_type == 'saturation':
-        return f"pct{p['sat_frac_thresh']:g}"
+        base = f"pct{p['sat_frac_thresh']:g}"
+        if p.get('rail_margin_frac'):
+            base += f"_marginfrac{p['rail_margin_frac']:g}"
+        return base
     if artifact_type == 'gross_artifact':
         return f"std{p['std_thresh']:g}"
     raise ValueError(artifact_type)
@@ -67,7 +71,12 @@ def default_params(artifact_type):
     if artifact_type == 'square_wave':
         return {'frac_thresh': config.SQUARE_FRAC_THRESH, 'min_range': config.SQUARE_MIN_RANGE_V}
     if artifact_type == 'saturation':
-        return {'sat_frac_thresh': 0.0}   # >0 fraction == >=1 saturated sample (old SAT_MIN_SAMPLES=1)
+        # >0 fraction == >=1 saturated sample (old SAT_MIN_SAMPLES=1). rail_margin_frac is opt-in
+        # (None = off): when set, a window is ALSO flagged if its own peak comes within that
+        # fraction of the rail, even if no sample actually reached it (e.g. 0.10 -> peak >= 90%
+        # of rail_value counts too) -- catches near-clipping bursts without re-reading raw NWB,
+        # since window_max_abs/rail_value are already stored per 2s window.
+        return {'sat_frac_thresh': 0.0, 'rail_margin_frac': None}
     if artifact_type == 'gross_artifact':
         return {'std_thresh': config.GROSS_STD_THRESH}
     raise ValueError(artifact_type)
@@ -80,7 +89,11 @@ def compute_excluded(artifact_type, chunk, p):
     if artifact_type == 'square_wave':
         return (chunk['metric_value'] > p['frac_thresh']) & (chunk['range'] > p['min_range'])
     if artifact_type == 'saturation':
-        return chunk['metric_value'] > p['sat_frac_thresh']
+        excl = chunk['metric_value'] > p['sat_frac_thresh']
+        if p.get('rail_margin_frac'):
+            near_rail = chunk['window_max_abs'] >= chunk['rail_value'] * (1 - p['rail_margin_frac'])
+            excl = excl | near_rail
+        return excl
     if artifact_type == 'gross_artifact':
         std = chunk['session_std']
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -144,6 +157,7 @@ def run_type(level_root, artifact_type, label, params, subjects=None):
         'label': label,
         'bin_sec': BIN_SEC,
         'thresholds': params,
+        'metrics_per_window_dir': str(metrics_dir),
         'metrics_run_info': str(config.metrics_run_info_dir(level_root)),
         'run_timestamp': config.run_timestamp(),
         'git': prov,
@@ -171,6 +185,11 @@ def main():
     ap.add_argument('--frac-thresh', type=float, default=None)
     ap.add_argument('--min-range', type=float, default=None)
     ap.add_argument('--sat-frac-thresh', type=float, default=None)
+    ap.add_argument('--rail-margin-frac', type=float, default=None,
+                     help='Saturation only: also flag a window if window_max_abs >= '
+                          'rail_value * (1 - this), i.e. its peak came within this fraction '
+                          'of the rail even without a sample actually crossing it (e.g. 0.10 '
+                          'catches peaks at >=90%% of the rail). Default: off (exact-rail-only).')
     ap.add_argument('--std-thresh', type=float, default=None)
     ap.add_argument('--subjects', default=None,
                      help='Comma-separated subject IDs to restrict to (default: all present). '
@@ -179,7 +198,7 @@ def main():
 
     overrides = {'var_thresh': args.var_thresh, 'frac_thresh': args.frac_thresh,
                  'min_range': args.min_range, 'sat_frac_thresh': args.sat_frac_thresh,
-                 'std_thresh': args.std_thresh}
+                 'rail_margin_frac': args.rail_margin_frac, 'std_thresh': args.std_thresh}
     subjects = [s.strip() for s in args.subjects.split(',')] if args.subjects else None
 
     types = config.ARTIFACT_TYPES if args.artifact_type == 'all' else [args.artifact_type]

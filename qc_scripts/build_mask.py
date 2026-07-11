@@ -80,12 +80,30 @@ def main():
         print("  %s: %d bins, %d excluded (%s)"
               % (subject_id, len(merged), int(merged['excluded'].sum()), per_type), flush=True)
 
+    # Pull each per-type exclusion's own params.json so the mask sidecar links all the way back
+    # to the metrics that fed this specific rollup, without having to chase per_type_dirs by hand.
+    source_metrics = {}
+    for t, d in type_dirs.items():
+        type_params_path = d / 'params.json'
+        if type_params_path.exists():
+            with open(type_params_path) as f:
+                type_params = json.load(f)
+            source_metrics[t] = {
+                'exclusion_params_json': str(type_params_path),
+                'metrics_per_window_dir': type_params.get('metrics_per_window_dir'),
+                'thresholds': type_params.get('thresholds'),
+                'git': type_params.get('git'),
+            }
+        else:
+            source_metrics[t] = {'exclusion_params_json': str(type_params_path)}
+
     prov = config.warn_if_dirty()
     params_out = {
         'mask_label': args.label,
         'bin_sec': BIN_SEC,
         'per_type_labels': chosen,
         'per_type_dirs': {t: str(d) for t, d in type_dirs.items()},
+        'source_metrics': source_metrics,
         'n_subjects': len(common),
         'run_timestamp': config.run_timestamp(),
         'git': prov,
