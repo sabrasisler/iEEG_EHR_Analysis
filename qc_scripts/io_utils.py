@@ -73,6 +73,31 @@ def load_all_channels(nwb_path):
     return data_v, channel_names, sfreq
 
 
+def load_all_channels_with_electrodes(nwb_path):
+    """
+    Same as load_all_channels, but also returns (elec_df, elec_indices) so
+    callers can do electrode-index-aware processing (e.g. bipolar pairing)
+    without a second NWB read. Returns
+    (data_v, channel_names, sfreq, elec_df, elec_indices).
+    """
+    io = NWBHDF5IO(nwb_path, 'r')
+    nwb = io.read()
+    series = nwb.acquisition['ElectricalSeries_sEEG']
+
+    if series.unit != 'volts':
+        io.close()
+        raise ValueError(f"Unexpected unit '{series.unit}' (expected 'volts') in {nwb_path}")
+
+    sfreq = float(series.rate)
+    elec_indices = series.electrodes.data[:]
+    elec_df = nwb.electrodes.to_dataframe().iloc[elec_indices]
+    channel_names = list(elec_df['location'].values)
+
+    data_v = series.data[:].astype(np.float32) * np.float32(series.conversion)
+    io.close()
+    return data_v, channel_names, sfreq, elec_df, elec_indices
+
+
 def load_channels_subset(nwb_path, channel_names_wanted):
     """
     Load only specific channels (by name) from one NWB run, using column

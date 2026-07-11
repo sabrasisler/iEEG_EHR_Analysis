@@ -228,3 +228,65 @@ def reset_table(path):
 def ensure_output_dirs():
     for d in (PER_WINDOW_DIR, SUMMARY_DIR, PLOTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================================
+# BIPOLAR RE-REFERENCE + PSD LEVEL (preprocessing/, not qc_scripts/ -- see
+# preprocessing/CONTEXT-style notes: preprocessing computes, qc_scripts decides
+# exclusions. Shared here since both sides need one provenance/path module.)
+# ============================================================================
+
+BIPOLAR_LEVEL_ROOT = ANALYSIS_DIR / 'qc' / 'bipolar'   # parallels DEFAULT_LEVEL_ROOT
+
+# WHY 2.0s: matches raw_voltage's SAT/FLATLINE window so the bipolar variance
+# detector's bins are directly alignable against raw_voltage masks (60s bins,
+# which are just 30x this) without resampling.
+BIPOLAR_VARIANCE_WINDOW_SEC = 2.0
+
+# Welch PSD params, given in seconds (resolved per-run via each run's own sfreq,
+# not a fixed sample count) since sfreq varies across subjects in this dataset
+# (mostly 1000/2000 Hz, occasionally 500 Hz).
+PSD_OUTER_WINDOW_SEC = 60.0    # WHY: matches the old preprocessing pipeline's proven
+                               # chunking (preprocess_ieeg_chunked.py's chunk_duration_sec);
+                               # far coarser than the 2s variance metric on purpose -- PSD
+                               # wants a stable multi-segment Welch average, not per-2s snapshots.
+PSD_INNER_SEGMENT_SEC = 2.0    # WHY: sets frequency resolution (sfreq/nperseg = 0.5 Hz),
+                               # independent of the outer window's size.
+PSD_OVERLAP_FRAC = 0.5
+PSD_WINDOW_FN = 'hann'
+PSD_N_LOG_BINS = 50
+PSD_FREQ_MIN_HZ = 1.0
+PSD_FREQ_MAX_HZ = 250.0        # WHY: Nyquist-safe ceiling given rare 500 Hz-sampled subjects
+                               # (Nyquist=250Hz there); can always restrict further downstream,
+                               # can't recover truncated data later.
+PSD_LINE_NOISE_FREQS_HZ = (60.0, 120.0, 180.0, 240.0)
+PSD_LINE_NOISE_GUARD_HZ = 2.0  # +/- band around each harmonic flagged contains_line_noise
+
+# Canonical bands for the separate downstream aggregation helper
+# (preprocessing/bipolar_bands.py) -- NOT computed by the fused reref+PSD pass.
+# Edges chosen to fall strictly between line-noise harmonics so no canonical
+# band straddles a 60 Hz-multiple notch by construction.
+CANONICAL_BANDS_HZ = {
+    'delta': (1, 4), 'theta': (4, 8), 'alpha': (8, 12), 'beta': (13, 30),
+    'low_gamma': (30, 58), 'high_gamma1': (65, 115), 'high_gamma2': (125, 175),
+    'high_gamma3': (185, 235),
+}
+
+# WHY: same one-sided high-variance convention as GROSS_STD_THRESH, applied
+# post-bipolar-derivation instead of on raw monopolar channels.
+BIPOLAR_VARIANCE_STD_THRESH = 5.0
+
+# Derivatives root for PSD NWB outputs -- deliberately separate from
+# analysis/qc/ (BIDS-like derivatives/ convention, keeps large NWB outputs out
+# of the CSV-oriented analysis tree).
+DERIVATIVES_DIR = Path('/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives')
+BIPOLAR_PSD_DERIV_ROOT = DERIVATIVES_DIR / 'preprocessed' / 'bipolar_fft'
+
+# HDF5 chunking: default is uncapped (whole run's time axis in one chunk per
+# channel) -- PSD rows are already collapsed to 1/PSD_OUTER_WINDOW_SEC, so a
+# channel's entire run is only tens to a few hundred KB (200 bytes/channel/
+# minute at 50 bins x float32), far below where sub-chunking time would help.
+# This differs from raw-voltage chunking (dense samples), which DOES need
+# small time-chunks to hit a reasonable byte-size-per-chunk. Only set a cap
+# for unusually long recordings, so no single chunk balloons past ~1MB.
+PSD_HDF5_CHUNK_MAX_HOURS = None   # e.g. 4.0 to cap chunk size for exceptionally long runs

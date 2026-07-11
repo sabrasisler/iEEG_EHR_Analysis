@@ -220,7 +220,57 @@ definitive run. `.gitignore` excludes logs (`logs/`, `**/logs/`, `*.out`,
 
 - **Whole-run / whole-channel exclusion**: flag an entire run or channel when its
   artifact fraction is high enough (before bipolar re-referencing).
-- **Bipolar re-referencing level** (`qc/bipolar/`): apply the mask, re-reference,
-  then a post-referencing **5-std amplitude z-score** gate per 2s window for
-  epileptic-event detection. Do raw-level QC BEFORE referencing so hardware
-  artifacts don't propagate into differenced channels.
+
+## Bipolar re-reference + PSD (built)
+
+The bipolar level is now implemented, split across three folders by concern —
+preprocessing (re-reference + FFT), QC (exclusion), and archive:
+
+```
+preprocessing/                     # NEW active reref+FFT code (this is NOT qc_scripts/)
+  bipolar_reref.py                   pairs, re-referencing, per-2s variance, Welch->50 log bins
+  run_pipeline_bipolar.py             fused pass: single read/run -> variance metrics + PSD NWB
+  bipolar_bands.py                    downstream: aggregate stored log bins into canonical bands
+  run_pipeline_bipolar_normal.sbatch
+outdated/preprocessing/             # ARCHIVED: the old preprocess_ieeg*.py pipeline (pre-metric/
+                                     # threshold-split, hard-coded canonical bands, no QC-mask
+                                     # integration). Not imported by new code.
+qc_scripts/build_bipolar_exclusions.py   # QC ONLY: mask-aware z-score exclusion on the variance metric
+```
+
+Design, mirroring the raw_voltage split:
+- `preprocessing/run_pipeline_bipolar.py` reads each run's raw NWB exactly once. While the
+  bipolar-referenced trace is in memory (transient, never persisted — cheap enough to
+  recompute later), it computes BOTH a continuous per-2s-window variance metric (written to
+  `qc/bipolar/metrics/per_window/sub-XXX_bipolar_variance.csv`, same metric/threshold split as
+  raw_voltage — no thresholding here) AND a Welch PSD (60s outer window, 2s inner segments,
+  50% overlap by default, all configurable) band-averaged into 50 log-spaced frequency bins
+  (1-250 Hz), written to an NWB file under
+  `derivatives/preprocessed/bipolar_fft/sub-XXX/ses-XXX/` (deliberately outside `analysis/`,
+  BIDS-like, to keep large NWB derivatives away from the CSV-oriented QC tree).
+- Each PSD bin is flagged `contains_line_noise` if it overlaps a 60 Hz harmonic (60/120/180/240
+  Hz) ± a guard band — log-spaced bins are naturally wide enough at higher harmonics to contain
+  the notch in one bin. Canonical bands are NOT computed by the fused pass; a separate
+  `preprocessing/bipolar_bands.py` aggregates the stored bins into caller-specified bands later
+  (edges chosen to avoid the harmonics, `config.CANONICAL_BANDS_HZ`), so retuning band
+  definitions never re-reads raw NWB.
+- HDF5 chunking on the PSD arrays: one chunk = one channel's entire run (no time
+  sub-chunking) — the PSD output is already so downsampled (200 bytes/channel/minute) that a
+  whole run's worth of one channel is only tens-to-a-few-hundred KB, smaller than a "good"
+  chunk size would be anyway; sub-chunking would only add overhead. `--psd-chunk-max-hours`
+  caps this only for unusually long recordings.
+- **`qc_scripts/build_bipolar_exclusions.py`** is the ONLY QC piece for this level — it reads
+  exclusively the variance-metric CSVs (never the PSD/NWB output; no QC currently runs on FFT
+  output, and that should stay true) and applies a z-score threshold
+  (`z = (var - session_mean) / session_std > std_thresh`), same convention as `gross_artifact`.
+  The one deliberate difference from `gross_artifact`: its session baseline is **mask-aware** —
+  it takes an existing `qc/raw_voltage/masks/<label>/` and excludes any bipolar window whose
+  monopolar anode OR cathode is already flagged in that mask from the baseline computation, so a
+  known raw-voltage artifact doesn't inflate this detector's idea of "normal" variance. No
+  combined bipolar mask yet (standalone detector for now).
+
+**Open risk needing a Sherlock smoke test before a real array run** (no pynwb/hdmf available to
+verify this while writing the code): `H5DataIO`-wrapped array chunking actually taking effect on
+`DecompositionSeries.data`, and whether the custom `contains_line_noise` bands-table column
+round-trips correctly. Build a small dummy NWB, write/reread, and check
+`h5py.File(...)['...data'].chunks` before trusting a full per-subject array submission.
