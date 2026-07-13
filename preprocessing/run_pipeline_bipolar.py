@@ -87,7 +87,13 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
                            welch_params, out_path, sidecar_extra):
     """Writes one NWB per run: bipolar electrode table + a DecompositionSeries
     of log-spaced-bin PSD + a broadband_log_power TimeSeries. No bipolar time
-    series is written (transient only). Also writes a sidecar JSON alongside."""
+    series is written (transient only). No separate sidecar JSON -- ALL
+    provenance (git, run_timestamp, bin edges, line-noise config, source_nwb,
+    pairs_diverged, hdf5_chunk_shape) is embedded directly in the
+    DecompositionSeries' `description` field instead, so nothing is lost but
+    no per-run file clutter accumulates (git/timestamp/params are identical
+    across every run anyway -- also recorded once per subject in
+    qc/bipolar/metrics/run_info/sub-XXX.json)."""
     subject_out = None
     if nwb_in.subject is not None:
         subject_out = Subject(
@@ -149,14 +155,17 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
             contains_line_noise=bool(psd_result['contains_line_noise'][i]),
         )
 
-    description_params = json.dumps(welch_params, default=str)
     log_power = psd_result['log_power']
+    chunk_shape = _chunk_shape(log_power.shape, welch_params['outer_window_sec'],
+                                welch_params.get('psd_chunk_max_hours'))
     log_power_io = H5DataIO(
-        data=log_power,
-        chunks=_chunk_shape(log_power.shape, welch_params['outer_window_sec'],
-                            welch_params.get('psd_chunk_max_hours')),
-        compression='gzip', compression_opts=4,
+        data=log_power, chunks=chunk_shape, compression='gzip', compression_opts=4,
     )
+
+    full_provenance = dict(welch_params)
+    full_provenance.update(sidecar_extra)
+    full_provenance['hdf5_chunk_shape'] = list(chunk_shape)
+    description_params = json.dumps(full_provenance, default=str)
 
     decomp_series = DecompositionSeries(
         name='psd_log_bins',
@@ -183,14 +192,7 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with NWBHDF5IO(str(out_path), 'w') as io_out:
         io_out.write(nwb_out)
-
-    sidecar = dict(welch_params)
-    sidecar.update(sidecar_extra)
-    sidecar['hdf5_chunk_shape'] = list(_chunk_shape(log_power.shape, welch_params['outer_window_sec'],
-                                                     welch_params.get('psd_chunk_max_hours')))
-    with open(str(out_path).replace('.nwb', '.json'), 'w') as f:
-        json.dump(sidecar, f, indent=2, default=str)
-    print(f"    wrote {out_path} + sidecar", flush=True)
+    print(f"    wrote {out_path}", flush=True)
 
 
 def process_session(subject, session, runs, outer_sec, inner_sec, overlap_frac,
