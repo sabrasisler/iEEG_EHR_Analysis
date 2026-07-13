@@ -28,7 +28,7 @@ FILE_REGISTRY_CSV = f'{RAW_DIR}/sherlock_file_registry.csv'
 # data-processing stage (raw_voltage now; bipolar / features later). Within a
 # level: metrics/ (expensive detection outputs, once), exclusions/<type>/<label>/
 # (cheap per-artifact-type thresholded 60s tables), masks/<label>/ (combined mask
-# → bipolar), _validation/ (diagnostic scratch).
+# → bipolar), validation/ (diagnostic scratch, incl. threshold_sweeps/).
 ANALYSIS_DIR = Path('/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis')
 DEFAULT_LEVEL_ROOT = ANALYSIS_DIR / 'qc' / 'raw_voltage'
 
@@ -52,7 +52,10 @@ def mask_dir(level_root, label):
     return Path(level_root) / 'masks' / label
 
 def validation_dir(level_root):
-    return Path(level_root) / '_validation'
+    return Path(level_root) / 'validation'
+
+def threshold_sweep_dir(level_root):
+    return validation_dir(level_root) / 'threshold_sweeps'
 
 
 def git_provenance():

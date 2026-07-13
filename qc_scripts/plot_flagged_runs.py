@@ -385,7 +385,7 @@ def main():
                           f'(default: {config.DEFAULT_LEVEL_ROOT})')
     ap.add_argument('--plots-dir', default=None,
                      help='Where to write example PNGs (default: <level-root>/metrics/plots). '
-                          'Point at e.g. masks/<label>/plots or _validation for a specific run.')
+                          'Point at e.g. masks/<label>/plots or validation for a specific run.')
     ap.add_argument('--output-dir', default=None,
                      help='(deprecated) sets read+write root to <dir>/per_window & <dir>/plots')
     ap.add_argument('--mask-label', default='baseline',
