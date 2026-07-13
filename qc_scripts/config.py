@@ -287,9 +287,11 @@ BIPOLAR_VARIANCE_STD_THRESH = 5.0
 
 # Derivatives root for PSD NWB outputs -- deliberately separate from
 # analysis/qc/ (BIDS-like derivatives/ convention, keeps large NWB outputs out
-# of the CSV-oriented analysis tree).
+# of the CSV-oriented analysis tree). Nested under sisler/ (matching
+# derivatives/sisler/analysis/'s existing convention) rather than directly
+# under derivatives/, to keep this user's outputs namespaced alongside theirs.
 DERIVATIVES_DIR = Path('/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives')
-BIPOLAR_PSD_DERIV_ROOT = DERIVATIVES_DIR / 'preprocessed' / 'bipolar_fft'
+BIPOLAR_PSD_DERIV_ROOT = DERIVATIVES_DIR / 'sisler' / 'preprocessed' / 'bipolar_fft'
 
 # HDF5 chunking: default is uncapped (whole run's time axis in one chunk per
 # channel) -- PSD rows are already collapsed to 1/PSD_OUTER_WINDOW_SEC, so a

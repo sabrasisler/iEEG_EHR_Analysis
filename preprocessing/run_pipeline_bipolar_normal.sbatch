@@ -47,5 +47,5 @@ SUBJECTS_CSV=$(IFS=,; echo "${BATCH[*]}")
 echo "Array task $SLURM_ARRAY_TASK_ID -> subjects $SUBJECTS_CSV (n_workers=$N_WORKERS)"
 python -m preprocessing.run_pipeline_bipolar --subjects "$SUBJECTS_CSV" \
     --level-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc/bipolar \
-    --psd-out-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/preprocessed/bipolar_fft \
+    --psd-out-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/preprocessed/bipolar_fft \
     --n-workers "$N_WORKERS"
