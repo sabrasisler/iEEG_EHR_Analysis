@@ -38,7 +38,8 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
 BATCH_SIZE=${BATCH_SIZE:-4}
 N_WORKERS=${N_WORKERS:-8}
-mapfile -t ALL_SUBJECTS < preprocessing/subjects_bipolar_normal.txt
+SUBJECTS_FILE=${SUBJECTS_FILE:-preprocessing/subjects_bipolar_normal.txt}
+mapfile -t ALL_SUBJECTS < "$SUBJECTS_FILE"
 START=$((SLURM_ARRAY_TASK_ID * BATCH_SIZE))
 BATCH=("${ALL_SUBJECTS[@]:START:BATCH_SIZE}")
 SUBJECTS_CSV=$(IFS=,; echo "${BATCH[*]}")
