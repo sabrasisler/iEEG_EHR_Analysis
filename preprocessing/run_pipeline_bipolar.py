@@ -24,6 +24,7 @@ Usage:
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -242,6 +243,17 @@ def process_session(subject, session, runs, outer_sec, inner_sec, overlap_frac,
             line_freqs=config.PSD_LINE_NOISE_FREQS_HZ, n_workers=n_workers)
         del bipolar_v
 
+        if psd_result['log_power'].shape[0] == 0:
+            # Run is shorter than one outer window (e.g. <60s) -- zero PSD
+            # rows. H5DataIO's chunk shape always requests >=1 row, which
+            # HDF5 rejects when the data itself has 0 rows ("Chunk shape must
+            # not be greater than data shape"). Nothing meaningful to store
+            # for a run this short anyway -- skip it, same pattern as the
+            # existing "no bipolar pairs derived" skip above.
+            print(f"  WARNING: run-{run} produced 0 PSD windows (run shorter than "
+                  f"outer_sec={outer_sec}s); skipping PSD write for this run.", flush=True)
+            continue
+
         welch_params = {
             'outer_window_sec': outer_sec, 'inner_segment_sec': inner_sec,
             'overlap_frac': overlap_frac, 'window_function': config.PSD_WINDOW_FN,
@@ -308,28 +320,45 @@ def run(subjects, level_root, psd_out_root, outer_sec, inner_sec, overlap_frac,
         'psd_chunk_max_hours': psd_chunk_max_hours,
     }
 
+    failed_subjects = []
     for subject in subjects:
         print(f"=== sub-{subject} ===", flush=True)
-        metrics_out_path = _metrics_output_path(level_root, subject)
-        if not skip_variance_metrics:
-            config.reset_table(metrics_out_path)
+        try:
+            metrics_out_path = _metrics_output_path(level_root, subject)
+            if not skip_variance_metrics:
+                config.reset_table(metrics_out_path)
 
-        session_runs = io_utils.get_session_runs(subject)
-        sessions = sorted(set(s for s, _, _ in session_runs))
+            session_runs = io_utils.get_session_runs(subject)
+            sessions = sorted(set(s for s, _, _ in session_runs))
 
-        subj_pairs_diverged = False
-        subj_diverged_runs = []
-        for session in sessions:
-            runs = [(s, r, p) for s, r, p in session_runs if s == session]
-            diverged, diverged_runs = process_session(
-                subject, session, runs, outer_sec, inner_sec, overlap_frac, bin_edges, guard_hz,
-                psd_chunk_max_hours, psd_out_root, skip_variance_metrics, metrics_out_path, prov, ts,
-                n_workers=n_workers)
-            subj_pairs_diverged = subj_pairs_diverged or diverged
-            subj_diverged_runs.extend(diverged_runs)
+            subj_pairs_diverged = False
+            subj_diverged_runs = []
+            for session in sessions:
+                runs = [(s, r, p) for s, r, p in session_runs if s == session]
+                diverged, diverged_runs = process_session(
+                    subject, session, runs, outer_sec, inner_sec, overlap_frac, bin_edges, guard_hz,
+                    psd_chunk_max_hours, psd_out_root, skip_variance_metrics, metrics_out_path, prov, ts,
+                    n_workers=n_workers)
+                subj_pairs_diverged = subj_pairs_diverged or diverged
+                subj_diverged_runs.extend(diverged_runs)
 
-        _write_run_info(level_root, subject, subj_pairs_diverged, subj_diverged_runs,
-                         detection_params, prov, ts)
+            _write_run_info(level_root, subject, subj_pairs_diverged, subj_diverged_runs,
+                             detection_params, prov, ts)
+        except Exception as e:
+            # One subject's failure must not take down the rest of a batched
+            # array task (BATCH_SIZE subjects run sequentially in this one
+            # process) -- log it, move on. run_info.json's absence for this
+            # subject is itself the marker that it needs a rerun (see
+            # qc_scripts.processing_status).
+            import traceback
+            print(f"  ERROR: sub-{subject} failed, skipping to next subject: {e!r}", flush=True)
+            traceback.print_exc()
+            failed_subjects.append(subject)
+
+    if failed_subjects:
+        print(f"=== {len(failed_subjects)} subject(s) failed and were skipped: "
+              f"{failed_subjects} ===", flush=True)
+    return failed_subjects
 
 
 def main():
@@ -360,9 +389,12 @@ def main():
     subjects = [s.strip() for s in args.subjects.split(',')]
     print(f"Running bipolar reref+PSD on {len(subjects)} subject(s): {subjects} "
           f"(n_workers={args.n_workers})", flush=True)
-    run(subjects, args.level_root, args.psd_out_root, args.outer_sec, args.inner_sec, args.overlap,
-        args.n_bins, args.f_min, args.f_max, args.guard_hz, args.psd_chunk_max_hours,
-        args.skip_variance_metrics, n_workers=args.n_workers)
+    failed = run(subjects, args.level_root, args.psd_out_root, args.outer_sec, args.inner_sec,
+                 args.overlap, args.n_bins, args.f_min, args.f_max, args.guard_hz,
+                 args.psd_chunk_max_hours, args.skip_variance_metrics, n_workers=args.n_workers)
+    if failed:
+        sys.exit(1)   # non-zero exit for Slurm/sacct visibility, but every subject that COULD
+                       # run already did -- this only marks the task, doesn't undo prior work.
 
 
 if __name__ == '__main__':
