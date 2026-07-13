@@ -21,10 +21,10 @@ been processed into `analysis/qc/raw_voltage/`:
   (gross at std4, others default), and `masks/gross-std3/` (gross at std3, others
   default). All have `summary/` (5 `exclusion_rates_*.csv` + `flagged_for_review.csv`).
   `baseline` has ~117 flagged example plots; `gross-std4` has example plots +
-  `_validation/gross_artifact_std4_vs_5/` diff plots. `gross-std3` has
-  `_validation/gross_artifact_std3_vs_4/` diff plots (12 example channels, mirrors
-  the std4-vs-5 diagnostic via `qc_scripts/tmp_gross_std3_vs_4.py`) but no
-  `plots/flagged_examples/` yet.
+  a std4-vs-5 diff (`validation/threshold_sweeps/gross_artifact_std4_vs_std5/`).
+  `gross-std3` has flagged + 20 random example plots
+  (`masks/gross-std3/plots/{flagged_examples,random_examples}/`) plus a
+  std3-vs-4 diff (`validation/threshold_sweeps/gross_artifact_std3_vs_std4/`).
 - **Baseline exclusion rates** (per channel, % of 60s bins, n=2306 channels):
   saturation mean 0.70% / flatline 0.57% / square_wave 0.66% / gross 0.19% /
   **any 1.46%** (medians ~0.1–0.4%; heavy right tails — a few channels lose ~⅓).
@@ -34,6 +34,35 @@ been processed into `analysis/qc/raw_voltage/`:
   4810 newly-added bins across 2630 channels (vs. 3413 bins / 2169 channels for
   std4-vs-5) — std3 is noticeably looser than std4, concentrated in a few noisy
   channels (e.g. sub-085 RMH1-8 pick up dozens of extra bins each).
+
+- **Reusable threshold-sweep tooling** (`qc_scripts/diagnostics/`, tracked —
+  NOT `tmp_*` scratch): `threshold_summary.py` (per-label exclusion-rate table,
+  no `build_mask` needed — reads `exclusions/<type>/<label>/` directly) and
+  `threshold_diff.py` (green/red trace diff plots between two labels of the
+  same type, direction-agnostic). Both take `--artifact-type` +
+  label(s)/`--baseline-label`/`--compare-label`, so any future sweep (any
+  artifact type, any threshold pair) reuses the same two scripts instead of a
+  new hardcoded one. Output root moved from `_validation/` to `validation/`
+  (see `config.validation_dir()`), with sweep-specific output under
+  `validation/threshold_sweeps/` (see `config.threshold_sweep_dir()`).
+
+- **Flatline sweep** (`var5e-13` default → looser `var1e-12`, `var1e-11`):
+  mean exclusion 0.57%→0.93%→3.78%, channels flagged 19→49→58,
+  total bins excluded 45212→49320→383303. The var5e-13→var1e-12 step is gentle;
+  var1e-12→var1e-11 is a big jump (mean triples, some channels hit 100%
+  excluded) — var1e-11 is likely too loose as a default without per-channel
+  review. Diff plots: `validation/threshold_sweeps/flatline_var1e-12_vs_var5e-13/`,
+  `flatline_var1e-11_vs_var1e-12/`. Table: `flatline_threshold_summary.csv`.
+
+- **Saturation rail-margin sweep** (`pct0` default/margin-off → looser
+  `pct0_marginfrac0.05`, `pct0_marginfrac0.1`): mean exclusion
+  0.70%→1.10%→1.14%, total bins excluded 98631→189455→198996. Margin 0→0.05 is
+  the big jump (roughly doubles excluded bins); 0.05→0.1 adds comparatively
+  little more — diminishing returns past 0.05. Concentrated in a few channels
+  (e.g. sub-085 RMH*, sub-088 LAHP1). Diff plots:
+  `validation/threshold_sweeps/saturation_pct0_marginfrac0.05_vs_pct0/`,
+  `saturation_pct0_marginfrac0.1_vs_pct0_marginfrac0.05/`. Table:
+  `saturation_threshold_summary.csv`.
 - **Threshold-label meaning:** `pct0` is **saturation** (`sat_frac_thresh=0` →
   flag a window if **>0**, i.e. ≥1 sample, hits the rail — the old MIN_SAMPLES=1).
   It is NOT "flag nothing". `var5e-13`=flatline variance floor, `frac0.9`=square
@@ -102,7 +131,8 @@ analysis/qc/raw_voltage/
     params.json                      #   which per-type <type>/<label> fed each + provenance
     summary/  exclusion_rates_*.csv, flagged_for_review.csv   (summarize_exclusions)
     plots/    flagged_examples/*.png                          (plot_flagged_runs)
-  _validation/                       # diagnostic scratch (e.g. square-wave tuning), NOT canonical
+  validation/                        # diagnostic scratch (e.g. square-wave tuning), NOT canonical
+    threshold_sweeps/                 # threshold_summary.py / threshold_diff.py outputs
 ```
 
 **Label naming:** exclusion `<label>`s are self-documenting from the threshold —
