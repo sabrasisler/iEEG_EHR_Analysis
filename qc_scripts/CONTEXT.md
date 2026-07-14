@@ -280,11 +280,20 @@ Design, mirroring the raw_voltage split:
   bipolar-referenced trace is in memory (transient, never persisted — cheap enough to
   recompute later), it computes BOTH a continuous per-2s-window variance metric (written to
   `qc/bipolar/metrics/per_window/sub-XXX_bipolar_variance.csv`, same metric/threshold split as
-  raw_voltage — no thresholding here) AND a Welch PSD (60s outer window, 2s inner segments,
-  50% overlap by default, all configurable) band-averaged into 50 log-spaced frequency bins
+  raw_voltage — no thresholding here) AND a PSD band-averaged into 50 log-spaced frequency bins
   (1-250 Hz), written to an NWB file under
-  `derivatives/preprocessed/bipolar_fft/sub-XXX/ses-XXX/` (deliberately outside `analysis/`,
-  BIDS-like, to keep large NWB derivatives away from the CSV-oriented QC tree).
+  `derivatives/sisler/preprocessed/bipolar_fft/sub-XXX/ses-XXX/` (deliberately outside
+  `analysis/`, BIDS-like, namespaced under `sisler/` matching `derivatives/sisler/analysis/`'s
+  existing convention, to keep large NWB derivatives away from the CSV-oriented QC tree).
+- **PSD windowing (revised 2026-07-13, superseding an earlier 60s-outer-window design)**:
+  single-level windowing, no coarser outer window — each `--window-sec` window (default 2.0s)
+  is its own periodogram-style PSD estimate (single segment, hann-windowed), stepped by
+  `--overlap` (default 0.5 → 1s hop). This was a deliberate lab decision to match the PSD's time
+  granularity much more closely to the variance metric's 2s grid, trading away the averaging
+  benefit a longer outer window gave (noisier per-window spectral estimate, much finer time
+  resolution). Implemented via one `scipy.signal.spectrogram` call per channel across the whole
+  run (`bipolar_reref._welch_one_channel`) rather than a manual two-level loop — returns every
+  window's PSD at once. `rate` in the NWB = `1/hop_sec` (not `1/outer_sec` as before).
 - Each PSD bin is flagged `contains_line_noise` if it overlaps a 60 Hz harmonic (60/120/180/240
   Hz) ± a guard band — log-spaced bins are naturally wide enough at higher harmonics to contain
   the notch in one bin. Canonical bands are NOT computed by the fused pass; a separate
@@ -292,10 +301,21 @@ Design, mirroring the raw_voltage split:
   (edges chosen to avoid the harmonics, `config.CANONICAL_BANDS_HZ`), so retuning band
   definitions never re-reads raw NWB.
 - HDF5 chunking on the PSD arrays: one chunk = one channel's entire run (no time
-  sub-chunking) — the PSD output is already so downsampled (200 bytes/channel/minute) that a
-  whole run's worth of one channel is only tens-to-a-few-hundred KB, smaller than a "good"
-  chunk size would be anyway; sub-chunking would only add overhead. `--psd-chunk-max-hours`
-  caps this only for unusually long recordings.
+  sub-chunking). Even at the new ~1s-hop density this stays small — measured on real data
+  (sub-039, 2.5hr run): 8999 rows/channel, ~1.8MB/channel; a 24hr run would be ~17MB/channel —
+  still comfortably below where sub-chunking would help. `--psd-chunk-max-hours` caps this only
+  for unusually long recordings.
+- **No per-run sidecar JSON** (removed 2026-07-13) — everything that used to live in a separate
+  `..._bipolar_psd.json` next to each NWB (git commit, run_timestamp, window/overlap params, bin
+  edges, line-noise config, source_nwb, pairs_diverged, hdf5_chunk_shape) is now embedded
+  directly in the `DecompositionSeries.description` field instead, so nothing is lost but no
+  per-run file clutter accumulates (git/timestamp/params are identical across every run of a
+  subject anyway, and already recorded once per subject in
+  `qc/bipolar/metrics/run_info/sub-XXX.json`).
+- **`--skip-variance-metrics`**: the bipolar variance CSV is independent of the PSD windowing
+  scheme (always 2s non-overlapping, unaffected by `--window-sec`/`--overlap` changes) — use this
+  flag (or the sbatch's `SKIP_VARIANCE=1` env var) to recompute PSD-only when only PSD parameters
+  changed, without redoing the already-correct variance metrics.
 - **`qc_scripts/build_bipolar_exclusions.py`** is the ONLY QC piece for this level — it reads
   exclusively the variance-metric CSVs (never the PSD/NWB output; no QC currently runs on FFT
   output, and that should stay true) and applies a z-score threshold
@@ -327,14 +347,35 @@ Design, mirroring the raw_voltage split:
 - **Multiprocessing across channels** (`compute_welch_log_bins(..., n_workers=N)`,
   `ProcessPoolExecutor`) produces bitwise-identical output to the sequential path (verified via
   `np.allclose` with 0.0 max diff) — safe to use for the real run.
-- **Measured timing/memory** (sub-085, 83 usable runs — 2 of 85 registry rows have `n_channels`
-  NaN even in the file registry itself, i.e. pre-existing corrupt/unparseable NWBs, skipped
-  gracefully by design): single-threaded ≈1.8 min/run; **8-worker ≈40 sec/run** (~2.7x speedup, not
-  linear — process-pool overhead). **MaxRSS ≈48GB with 8 workers** vs ≈16-17GB single-threaded —
-  the process pool has real fixed overhead (each worker loads the full scipy/numpy/BLAS stack).
-  `run_pipeline_bipolar_normal.sbatch` bumped to `--mem=64GB` accordingly (was 48GB, too close to
-  the measured peak).
+- **Measured timing/memory (under the OLD 60s-outer-window scheme)** (sub-085, 83 usable runs —
+  2 of 85 registry rows have `n_channels` NaN even in the file registry itself, i.e. pre-existing
+  corrupt/unparseable NWBs, skipped gracefully by design): single-threaded ≈1.8 min/run;
+  **8-worker ≈40 sec/run** (~2.7x speedup, not linear — process-pool overhead). **MaxRSS ≈48GB
+  with 8 workers** vs ≈16-17GB single-threaded — the process pool has real fixed overhead (each
+  worker loads the full scipy/numpy/BLAS stack). `run_pipeline_bipolar_normal.sbatch` bumped to
+  `--mem=64GB` accordingly (was 48GB, too close to the measured peak). **NOT yet re-measured under
+  the new 2s/50%-overlap scheme** — expect meaningfully slower per-subject (sub-039, small/2 runs,
+  took 7m53s single-threaded vs ~2min under the old scheme, since ~60x more PSD windows are now
+  computed/written per run) — watch the first real array tasks of the 2026-07-13 full recompute
+  for grounded numbers on a large subject before assuming a multiplier.
 - An accidental `srun` test without explicit `-n 1` defaulted to 3 concurrent tasks on this
   cluster, which **tripled every CSV row** via concurrent `config.append_table` writes (no header
   corruption, just literal 3x duplicate rows) — always pass `--ntasks=1` explicitly; also now set
   in the sbatch as a defense-in-depth guard.
+- Two crash bugs found in the real 104-subject submission (both fixed): (1) runs producing 0 PSD
+  windows (shorter than one window) crashed NWB writing (H5DataIO always requested >=1 chunk row,
+  HDF5 rejects that against 0 data rows) — now skipped with a warning. (2) a crash in one subject
+  used to take down the rest of its batch (BATCH_SIZE subjects run sequentially in one process) —
+  each subject's processing is now wrapped in try/except so one failure logs and moves on;
+  `run_info.json`'s absence for a subject is the marker that it still needs a (re)run.
+- **Derivatives path moved** (2026-07-13): PSD NWB output moved from
+  `derivatives/preprocessed/bipolar_fft/` to `derivatives/sisler/preprocessed/bipolar_fft/`
+  (namespaced under `sisler/`, matching `derivatives/sisler/analysis/`'s existing convention).
+  Existing output was migrated (`mv`/`rsync -a` merge for subjects touched by more than one
+  submission attempt); `config.BIPOLAR_PSD_DERIV_ROOT` and the sbatch's `--psd-out-root` both
+  point at the new location now.
+- **As of 2026-07-13**: a full recompute of all 104 subjects' PSD (job `33957325`,
+  `SKIP_VARIANCE=1` since the variance CSVs are untouched by this parameter change) is running
+  under the new 2s/50%-overlap scheme on the `normal` partition (`--array=0-25%6`,
+  `BATCH_SIZE=4`, `--cpus-per-task=8`/`--n-workers=8`). Check `qc_scripts.processing_status` or
+  `sacct`/`squeue` for current progress when picking this up.
