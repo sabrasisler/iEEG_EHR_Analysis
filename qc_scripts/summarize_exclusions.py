@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import re
 from pathlib import Path
 
 import numpy as np
@@ -28,24 +29,40 @@ from qc_scripts import config
 CHUNK = 500_000
 
 
+_MASK_CSV_RE = re.compile(r'^sub-(?P<subject>[^_]+)_ses-(?P<session>[^_]+)$')
+
+
+def _subject_id_from_mask_path(path):
+    """Mask CSVs no longer carry a subject_id column (one file already covers
+    exactly one subject/session -- see build_mask.py); recover 'sub-XXX' from
+    the filename, e.g. sub-039_ses-01.csv -> 'sub-039'."""
+    m = _MASK_CSV_RE.match(path.stem)
+    if not m:
+        raise ValueError(f"Unexpected mask filename: {path.name}")
+    return f"sub-{m.group('subject')}"
+
+
 def accumulate(mask_dir, artifact_types):
     """
-    Stream every subject's mask CSV in chunks. Returns a dict
+    Stream every subject/session's mask CSV in chunks. Returns a dict
     {(subject_id, channel, type): [n_excluded, n_total]} where `type` ranges
-    over the artifact types plus 'any' (the combined mask).
+    over the artifact types plus 'any' (the combined mask). Aggregates across
+    all of a subject's sessions under one subject_id key, matching the
+    pre-session-split granularity of this report.
     """
     counts = {}
-    cols = ['subject_id', 'channel', 'excluded'] + [f'excluded_{t}' for t in artifact_types]
+    cols = ['channel', 'excluded'] + [f'excluded_{t}' for t in artifact_types]
     type_cols = {t: f'excluded_{t}' for t in artifact_types}
     type_cols['any'] = 'excluded'
 
-    for csv in sorted(Path(mask_dir).glob('sub-*.csv')):
+    for csv in sorted(Path(mask_dir).glob('sub-*_ses-*.csv')):
+        subject_id = _subject_id_from_mask_path(csv)
         for chunk in pd.read_csv(csv, usecols=lambda c: c in cols, chunksize=CHUNK):
             for typ, col in type_cols.items():
                 if col not in chunk.columns:
                     continue
-                g = chunk.groupby(['subject_id', 'channel'])[col].agg(['sum', 'count'])
-                for (subject_id, channel), row in g.iterrows():
+                g = chunk.groupby('channel')[col].agg(['sum', 'count'])
+                for channel, row in g.iterrows():
                     key = (subject_id, channel, typ)
                     acc = counts.setdefault(key, [0, 0])
                     acc[0] += int(row['sum'])

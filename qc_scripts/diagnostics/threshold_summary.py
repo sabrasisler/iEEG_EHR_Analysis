@@ -33,13 +33,15 @@ CHUNK = 500_000
 
 
 def accumulate(label_dir):
-    """Stream sub-*.csv in `label_dir`, return {(subject_id, channel): [n_excluded, n_total]}."""
+    """Stream sub-*_ses-*.csv in `label_dir`, return {(subject_id, channel): [n_excluded, n_total]}.
+    subject_id is parsed from the filename (sub-XXX_ses-YY.csv) since it's no
+    longer a column -- one file already covers exactly one subject/session."""
     counts = {}
-    for csv in sorted(Path(label_dir).glob('sub-*.csv')):
-        for chunk in pd.read_csv(csv, usecols=['subject_id', 'channel', 'excluded'],
-                                  chunksize=CHUNK):
-            g = chunk.groupby(['subject_id', 'channel'])['excluded'].agg(['sum', 'count'])
-            for (subject_id, channel), row in g.iterrows():
+    for csv in sorted(Path(label_dir).glob('sub-*_ses-*.csv')):
+        subject_id = csv.stem.split('_ses-')[0]
+        for chunk in pd.read_csv(csv, usecols=['channel', 'excluded'], chunksize=CHUNK):
+            g = chunk.groupby('channel')['excluded'].agg(['sum', 'count'])
+            for channel, row in g.iterrows():
                 acc = counts.setdefault((subject_id, channel), [0, 0])
                 acc[0] += int(row['sum'])
                 acc[1] += int(row['count'])

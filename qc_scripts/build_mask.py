@@ -20,13 +20,27 @@ Usage:
 
 import argparse
 import json
+import re
 
 import pandas as pd
 
 from qc_scripts import config, build_exclusions
 
 BIN_SEC = 60.0
-KEY = ['subject_id', 'session_id', 'run_id', 'channel', 'bin_start']
+# subject_id/session_id are NOT columns in the per-type exclusion CSVs (one file
+# already covers exactly one subject/session -- see build_exclusions.py), so the
+# join key is just run/channel/bin; subject/session are parsed from the filename.
+KEY = ['run_id', 'channel', 'bin_start']
+
+_EXCL_CSV_RE = re.compile(r'^sub-(?P<subject>[^_]+)_ses-(?P<session>[^_]+)$')
+
+
+def _parse_subject_session(path):
+    """Recover ('sub-039', 'ses-01') from an exclusion/mask filename like sub-039_ses-01.csv."""
+    m = _EXCL_CSV_RE.match(path.stem)
+    if not m:
+        raise ValueError(f"Unexpected filename: {path.name}")
+    return f"sub-{m.group('subject')}", f"ses-{m.group('session')}"
 
 
 def main():
@@ -46,22 +60,24 @@ def main():
         if not d.exists():
             raise SystemExit(f"Missing exclusion dir for {t}: {d} (run build_exclusions first)")
 
-    # subjects present in every chosen type dir
-    subj_sets = {t: {p.stem for p in d.glob('sub-*.csv')} for t, d in type_dirs.items()}
+    # (subject_id, session_id) pairs present in every chosen type dir
+    subj_sets = {t: {_parse_subject_session(p) for p in d.glob('sub-*_ses-*.csv')}
+                 for t, d in type_dirs.items()}
     common = set.intersection(*subj_sets.values()) if subj_sets else set()
     for t, s in subj_sets.items():
         missing = s ^ common
         if missing:
-            print(f"  NOTE: {t} has subjects not shared by all types (skipped): {sorted(missing)}",
-                  flush=True)
+            print(f"  NOTE: {t} has subject/sessions not shared by all types (skipped): "
+                  f"{sorted(missing)}", flush=True)
 
     out_dir = config.mask_dir(args.level_root, args.label)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for subject_id in sorted(common):
+    for subject_id, session_id in sorted(common):
+        tag = f'{subject_id}_{session_id}'
         merged = None
         for t in config.ARTIFACT_TYPES:
-            df = pd.read_csv(type_dirs[t] / f'{subject_id}.csv',
+            df = pd.read_csv(type_dirs[t] / f'{tag}.csv',
                              usecols=KEY + ['bin_end', 'excluded'])
             df = df.rename(columns={'excluded': f'excluded_{t}'})
             if merged is None:
@@ -74,11 +90,11 @@ def main():
         merged['excluded'] = merged[excl_cols].any(axis=1)
         merged = merged.sort_values(['run_id', 'channel', 'bin_start']).reset_index(drop=True)
         out_cols = KEY + ['bin_end'] + excl_cols + ['excluded']
-        merged[out_cols].to_csv(out_dir / f'{subject_id}.csv', index=False)
+        merged[out_cols].to_csv(out_dir / f'{tag}.csv', index=False)
         per_type = ', '.join('%s=%d' % (t, int(merged['excluded_%s' % t].sum()))
                              for t in config.ARTIFACT_TYPES)
         print("  %s: %d bins, %d excluded (%s)"
-              % (subject_id, len(merged), int(merged['excluded'].sum()), per_type), flush=True)
+              % (tag, len(merged), int(merged['excluded'].sum()), per_type), flush=True)
 
     # Pull each per-type exclusion's own params.json so the mask sidecar links all the way back
     # to the metrics that fed this specific rollup, without having to chase per_type_dirs by hand.
@@ -104,13 +120,13 @@ def main():
         'per_type_labels': chosen,
         'per_type_dirs': {t: str(d) for t, d in type_dirs.items()},
         'source_metrics': source_metrics,
-        'n_subjects': len(common),
+        'n_subject_sessions': len(common),
         'run_timestamp': config.run_timestamp(),
         'git': prov,
     }
     with open(out_dir / 'params.json', 'w') as f:
         json.dump(params_out, f, indent=2, default=str)
-    print(f"Wrote {out_dir} ({len(common)} subjects) + params.json", flush=True)
+    print(f"Wrote {out_dir} ({len(common)} subject/sessions) + params.json", flush=True)
 
 
 if __name__ == '__main__':

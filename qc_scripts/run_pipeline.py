@@ -69,19 +69,20 @@ from qc_scripts.detect_gross_artifact import (
 )
 
 
-def _rows_from_result(subject, channel, session, run, artifact_type, result,
-                      array_cols=(), extra=None):
+def _rows_from_result(channel, run, artifact_type, result, array_cols=(), extra=None):
     """
     Build per-window rows storing the CONTINUOUS METRIC ONLY (no `excluded`) —
     thresholding is deferred to build_exclusions.py (metric/threshold split).
-    `array_cols` names extra per-window arrays in `result` to carry (e.g.
-    'range' for square_wave, 'window_max_abs' for saturation); `extra` is a
-    dict of scalars broadcast across all rows (e.g. rail_value, session_mean).
+    `subject_id`/`session_id` are NOT stored here -- one output file already
+    covers exactly one subject/session (see _output_path), so they're
+    recoverable from the filename; storing them per-row would just repeat the
+    same string across every row on disk for no benefit. `array_cols` names
+    extra per-window arrays in `result` to carry (e.g. 'range' for
+    square_wave, 'window_max_abs' for saturation); `extra` is a dict of
+    scalars broadcast across all rows (e.g. rail_value, session_mean).
     """
     n = len(result['window_start'])
     row = {
-        'subject_id': [f'sub-{subject}'] * n,
-        'session_id': [f'ses-{session}'] * n,
         'run_id': [f'run-{run}'] * n,
         'channel': [channel] * n,
         'window_start_time': result['window_start'],
@@ -97,8 +98,8 @@ def _rows_from_result(subject, channel, session, run, artifact_type, result,
     return pd.DataFrame(row)
 
 
-def _output_path(subject, artifact_type):
-    return config.PER_WINDOW_DIR / f'sub-{subject}_{artifact_type}.csv'
+def _output_path(subject, session, artifact_type):
+    return config.PER_WINDOW_DIR / f'sub-{subject}_ses-{session}_{artifact_type}.csv'
 
 
 def process_session(subject, session, runs):
@@ -152,10 +153,10 @@ def process_session(subject, session, runs):
             trace_v = data_v[:, ch_idx]
 
             flat = classify_flatline(trace_v, sfreq)
-            flat_batch.append(_rows_from_result(subject, channel, session_, run, 'flatline', flat))
+            flat_batch.append(_rows_from_result(channel, run, 'flatline', flat))
 
             sq = classify_square_wave(trace_v, sfreq)
-            square_batch.append(_rows_from_result(subject, channel, session_, run, 'square_wave',
+            square_batch.append(_rows_from_result(channel, run, 'square_wave',
                                                    sq, array_cols=['range']))
 
             abs_max, count = local_extreme_stats(trace_v)
@@ -168,8 +169,10 @@ def process_session(subject, session, runs):
             acc, cached = accumulate_and_cache_window_means(acc, trace_v, sfreq)
             gross_cached_means[(run, channel)] = cached
 
-        config.append_table(pd.concat(flat_batch, ignore_index=True), _output_path(subject, 'flatline'))
-        config.append_table(pd.concat(square_batch, ignore_index=True), _output_path(subject, 'square_wave'))
+        config.append_table(pd.concat(flat_batch, ignore_index=True),
+                             _output_path(subject, session_, 'flatline'))
+        config.append_table(pd.concat(square_batch, ignore_index=True),
+                             _output_path(subject, session_, 'square_wave'))
         del data_v, flat_batch, square_batch
 
     # --- Resolve baselines/rails: pure arithmetic on cached stats, no data access ---
@@ -227,14 +230,15 @@ def process_session(subject, session, runs):
 
     for session_, run in run_order:
         sat_batch = [
-            _rows_from_result(subject, channel, session_, run, 'saturation', result,
+            _rows_from_result(channel, run, 'saturation', result,
                                array_cols=['window_max_abs'],
                                extra={'rail_value': rail, 'rail_source': rail_source})
             for (r, channel), (result, rail, rail_source) in sat_result_by_run_channel.items()
             if r == run
         ]
         if sat_batch:
-            config.append_table(pd.concat(sat_batch, ignore_index=True), _output_path(subject, 'saturation'))
+            config.append_table(pd.concat(sat_batch, ignore_index=True),
+                                 _output_path(subject, session_, 'saturation'))
 
     # --- Gross-artifact: store the RAW per-window variance + session baseline (no reload,
     #     no thresholding). build_exclusions.py computes z = (var - mean)/std and applies std_thresh. ---
@@ -250,18 +254,20 @@ def process_session(subject, session, runs):
                 'metric_value': cached['window_variance'],
             }
             gross_batch.append(_rows_from_result(
-                subject, channel, session_, run, 'gross_artifact', gross,
+                channel, run, 'gross_artifact', gross,
                 extra={'session_mean': session_mean, 'session_std': session_std}))
         if gross_batch:
             config.append_table(pd.concat(gross_batch, ignore_index=True),
-                                 _output_path(subject, 'gross_artifact'))
+                                 _output_path(subject, session_, 'gross_artifact'))
 
 
-def _write_run_info(subjects):
-    """Per-subject record of how the metrics were produced: detection params +
-    git provenance + run_timestamp. Written under metrics/run_info/sub-XXX.json
-    (one file per subject, so parallel Slurm array tasks don't race on a shared
-    file). Thresholds are NOT here — those live with build_exclusions."""
+def _write_run_info(subject_sessions):
+    """Per-(subject, session) record of how the metrics were produced:
+    detection params + git provenance + run_timestamp. Written under
+    metrics/run_info/sub-XXX_ses-YY.json (one file per subject/session, so
+    parallel Slurm array tasks don't race on a shared file). Thresholds are
+    NOT here — those live with build_exclusions. `subject_sessions`: dict
+    {subject: [session, ...]}."""
     import json
     prov = config.warn_if_dirty()
     detection_params = {
@@ -276,41 +282,46 @@ def _write_run_info(subjects):
     ts = config.run_timestamp()
     rdir = config.OUTPUT_DIR / 'run_info'
     rdir.mkdir(parents=True, exist_ok=True)
-    for subject in subjects:
-        info = {
-            'subject': f'sub-{subject}',
-            'artifact_types': config.ARTIFACT_TYPES,
-            'detection_params': detection_params,
-            'run_timestamp': ts,
-            'git': prov,
-        }
-        path = rdir / f'sub-{subject}.json'
-        with open(path, 'w') as f:
-            json.dump(info, f, indent=2, default=str)
-        print(f"  Wrote {path}", flush=True)
+    for subject, sessions in subject_sessions.items():
+        for session in sessions:
+            info = {
+                'subject': f'sub-{subject}',
+                'session': f'ses-{session}',
+                'artifact_types': config.ARTIFACT_TYPES,
+                'detection_params': detection_params,
+                'run_timestamp': ts,
+                'git': prov,
+            }
+            path = rdir / f'sub-{subject}_ses-{session}.json'
+            with open(path, 'w') as f:
+                json.dump(info, f, indent=2, default=str)
+            print(f"  Wrote {path}", flush=True)
 
 
 def run(subjects):
     config.ensure_output_dirs()
 
+    subject_sessions = {}
     for subject in subjects:
         print(f"=== sub-{subject} ===", flush=True)
-        for artifact_type in config.ARTIFACT_TYPES:
-            config.reset_table(_output_path(subject, artifact_type))
 
         session_runs = io_utils.get_session_runs(subject)
         sessions = sorted(set(s for s, _, _ in session_runs))
+        subject_sessions[subject] = sessions
 
         for session in sessions:
+            for artifact_type in config.ARTIFACT_TYPES:
+                config.reset_table(_output_path(subject, session, artifact_type))
+
             runs = [(s, r, p) for s, r, p in session_runs if s == session]
             process_session(subject, session, runs)
 
-        for artifact_type in config.ARTIFACT_TYPES:
-            out_path = _output_path(subject, artifact_type)
-            n_rows = sum(1 for _ in open(out_path)) - 1 if out_path.exists() else 0
-            print(f"  Wrote {out_path} ({n_rows} rows)", flush=True)
+            for artifact_type in config.ARTIFACT_TYPES:
+                out_path = _output_path(subject, session, artifact_type)
+                n_rows = sum(1 for _ in open(out_path)) - 1 if out_path.exists() else 0
+                print(f"  Wrote {out_path} ({n_rows} rows)", flush=True)
 
-    _write_run_info(subjects)
+    _write_run_info(subject_sessions)
 
 
 def main():

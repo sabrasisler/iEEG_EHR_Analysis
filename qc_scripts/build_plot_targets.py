@@ -40,7 +40,7 @@ def main():
         config.set_output_dir(args.output_dir)
 
     available_subjects = sorted({p.stem.split('_')[0].replace('sub-', '')
-                                  for p in config.PER_WINDOW_DIR.glob('sub-*.csv')})
+                                  for p in config.PER_WINDOW_DIR.glob('sub-*_ses-*.csv')})
     print(f"Subjects with per-window data available: {available_subjects}")
 
     rows = []

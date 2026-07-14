@@ -57,6 +57,15 @@ def validation_dir(level_root):
 def threshold_sweep_dir(level_root):
     return validation_dir(level_root) / 'threshold_sweeps'
 
+def bipolar_fft_params_path(psd_out_root, subject):
+    # Subject-level sidecar living IN the bipolar_fft derivatives tree itself
+    # (not under qc/), so it survives independently of whether QC has been run
+    # or re-run: re-referencing type + FFT/PSD params + git provenance for
+    # whatever preprocessing pass most recently produced this subject's PSD
+    # output. One file per subject, overwritten each time that subject's
+    # preprocessing (run_pipeline_bipolar.py) is re-run.
+    return Path(psd_out_root) / f'sub-{subject}' / f'sub-{subject}_bipolar_fft_params.json'
+
 
 def git_provenance():
     """

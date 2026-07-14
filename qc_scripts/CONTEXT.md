@@ -4,6 +4,45 @@ Context for picking this work up in a fresh session. Covers the raw-voltage QC /
 artifact-rejection pipeline in `qc_scripts/`, its file organization, the design
 principles behind it, and how to run each step.
 
+## Filenames now carry session (done, 2026-07-14)
+
+Every `sub-XXX`-prefixed file under `qc/raw_voltage/` is now `sub-XXX_ses-YY.*`
+instead of just `sub-XXX.*` — one file per subject **per session**, not one
+file per subject covering every session it has. This applies to
+`metrics/per_window/*.csv`, `metrics/run_info/*.json`, `exclusions/<type>/<label>/*.csv`,
+and `masks/<label>/*.csv` (NOT the `bipolar_fft` derivatives tree, which was
+already folder-per-session and correctly named). Motivated by `sub-197`, whose
+runs all belong to `ses-02` rather than the usual `ses-01` default — the old
+one-file-per-subject scheme silently papered over that.
+
+Once every file is single-subject/single-session, `subject_id`/`session_id`
+columns are redundant (recoverable from the filename) and have been **dropped
+from every CSV** to save disk — `run_id` stays as a row column since a session
+can still have multiple runs. `run_pipeline.py`, `build_exclusions.py`,
+`build_mask.py`, `summarize_exclusions.py`, `plot_flagged_runs.py`,
+`build_plot_targets.py`, and `plot_distributions.py` were all updated to parse
+subject/session from filenames (regex helpers named `_parse_subject_session`
+or similar in each) instead of reading those columns. Plot titles already
+showed `ses-##`; plot **filenames** now do too
+(`sub-XXX_ses-YY_run-ZZZZ_channel.png`).
+
+The existing 18-subject cohort (all confirmed single-session, `ses-01` only)
+was migrated in place with `qc_scripts/migrate_add_session_to_filenames.py` —
+a one-time, idempotent rename + column-drop (skips a file if its destination
+already exists). It supports `--stage {per_window,run_info,exclusions,masks}`
+and `--subjects` for sharding across parallel jobs, since each stage/subject
+subset touches disjoint files (don't run overlapping `--subjects` sets
+concurrently — see the script's docstring). Migration is complete; no
+`sub-XXX.*`-without-`_ses-`-tag files remain anywhere under `qc/raw_voltage/`.
+
+**Follow-up not yet done:** the manifests (`params.json` sidecars in
+`exclusions/`/`masks/`) were explicitly left out of scope for now (per
+instruction) — they don't yet carry session in their filename/content, only
+the per-subject data files do. Re-running `run_pipeline` metrics for
+subjects beyond the current 18 (e.g. `sub-236`'s missing `flatline`/
+`square_wave`, or any new subjects) will write directly in the new
+`sub-XXX_ses-YY_<type>.csv` convention — no further migration needed for those.
+
 ## Current state (as of 2026-07-10)
 
 Pipeline code is complete, committed, and pushed (`master`). A first cohort has
@@ -182,16 +221,16 @@ processing stage; current level = **`raw_voltage`** (future: `bipolar`,
 ```
 analysis/qc/raw_voltage/
   metrics/                          # EXPENSIVE, produced once by run_pipeline
-    per_window/ sub-XXX_{saturation,flatline,square_wave,gross_artifact}.csv
-    run_info/   sub-XXX.json         # per-subject provenance: detection params + git + run_timestamp
+    per_window/ sub-XXX_ses-YY_{saturation,flatline,square_wave,gross_artifact}.csv
+    run_info/   sub-XXX_ses-YY.json  # per-subject/session provenance: detection params + git + run_timestamp
   exclusions/<type>/<label>/         # CHEAP per-artifact-type 60s exclusion (build_exclusions)
-    sub-XXX.csv                      #   subject,session,run,channel,bin_start,bin_end,excluded
+    sub-XXX_ses-YY.csv               #   run,channel,bin_start,bin_end,excluded (subject/session in filename only)
     params.json                      #   thresholds + git + run_timestamp
   masks/<mask_label>/                # CHEAP combined mask (build_mask) — the downstream artifact
-    sub-XXX.csv                      #   per-type excluded_<type> columns + OR'd `excluded`
+    sub-XXX_ses-YY.csv               #   per-type excluded_<type> columns + OR'd `excluded`
     params.json                      #   which per-type <type>/<label> fed each + provenance
     summary/  exclusion_rates_*.csv, flagged_for_review.csv   (summarize_exclusions)
-    plots/    flagged_examples/*.png                          (plot_flagged_runs)
+    plots/    flagged_examples/sub-XXX_ses-YY_run-ZZZZ_channel.png   (plot_flagged_runs)
   validation/                        # diagnostic scratch (e.g. square-wave tuning), NOT canonical
     threshold_sweeps/                 # threshold_summary.py / threshold_diff.py outputs
 ```
@@ -371,8 +410,21 @@ Design, mirroring the raw_voltage split:
   edges, line-noise config, source_nwb, pairs_diverged, hdf5_chunk_shape) is now embedded
   directly in the `DecompositionSeries.description` field instead, so nothing is lost but no
   per-run file clutter accumulates (git/timestamp/params are identical across every run of a
-  subject anyway, and already recorded once per subject in
-  `qc/bipolar/metrics/run_info/sub-XXX.json`).
+  subject anyway).
+- **Per-SUBJECT sidecar added (2026-07-14)**, living inside the `bipolar_fft` derivatives tree
+  itself: `derivatives/sisler/preprocessed/bipolar_fft/sub-XXX/sub-XXX_bipolar_fft_params.json`
+  (`config.bipolar_fft_params_path`, written by `run_pipeline_bipolar.run` via
+  `_write_bipolar_fft_sidecar`). Contains re-referencing type, FFT/PSD params
+  (`window_sec`/`overlap_frac`/`n_bins`/`f_min`/`f_max`/line-noise config), git provenance, and
+  `pairs_diverged`/`pairs_divergence_runs`. Deliberately separate from
+  `qc/bipolar/metrics/run_info/sub-XXX.json`: that file lives in the QC tree and doubles as
+  `processing_status.py`'s "has this subject's preprocessing (re)run" marker, but QC
+  (`build_bipolar_exclusions.py`) and preprocessing (`run_pipeline_bipolar.py`) can each be
+  re-run independently of the other — so the params describing the actual PSD/FFT output
+  shouldn't live only in a QC-owned location. This sidecar is overwritten every time
+  preprocessing is re-run for that subject (regardless of `--skip-variance-metrics`, since it
+  describes the PSD output, which every call produces), so it always reflects whatever last
+  produced the NWBs sitting next to it — lets you diff params/git commit across re-runs.
 - **`--skip-variance-metrics`**: the bipolar variance CSV is independent of the PSD windowing
   scheme (always 2s non-overlapping, unaffected by `--window-sec`/`--overlap` changes) — use this
   flag (or the sbatch's `SKIP_VARIANCE=1` env var) to recompute PSD-only when only PSD parameters

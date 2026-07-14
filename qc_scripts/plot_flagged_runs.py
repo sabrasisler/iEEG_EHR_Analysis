@@ -82,20 +82,25 @@ def _out_dir():
     return config.PLOTS_DIR / EXAMPLES_SUBDIR
 
 
-def _per_window_path(subject, artifact_type):
-    return config.PER_WINDOW_DIR / f'sub-{subject}_{artifact_type}.csv'
+def _per_window_paths(subject, artifact_type):
+    """Metrics are one file per subject/session (see run_pipeline._output_path)
+    -- a subject can have more than one session, so this returns every session's
+    file for the subject, not just one."""
+    return sorted(config.PER_WINDOW_DIR.glob(f'sub-{subject}_ses-*_{artifact_type}.csv'))
 
 
-def _mask_path(subject):
-    return config.mask_dir(MASK_LEVEL_ROOT, MASK_LABEL) / f'sub-{subject}.csv'
+def _mask_path(subject, session):
+    return config.mask_dir(MASK_LEVEL_ROOT, MASK_LABEL) / f'sub-{subject}_ses-{session}.csv'
 
 
-def get_mask_windows(subject, channel, run):
+def get_mask_windows(subject, session, channel, run):
     """Read the 60s mask bins (already OR'd: whole bin excluded if any 2s
     sub-window inside it tripped a threshold) for one channel/run, one row per
     bin with an `excluded_<type>` bool per artifact type. Returns None if no
-    mask file exists for this subject."""
-    path = _mask_path(subject)
+    mask file exists for this subject/session. `session` should already be the
+    RESOLVED session (e.g. from plot_channel_run's NWB-registry lookup), not a
+    hint -- mask filenames now carry session, so there's no fallback search here."""
+    path = _mask_path(subject, session)
     if not path.exists():
         return None
     df = pd.read_csv(path)
@@ -107,21 +112,22 @@ def get_mask_windows(subject, channel, run):
 
 def top_runs_for_channel(subject, channel, artifact_type, n=1, chunksize=500_000):
     """
-    Stream a per-window CSV in chunks, filtering to `channel`, without ever
-    loading the full (potentially 900MB+) file into memory. Returns up to `n`
-    (run_id, windows_df) pairs, most-excluded-windows first, or [] if the
-    channel has no exclusions at all for this artifact type.
+    Stream every session's per-window CSV for this subject in chunks, filtering
+    to `channel`, without ever loading a full (potentially 900MB+) file into
+    memory. Returns up to `n` (run_id, windows_df) pairs, most-excluded-windows
+    first, or [] if the channel has no exclusions at all for this artifact type.
     """
-    path = _per_window_path(subject, artifact_type)
-    if not path.exists():
+    paths = _per_window_paths(subject, artifact_type)
+    if not paths:
         return []
 
     usecols = _READ_COLS[artifact_type]
     matches = []
-    for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
-        sub = chunk[chunk['channel'] == channel]
-        if len(sub):
-            matches.append(sub)
+    for path in paths:
+        for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
+            sub = chunk[chunk['channel'] == channel]
+            if len(sub):
+                matches.append(sub)
     if not matches:
         return []
 
@@ -149,17 +155,18 @@ def find_flatline_examples(subjects, n_examples=2, chunksize=500_000):
     """
     candidates = []
     for subject in subjects:
-        path = _per_window_path(subject, 'flatline')
-        if not path.exists():
+        paths = _per_window_paths(subject, 'flatline')
+        if not paths:
             continue
         usecols = _READ_COLS['flatline']
         counts = {}
-        for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
-            chunk = chunk.copy()
-            chunk['excluded'] = _excluded(chunk, 'flatline')
-            flagged = chunk[chunk['excluded']]
-            for (ch, run), n in flagged.groupby(['channel', 'run_id']).size().items():
-                counts[(ch, run)] = counts.get((ch, run), 0) + n
+        for path in paths:
+            for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
+                chunk = chunk.copy()
+                chunk['excluded'] = _excluded(chunk, 'flatline')
+                flagged = chunk[chunk['excluded']]
+                for (ch, run), n in flagged.groupby(['channel', 'run_id']).size().items():
+                    counts[(ch, run)] = counts.get((ch, run), 0) + n
         for (ch, run), n in counts.items():
             candidates.append((n, subject, ch, run))
 
@@ -183,17 +190,18 @@ def find_random_any_examples(subjects, n_examples, seed=None, max_chunks_per_fil
 
     candidates = []
     for subject in subjects_shuffled:
-        path = _per_window_path(subject, artifact_type)
-        if not path.exists():
+        paths = _per_window_paths(subject, artifact_type)
+        if not paths:
             continue
         usecols = ['channel', 'run_id']
         seen = set()
-        for chunk_i, chunk in enumerate(pd.read_csv(path, usecols=usecols, chunksize=chunksize)):
-            # usecols preserves the FILE's column order, not this list's order -- reindex explicitly
-            for ch, run in chunk[['channel', 'run_id']].drop_duplicates().itertuples(index=False):
-                seen.add((subject, ch, run))
-            if chunk_i + 1 >= max_chunks_per_file:
-                break
+        for path in paths:
+            for chunk_i, chunk in enumerate(pd.read_csv(path, usecols=usecols, chunksize=chunksize)):
+                # usecols preserves the FILE's column order, not this list's order -- reindex explicitly
+                for ch, run in chunk[['channel', 'run_id']].drop_duplicates().itertuples(index=False):
+                    seen.add((subject, ch, run))
+                if chunk_i + 1 >= max_chunks_per_file:
+                    break
         candidates.extend(seen)
         # keep visiting subjects for diversity even once we have "enough" candidates --
         # a single subject's file alone can trivially exceed n_examples*5
@@ -234,20 +242,21 @@ def find_random_examples(subjects, artifact_types, n_examples, seed=None,
         artifact_types_shuffled = list(artifact_types)
         rng.shuffle(artifact_types_shuffled)
         for artifact_type in artifact_types_shuffled:
-            path = _per_window_path(subject, artifact_type)
-            if not path.exists():
+            paths = _per_window_paths(subject, artifact_type)
+            if not paths:
                 continue
             usecols = _READ_COLS[artifact_type]
-            for chunk_i, chunk in enumerate(pd.read_csv(path, usecols=usecols, chunksize=chunksize)):
-                chunk = chunk.copy()
-                chunk['excluded'] = _excluded(chunk, artifact_type)
-                flagged = chunk[chunk['excluded']]
-                if len(flagged):
-                    sample_n = min(5, len(flagged))
-                    for _, row in flagged.sample(sample_n, random_state=rng.randrange(10**6)).iterrows():
-                        candidates.append((subject, row['channel'], row['run_id'], artifact_type))
-                if chunk_i + 1 >= max_chunks_per_file:
-                    break
+            for path in paths:
+                for chunk_i, chunk in enumerate(pd.read_csv(path, usecols=usecols, chunksize=chunksize)):
+                    chunk = chunk.copy()
+                    chunk['excluded'] = _excluded(chunk, artifact_type)
+                    flagged = chunk[chunk['excluded']]
+                    if len(flagged):
+                        sample_n = min(5, len(flagged))
+                        for _, row in flagged.sample(sample_n, random_state=rng.randrange(10**6)).iterrows():
+                            candidates.append((subject, row['channel'], row['run_id'], artifact_type))
+                    if chunk_i + 1 >= max_chunks_per_file:
+                        break
         if len(candidates) >= n_examples * 5:
             break  # enough of a pool to sample from without scanning every subject
 
@@ -266,15 +275,16 @@ def find_random_examples(subjects, artifact_types, n_examples, seed=None,
 
 def get_windows(subject, channel, run, artifact_type, chunksize=500_000):
     """Same streaming filter as best_run_for_channel, but for a known run."""
-    path = _per_window_path(subject, artifact_type)
-    if not path.exists():
+    paths = _per_window_paths(subject, artifact_type)
+    if not paths:
         return None
     usecols = _READ_COLS[artifact_type]
     matches = []
-    for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
-        sub = chunk[(chunk['channel'] == channel) & (chunk['run_id'] == run)]
-        if len(sub):
-            matches.append(sub)
+    for path in paths:
+        for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
+            sub = chunk[(chunk['channel'] == channel) & (chunk['run_id'] == run)]
+            if len(sub):
+                matches.append(sub)
     if not matches:
         return None
     df = pd.concat(matches, ignore_index=True)
@@ -319,7 +329,7 @@ def plot_channel_run(subject, channel, run, session=None, highlight_types=None):
 
     fig, ax = plt.subplots(figsize=(14, 3))
     counts = {}
-    mask_windows = get_mask_windows(subject, channel, run)
+    mask_windows = get_mask_windows(subject, session, channel, run)
     for artifact_type in highlight_types:
         if mask_windows is None:
             counts[artifact_type] = 0
@@ -343,7 +353,7 @@ def plot_channel_run(subject, channel, run, session=None, highlight_types=None):
 
     out_dir = _out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"sub-{subject}_{run}_{channel}.png"
+    out_path = out_dir / f"sub-{subject}_ses-{session}_{run}_{channel}.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"  Saved {out_path}  (counts: {counts})")
@@ -421,7 +431,7 @@ def main():
         return
 
     available_subjects = sorted({p.stem.split('_')[0].replace('sub-', '')
-                                  for p in config.PER_WINDOW_DIR.glob('sub-*.csv')})
+                                  for p in config.PER_WINDOW_DIR.glob('sub-*_ses-*.csv')})
     print(f"Subjects with per-window data available: {available_subjects}")
 
     if args.targets:

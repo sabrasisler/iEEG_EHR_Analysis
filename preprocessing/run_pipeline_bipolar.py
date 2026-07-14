@@ -90,13 +90,15 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
                            welch_params, out_path, sidecar_extra):
     """Writes one NWB per run: bipolar electrode table + a DecompositionSeries
     of log-spaced-bin PSD + a broadband_log_power TimeSeries. No bipolar time
-    series is written (transient only). No separate sidecar JSON -- ALL
+    series is written (transient only). No per-RUN sidecar JSON -- full
     provenance (git, run_timestamp, bin edges, line-noise config, source_nwb,
     pairs_diverged, hdf5_chunk_shape) is embedded directly in the
     DecompositionSeries' `description` field instead, so nothing is lost but
     no per-run file clutter accumulates (git/timestamp/params are identical
-    across every run anyway -- also recorded once per subject in
-    qc/bipolar/metrics/run_info/sub-XXX.json)."""
+    across every run anyway). A per-SUBJECT sidecar living in the bipolar_fft
+    tree itself is written once per subject by _write_bipolar_fft_sidecar
+    (config.bipolar_fft_params_path) -- that's the one to check for "what
+    re-referencing/FFT parameters produced this subject's output"."""
     subject_out = None
     if nwb_in.subject is not None:
         subject_out = Subject(
@@ -311,6 +313,35 @@ def _write_run_info(level_root, subject, pairs_diverged, diverged_runs, params, 
     print(f"  Wrote {path}", flush=True)
 
 
+def _write_bipolar_fft_sidecar(psd_out_root, subject, pairs_diverged, diverged_runs, params, prov, ts):
+    """Subject-level sidecar living inside the bipolar_fft derivatives tree itself
+    (config.bipolar_fft_params_path), separate from qc/bipolar/metrics/run_info/.
+    That run_info.json is QC-tree bookkeeping and can go stale relative to the
+    actual PSD output (build_bipolar_exclusions.py never touches it, and PSD-only
+    reprocessing -- e.g. --skip-variance-metrics -- doesn't touch run_info either
+    in a way tied to THIS output). This file describes exactly what produced the
+    PSD output sitting next to it: re-referencing type, FFT/PSD params, and git
+    provenance -- so it stays correct even if QC is run/re-run independently, and
+    re-running preprocessing for one subject naturally refreshes just this file."""
+    path = config.bipolar_fft_params_path(psd_out_root, subject)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    info = {
+        'subject': f'sub-{subject}',
+        'rereferencing': 'bipolar (anode-cathode pairs, adjacent-contact scheme; '
+                          'see preprocessing/bipolar_reref.py)',
+        'psd_method': 'Welch/periodogram-style spectrogram per channel, hann-windowed, '
+                      'log-spaced frequency bins',
+        'fft_params': params,
+        'run_timestamp': ts,
+        'git': prov,
+        'pairs_diverged': pairs_diverged,
+        'pairs_divergence_runs': diverged_runs,
+    }
+    with open(path, 'w') as f:
+        json.dump(info, f, indent=2, default=str)
+    print(f"  Wrote {path}", flush=True)
+
+
 def run(subjects, level_root, psd_out_root, window_sec, overlap_frac,
         n_bins, f_min, f_max, guard_hz, psd_chunk_max_hours, skip_variance_metrics, n_workers=1):
     bin_edges = bipolar_reref.log_bin_edges(n_bins, f_min, f_max)
@@ -349,6 +380,10 @@ def run(subjects, level_root, psd_out_root, window_sec, overlap_frac,
 
             _write_run_info(level_root, subject, subj_pairs_diverged, subj_diverged_runs,
                              detection_params, prov, ts)
+            # Always refresh, regardless of --skip-variance-metrics -- this describes the
+            # PSD/FFT output, which is written on every run() call for every subject.
+            _write_bipolar_fft_sidecar(psd_out_root, subject, subj_pairs_diverged, subj_diverged_runs,
+                                        detection_params, prov, ts)
         except Exception as e:
             # One subject's failure must not take down the rest of a batched
             # array task (BATCH_SIZE subjects run sequentially in this one

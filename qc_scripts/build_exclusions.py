@@ -7,10 +7,31 @@ this (per that type), never the raw pass and never the other types.
 
 Detection stores metrics only (run_pipeline.py); this owns the threshold. Per
 type the per-window boolean is:
-  flatline:      variance          < var_thresh
+  flatline:      variance          < var_thresh   (absolute, default)
+                 OR z=(log10(var)-channel_mean)/channel_std < -std_thresh  (if
+                 --std-thresh given: per-channel-relative mode -- see below)
   square_wave:   bimodal_fraction  > frac_thresh  AND  range > min_range
   saturation:    fraction_at_rail  > sat_frac_thresh   (0 when below the rail)
   gross_artifact: z=(var-mean)/std > std_thresh        (degenerate std -> excluded)
+
+Flatline's default mode (var_thresh alone) is a single global absolute V²
+floor -- fine for most channels, but some individual channels/runs run
+"quietly" (naturally low background amplitude, not disconnected) whose normal
+baseline sits close to that floor; loosening the floor to catch more truly
+flat channels then also eats real low-amplitude signal on those. The
+per-channel-relative mode (--std-thresh) fixes this: it computes each
+channel's own baseline mean/std of log10(variance) -- pooled over its whole
+session, i.e. every run for that channel in one pass, mirroring how
+gross_artifact's session_mean/session_std are already pooled per channel --
+then flags a window only if it's abnormally low RELATIVE TO THAT CHANNEL's
+own typical variance (one-sided low z, same convention as gross_artifact's
+one-sided high z, just flipped and on log-variance since variance spans many
+orders of magnitude / is lognormal-shaped, not linear). The absolute
+var_thresh floor stays active alongside it (OR'd) as a backstop for a channel
+that's dead for its ENTIRE session -- with no real "normal" baseline, a
+relative z-score can't help there. Computed with two streaming passes over the
+existing per-window CSV (first: channel baseline stats; second: exclusion) --
+still no raw NWB re-read, still lives entirely in this "rollup" step.
 
 For the 2s types (flatline/square_wave/saturation) the per-2s-window booleans are
 OR'd within each enclosing 60s bin (bin = floor(window_start_time/60)); the
@@ -22,12 +43,19 @@ git provenance + parent metrics manifest ref).
 
 Usage:
   python -m qc_scripts.build_exclusions --level-root <path> --artifact-type gross_artifact --label std4 --std-thresh 4
+  python -m qc_scripts.build_exclusions --level-root <path> --artifact-type flatline --std-thresh 3   # -> logz3
   python -m qc_scripts.build_exclusions --level-root <path> --artifact-type all --label default
+
+Note: --std-thresh is shared by gross_artifact and flatline's relative mode (same
+override mechanism, since both types happen to have a 'std_thresh' key) -- fine
+when sweeping one type at a time, but --artifact-type all --std-thresh N applies
+N to BOTH simultaneously; run them separately if you want different values.
 """
 
 import argparse
 import os
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -37,21 +65,37 @@ from qc_scripts import config
 
 BIN_SEC = 60.0
 
-# Columns each type needs from the metric CSV (keep reads lean).
+# Columns each type needs from the metric CSV (keep reads lean). subject_id/
+# session_id are NOT columns -- one metric CSV already covers exactly one
+# subject/session (see run_pipeline._output_path), so they're parsed from the
+# filename (_parse_subject_session) instead of repeated on every row.
 USECOLS = {
-    'flatline':      ['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value'],
-    'square_wave':   ['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value', 'range'],
-    'saturation':    ['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value',
+    'flatline':      ['run_id', 'channel', 'window_start_time', 'metric_value'],
+    'square_wave':   ['run_id', 'channel', 'window_start_time', 'metric_value', 'range'],
+    'saturation':    ['run_id', 'channel', 'window_start_time', 'metric_value',
                       'window_max_abs', 'rail_value'],
-    'gross_artifact':['subject_id', 'session_id', 'run_id', 'channel', 'window_start_time', 'metric_value',
+    'gross_artifact':['run_id', 'channel', 'window_start_time', 'metric_value',
                       'session_mean', 'session_std'],
 }
+
+_METRIC_CSV_RE = re.compile(r'^sub-(?P<subject>[^_]+)_ses-(?P<session>[^_]+)_(?P<artifact_type>.+)$')
+
+
+def _parse_subject_session(metric_csv_path, artifact_type):
+    """Recover (subject_id, session_id) e.g. ('sub-039', 'ses-01') from a
+    metrics filename like sub-039_ses-01_saturation.csv."""
+    m = _METRIC_CSV_RE.match(metric_csv_path.stem)
+    if not m or m.group('artifact_type') != artifact_type:
+        raise ValueError(f"Unexpected metrics filename: {metric_csv_path.name}")
+    return f"sub-{m.group('subject')}", f"ses-{m.group('session')}"
 
 
 def label_for(artifact_type, p):
     """A self-documenting folder label derived from the type's threshold(s), so
     you can read the parameters off the path instead of an opaque 'default'."""
     if artifact_type == 'flatline':
+        if p.get('std_thresh') is not None:
+            return f"logz{p['std_thresh']:g}"
         return f"var{p['var_thresh']:g}"
     if artifact_type == 'square_wave':
         return f"frac{p['frac_thresh']:g}"
@@ -67,7 +111,10 @@ def label_for(artifact_type, p):
 
 def default_params(artifact_type):
     if artifact_type == 'flatline':
-        return {'var_thresh': config.FLATLINE_VAR_THRESH}
+        # std_thresh=None -> absolute-only mode (current behavior, unchanged);
+        # set (e.g. via --std-thresh) to additionally enable the per-channel
+        # relative log-variance z-score mode described above.
+        return {'var_thresh': config.FLATLINE_VAR_THRESH, 'std_thresh': None}
     if artifact_type == 'square_wave':
         return {'frac_thresh': config.SQUARE_FRAC_THRESH, 'min_range': config.SQUARE_MIN_RANGE_V}
     if artifact_type == 'saturation':
@@ -82,10 +129,44 @@ def default_params(artifact_type):
     raise ValueError(artifact_type)
 
 
+def flatline_channel_log_stats(metric_csv, chunksize=500_000):
+    """First pass for flatline's per-channel-relative mode: stream the metric
+    CSV once and return {channel: (mean_log10_var, std_log10_var)}, pooled over
+    every row for that channel in this subject/session (i.e. across all its
+    runs) -- same pooling convention as gross_artifact's session_mean/std, just
+    computed here instead of during the expensive detection pass, and on
+    log10(variance) since flatline variance spans many orders of magnitude."""
+    acc = {}   # channel -> [n, sum_log, sumsq_log]
+    for chunk in pd.read_csv(metric_csv, usecols=['channel', 'metric_value'], chunksize=chunksize):
+        logv = np.log10(np.clip(chunk['metric_value'].to_numpy(), 1e-20, None))
+        df = pd.DataFrame({'channel': chunk['channel'].to_numpy(), 'logv': logv})
+        g = df.groupby('channel')['logv'].agg(n='size', s='sum', ss=lambda x: float((x**2).sum()))
+        for ch, row in g.iterrows():
+            a = acc.setdefault(ch, [0, 0.0, 0.0])
+            a[0] += int(row['n']); a[1] += row['s']; a[2] += row['ss']
+    stats = {}
+    for ch, (n, s, ss) in acc.items():
+        mean = s / n
+        var = ss / n - mean**2
+        stats[ch] = (mean, var**0.5 if var > 0 else 0.0)
+    return stats
+
+
 def compute_excluded(artifact_type, chunk, p):
     """Per-row boolean exclusion for the chunk (before 60s bucketing)."""
     if artifact_type == 'flatline':
-        return chunk['metric_value'] < p['var_thresh']
+        excl_floor = chunk['metric_value'] < p['var_thresh']
+        if p.get('std_thresh') is None:
+            return excl_floor
+        stats = p['_channel_log_stats']
+        mean_log = chunk['channel'].map(lambda c: stats.get(c, (np.nan, np.nan))[0]).to_numpy()
+        std_log = chunk['channel'].map(lambda c: stats.get(c, (np.nan, np.nan))[1]).to_numpy()
+        logv = np.log10(np.clip(chunk['metric_value'].to_numpy(), 1e-20, None))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            z = (logv - mean_log) / std_log
+        excl_relative = pd.Series(z < -p['std_thresh']).fillna(False).to_numpy()
+        degenerate = ~np.isfinite(std_log) | (std_log <= 0)  # no usable per-channel baseline
+        return excl_floor.to_numpy() | excl_relative | degenerate
     if artifact_type == 'square_wave':
         return (chunk['metric_value'] > p['frac_thresh']) & (chunk['range'] > p['min_range'])
     if artifact_type == 'saturation':
@@ -104,25 +185,26 @@ def compute_excluded(artifact_type, chunk, p):
     raise ValueError(artifact_type)
 
 
-def build_one_subject(metric_csv, artifact_type, p, chunksize=500_000):
-    """Stream one subject's metric CSV, threshold + OR into 60s bins. Returns a
-    tidy DataFrame; memory is bounded by the (30x smaller) bin count via a dict
-    OR-accumulator that survives chunk-boundary splits."""
-    acc = {}   # (session_id, run_id, channel, bin) -> excluded bool
+def build_one_subject_session(metric_csv, artifact_type, p, chunksize=500_000):
+    """Stream one subject/session's metric CSV, threshold + OR into 60s bins.
+    Returns a tidy DataFrame; memory is bounded by the (30x smaller) bin count
+    via a dict OR-accumulator that survives chunk-boundary splits. The file
+    already covers exactly one subject/session, so no subject/session grouping
+    is needed here (unlike before the per-session file split)."""
+    acc = {}   # (run_id, channel, bin) -> excluded bool
     for chunk in pd.read_csv(metric_csv, usecols=USECOLS[artifact_type], chunksize=chunksize):
         chunk = chunk.copy()
         chunk['_excl'] = compute_excluded(artifact_type, chunk, p)
         chunk['_bin'] = (chunk['window_start_time'] // BIN_SEC).astype(int)
-        grouped = chunk.groupby(['session_id', 'run_id', 'channel', '_bin'])['_excl'].any()
+        grouped = chunk.groupby(['run_id', 'channel', '_bin'])['_excl'].any()
         for key, val in grouped.items():
             if val or key not in acc:
                 acc[key] = acc.get(key, False) or bool(val)
     if not acc:
         return None
-    subject_id = metric_csv.name.split('_')[0]   # 'sub-XXX'
-    rows = [{'subject_id': subject_id, 'session_id': s, 'run_id': r, 'channel': c,
-             'bin_start': b * BIN_SEC, 'bin_end': (b + 1) * BIN_SEC, 'excluded': e}
-            for (s, r, c, b), e in acc.items()]
+    rows = [{'run_id': r, 'channel': c, 'bin_start': b * BIN_SEC, 'bin_end': (b + 1) * BIN_SEC,
+             'excluded': e}
+            for (r, c, b), e in acc.items()]
     return pd.DataFrame(rows).sort_values(['run_id', 'channel', 'bin_start']).reset_index(drop=True)
 
 
@@ -131,24 +213,32 @@ def run_type(level_root, artifact_type, label, params, subjects=None):
     out_dir = config.exclusion_dir(level_root, artifact_type, label)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    metric_csvs = sorted(metrics_dir.glob(f'sub-*_{artifact_type}.csv'))
+    metric_csvs = sorted(metrics_dir.glob(f'sub-*_ses-*_{artifact_type}.csv'))
     if subjects:
         wanted = {f'sub-{s.replace("sub-", "")}' for s in subjects}
-        metric_csvs = [p for p in metric_csvs if p.name.split('_')[0] in wanted]
+        metric_csvs = [p for p in metric_csvs
+                       if _parse_subject_session(p, artifact_type)[0] in wanted]
     if not metric_csvs:
         print(f"  [{artifact_type}] no metric CSVs in {metrics_dir}, skipping.", flush=True)
         return
 
+    zmode = artifact_type == 'flatline' and params.get('std_thresh') is not None
     for metric_csv in metric_csvs:
-        df = build_one_subject(metric_csv, artifact_type, params)
-        subject_id = metric_csv.name.split('_')[0]
+        subject_id, session_id = _parse_subject_session(metric_csv, artifact_type)
+        file_params = params
+        if zmode:
+            # first pass: this subject/session's own per-channel baseline (pooled
+            # across all its runs), before the second (thresholding) pass below.
+            file_params = dict(params, _channel_log_stats=flatline_channel_log_stats(metric_csv))
+        df = build_one_subject_session(metric_csv, artifact_type, file_params)
+        tag = f'{subject_id}_{session_id}'
         if df is None:
-            print(f"  [{artifact_type}] {subject_id}: no rows, skipping.", flush=True)
+            print(f"  [{artifact_type}] {tag}: no rows, skipping.", flush=True)
             continue
-        out_path = out_dir / f'{subject_id}.csv'
+        out_path = out_dir / f'{tag}.csv'
         df.to_csv(out_path, index=False)
         n_excl = int(df['excluded'].sum())
-        print(f"  [{artifact_type}] {subject_id}: {len(df)} bins, {n_excl} excluded -> {out_path}",
+        print(f"  [{artifact_type}] {tag}: {len(df)} bins, {n_excl} excluded -> {out_path}",
               flush=True)
 
     prov = config.warn_if_dirty()

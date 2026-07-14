@@ -37,7 +37,7 @@ NBINS = 100
 
 
 def _metric_csvs(level_root, artifact_type):
-    return sorted(config.metrics_per_window_dir(level_root).glob(f'sub-*_{artifact_type}.csv'))
+    return sorted(config.metrics_per_window_dir(level_root).glob(f'sub-*_ses-*_{artifact_type}.csv'))
 
 
 def _range(csvs, log_x):
