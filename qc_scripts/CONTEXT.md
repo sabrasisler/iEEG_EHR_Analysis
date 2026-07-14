@@ -54,6 +54,67 @@ been processed into `analysis/qc/raw_voltage/`:
   review. Diff plots: `validation/threshold_sweeps/flatline_var1e-12_vs_var5e-13/`,
   `flatline_var1e-11_vs_var1e-12/`. Table: `flatline_threshold_summary.csv`.
 
+- **Flatline per-channel-relative (log-variance z-score) mode — IN PROGRESS,
+  NOT YET VALIDATED.** The absolute `var_thresh` cutoff was found to
+  misclassify some channels' genuinely-quiet-but-real signal as flatline (a
+  channel's own normal baseline can sit close to the global cutoff — e.g.
+  `sub-085 LAH6`, whose one run averaged ~1.25µV RMS, right at the `var1e-12`
+  line, despite no visibly dead period in the raw trace). New mode added to
+  `build_exclusions.py`/`config.py` (`--std-thresh` on `flatline` →
+  `flatline_channel_log_stats()` + z-score on `log10(variance)`, one-sided
+  low, OR'd with the absolute floor as a backstop for genuinely fully-dead
+  channels) — see `build_exclusions.py`'s module docstring for the full
+  rationale (log-scale chosen because variance is lognormal-shaped/spans many
+  orders of magnitude; a raw-scale z would be dominated by the right tail and
+  blind at the low end that flatline cares about).
+  `logz5`, `logz4`, and `logz3` (label = `logz<std_thresh>`) are now all built
+  (`exclusions/flatline/logz{3,4,5}/`). A `logz4_vs_logz5` diff
+  (`validation/threshold_sweeps/flatline_logz4_vs_logz5/`) has been run — but
+  **results still not reviewed**: no `threshold_summary` table yet, no
+  decision on whether this mode should become the new default. Same
+  investigation found `gross_artifact`'s raw-variance z-score has an even
+  more extreme version of this skew (one channel's 60s-window variance:
+  mean=4.84e-9 vs median=3.15e-11, a 153x ratio) but that's a **known,
+  accepted tradeoff** already named in `detect_gross_artifact.py`'s docstring
+  (masks smaller bursts behind bigger ones, doesn't cause false-positives the
+  way flatline's did) — decided NOT to touch `gross_artifact` for now.
+
+- **Combined test mask `gross-std3_satmargin5_logz4`** (gross_artifact=std3,
+  saturation=pct0_marginfrac0.05, flatline=logz4, square_wave=default):
+  built + summarized (`masks/gross-std3_satmargin5_logz4/summary/`, 116
+  flagged rows, any-mean 1.74%/max 40.0%, up from baseline's 1.46%). Has 20
+  top-flagged + 20 random example plots
+  (`masks/gross-std3_satmargin5_logz4/plots/{flagged_examples,random_examples}/`)
+  plus 3 specifically-requested plots in `plots/requested_examples/`:
+  `sub-248 run-FA6152DU LAMY6`, `sub-207 run-EA189782 LHPC4`,
+  `sub-198 run-SA3332TR LMDT1` (channel picked automatically for the
+  sub-248 case since none was specified — many channels tied at 26 excluded
+  bins in that run, LAMY6 used as representative). NOTE: `sub-236` was
+  excluded from this mask's build (not shared by all 4 exclusion types at
+  these specific labels — hasn't been root-caused yet).
+
+- **Unidentified artifact pattern — flagged for follow-up, not yet
+  characterized.** All three of the specifically-requested example runs
+  above (`sub-248/FA6152DU`, `sub-207/EA189782`, `sub-198/SA3332TR` — which
+  also all happen to be each subject's **2nd run**, starting at exactly
+  120.0min/7200s into the session) show a distinctive shape: a flatline-like
+  quiet stretch with more noise mixed in than a true flatline, bounded on
+  both sides by two larger artifactual bursts. Visual impression is a
+  lead/electrode being unplugged and replugged (quiet gap while
+  disconnected, transient artifacts at disconnect/reconnect). Not yet
+  confirmed against ground truth or given a detector. Multi-channel example
+  plots for these three runs requested in `validation/` for a closer look
+  (see whichever `validation/*artifact*` or similarly-named subfolder was
+  most recently added — check `validation/` listing for the exact path, this
+  entry predates that job completing).
+  Related but distinct: `sub-198 LPCN2` at 4000-4100s in the same
+  `SA3332TR` run looks visually flat but is NOT a statistical outlier even
+  under the relative logz method — z only reaches ~-0.61 relative to that
+  channel's own baseline (would need `std_thresh≈0.6` to catch it, which is
+  far too loose to use globally, since z=0.6 is only the ~27th percentile).
+  Likely another instance of a channel whose own normal signal just runs
+  quieter (same pattern as `sub-085 LAH6` above), not a threshold-tuning gap.
+
 - **Saturation rail-margin sweep** (`pct0` default/margin-off → looser
   `pct0_marginfrac0.05`, `pct0_marginfrac0.1`): mean exclusion
   0.70%→1.10%→1.14%, total bins excluded 98631→189455→198996. Margin 0→0.05 is
