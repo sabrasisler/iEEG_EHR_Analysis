@@ -211,89 +211,101 @@ def _band_average_linear(freqs, psd, bin_edges):
 # Welch PSD, band-averaged into log-spaced bins
 # ============================================================================
 
-def _welch_one_channel(channel_col, sfreq, outer_sec, nperseg, noverlap, bin_edges):
-    """All outer windows' Welch PSD (band-averaged into log bins) for ONE
-    channel's full time series. Runs in a worker process when n_workers > 1 --
-    kept as a free function (not a closure) so it's picklable for
-    ProcessPoolExecutor."""
-    n_samples = channel_col.shape[0]
-    samples_per_outer = max(1, int(round(outer_sec * sfreq)))
-    n_outer = n_samples // samples_per_outer
+def _welch_one_channel(channel_col, sfreq, nperseg, noverlap, bin_edges):
+    """Continuous overlapping PSD (band-averaged into log bins) for ONE
+    channel's full time series -- single-level windowing (no outer/inner
+    split): each `nperseg`-sample window (default 2s) is its own periodogram-
+    style estimate (single segment, hann-windowed), stepped by `nperseg -
+    noverlap` samples (default 50% overlap -> 1s hop). One scipy call per
+    channel via signal.spectrogram (returns every window's PSD at once,
+    rather than looping per-window in Python). Runs in a worker process when
+    n_workers > 1 -- kept as a free function (not a closure) so it's
+    picklable for ProcessPoolExecutor."""
+    freqs, times, Sxx = signal.spectrogram(
+        channel_col, fs=sfreq, nperseg=nperseg, noverlap=noverlap,
+        window='hann', scaling='density', mode='psd')
+    # Sxx: (n_freqs, n_windows) linear power. Band-average each time-slice's
+    # spectrum into the log bins, then log10 (average linear, THEN log --
+    # averaging log first would bias the estimate low, Jensen's inequality).
+    n_windows = Sxx.shape[1]
     n_bins = len(bin_edges) - 1
-
-    out = np.empty((n_outer, n_bins), dtype=np.float32)
-    for w in range(n_outer):
-        s, e = w * samples_per_outer, (w + 1) * samples_per_outer
-        chunk = channel_col[s:e]
-        freqs, psd = signal.welch(chunk, fs=sfreq, nperseg=min(nperseg, chunk.shape[0]),
-                                   noverlap=min(noverlap, max(0, min(nperseg, chunk.shape[0]) - 1)),
-                                   window='hann', scaling='density')
-        linear_bins = _band_average_linear(freqs, psd, bin_edges)
+    out = np.empty((n_windows, n_bins), dtype=np.float32)
+    for w in range(n_windows):
+        linear_bins = _band_average_linear(freqs, Sxx[:, w], bin_edges)
         with np.errstate(divide='ignore'):
             out[w, :] = np.log10(linear_bins)
-    return out
+    return out, times
 
 
-def compute_welch_log_bins(bipolar_v, sfreq, outer_sec, inner_sec, overlap_frac,
+def compute_welch_log_bins(bipolar_v, sfreq, window_sec, overlap_frac,
                             bin_edges, guard_hz, line_freqs=(60.0, 120.0, 180.0, 240.0),
                             n_workers=1):
     """
-    For each non-overlapping OUTER window (default 60s), compute a Welch PSD
-    using INNER segments (default 2s, 50% overlap) -- i.e. within each 60s
-    outer window, ~59 overlapping 2s segments are averaged for a stable
-    estimate at full 0.5 Hz frequency resolution (set by the inner segment
-    length, independent of the outer window's size).
-
-    Band-averages LINEAR power into each of the 50 log bins, THEN log10s the
-    bin mean for storage (averaging in log space first would bias the
-    estimate low, by Jensen's inequality on log -- always average linear,
-    THEN log).
+    Single-level windowing (per lab discussion -- no outer/coarser window
+    anymore): each 2s window (default) is its own PSD estimate, stepped by
+    50% overlap (1s hop by default). NOTE: with only one segment per window,
+    this is a periodogram, not a multi-segment Welch average -- accepted
+    tradeoff for finer time resolution (noisier per-window estimate, no
+    averaging benefit a longer outer window would have given).
 
     n_workers > 1 parallelizes across CHANNELS (embarrassingly parallel --
-    each channel's full time series is independent) via
-    ProcessPoolExecutor, not threads: scipy.signal.welch's Python-level
-    band-averaging loop doesn't release the GIL enough for threads to scale,
-    so separate processes are used. Default n_workers=1 keeps the original
-    sequential path (this is the code path validated end-to-end on real data
-    before parallelism was added -- n_workers>1 must produce IDENTICAL
-    results, since it's the same per-channel computation just distributed).
+    each channel's full time series is independent) via ProcessPoolExecutor,
+    not threads (scipy/Python-level looping doesn't release the GIL enough
+    for threads to scale). n_workers>1 must produce IDENTICAL results to
+    n_workers=1, since it's the same per-channel computation just distributed.
 
     Returns:
-      log_power: (n_outer_windows, n_pairs, n_bins) float32
-      window_start / window_end: (n_outer_windows,)
-      broadband_log_power: (n_outer_windows, n_pairs) -- mean log-power across
+      log_power: (n_windows, n_pairs, n_bins) float32
+      window_start / window_end: (n_windows,) -- window_start = spectrogram's
+        window CENTER minus half the window duration (spectrogram reports
+        segment centers; converted here to window_start/window_end for
+        consistency with the variance metric's schema)
+      broadband_log_power: (n_windows, n_pairs) -- mean log-power across
         non-line-flagged bins (computed here since the array's already in memory)
       contains_line_noise: (n_bins,) bool
     """
     n_samples, n_pairs = bipolar_v.shape
-    n_bins = len(bin_edges) - 1
-    samples_per_outer = max(1, int(round(outer_sec * sfreq)))
-    n_outer = n_samples // samples_per_outer
-
-    nperseg = max(1, int(round(inner_sec * sfreq)))
+    nperseg = max(1, int(round(window_sec * sfreq)))
     noverlap = int(nperseg * overlap_frac)
 
     contains_line_noise = line_noise_mask(bin_edges, line_freqs, guard_hz)
 
-    log_power = np.zeros((n_outer, n_pairs, n_bins), dtype=np.float32)
+    if n_samples < nperseg:
+        # Run shorter than one window -- nothing to compute (mirrors the
+        # zero-outer-window guard the fused script already has for this case).
+        n_bins = len(bin_edges) - 1
+        return {
+            'log_power': np.zeros((0, n_pairs, n_bins), dtype=np.float32),
+            'window_start': np.array([]), 'window_end': np.array([]),
+            'broadband_log_power': np.zeros((0, n_pairs), dtype=np.float32),
+            'contains_line_noise': contains_line_noise,
+        }
+
+    per_channel = [None] * n_pairs
+    times_ref = None
     if n_workers <= 1:
         for ch in range(n_pairs):
-            log_power[:, ch, :] = _welch_one_channel(
-                bipolar_v[:, ch], sfreq, outer_sec, nperseg, noverlap, bin_edges)
+            per_channel[ch], times_ref = _welch_one_channel(
+                bipolar_v[:, ch], sfreq, nperseg, noverlap, bin_edges)
     else:
         import concurrent.futures
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
             futures = {
-                pool.submit(_welch_one_channel, bipolar_v[:, ch], sfreq, outer_sec,
-                            nperseg, noverlap, bin_edges): ch
+                pool.submit(_welch_one_channel, bipolar_v[:, ch], sfreq, nperseg, noverlap,
+                            bin_edges): ch
                 for ch in range(n_pairs)
             }
             for future in concurrent.futures.as_completed(futures):
                 ch = futures[future]
-                log_power[:, ch, :] = future.result()
+                per_channel[ch], times_ref = future.result()
 
-    window_start = np.arange(n_outer) * outer_sec
-    window_end = window_start + outer_sec
+    log_power = np.stack(per_channel, axis=1)   # (n_windows, n_pairs, n_bins)
+
+    # spectrogram's `times` are window CENTERS -> convert to start/end for
+    # schema consistency with the variance metric (window_start/window_end).
+    half_window = window_sec / 2.0
+    window_start = times_ref - half_window
+    window_end = times_ref + half_window
 
     non_flagged = ~contains_line_noise
     if non_flagged.any():

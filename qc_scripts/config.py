@@ -252,16 +252,21 @@ BIPOLAR_LEVEL_ROOT = ANALYSIS_DIR / 'qc' / 'bipolar'   # parallels DEFAULT_LEVEL
 # which are just 30x this) without resampling.
 BIPOLAR_VARIANCE_WINDOW_SEC = 2.0
 
-# Welch PSD params, given in seconds (resolved per-run via each run's own sfreq,
-# not a fixed sample count) since sfreq varies across subjects in this dataset
+# PSD params, given in seconds (resolved per-run via each run's own sfreq, not
+# a fixed sample count) since sfreq varies across subjects in this dataset
 # (mostly 1000/2000 Hz, occasionally 500 Hz).
-PSD_OUTER_WINDOW_SEC = 60.0    # WHY: matches the old preprocessing pipeline's proven
-                               # chunking (preprocess_ieeg_chunked.py's chunk_duration_sec);
-                               # far coarser than the 2s variance metric on purpose -- PSD
-                               # wants a stable multi-segment Welch average, not per-2s snapshots.
-PSD_INNER_SEGMENT_SEC = 2.0    # WHY: sets frequency resolution (sfreq/nperseg = 0.5 Hz),
-                               # independent of the outer window's size.
-PSD_OVERLAP_FRAC = 0.5
+#
+# Single-level windowing (per lab discussion, superseding an earlier 60s
+# outer-window design): each PSD_WINDOW_SEC window is its own periodogram-
+# style estimate (no multi-segment Welch averaging within a coarser window),
+# stepped by PSD_OVERLAP_FRAC overlap -- default 2s window / 50% overlap ->
+# a PSD estimate every 1s. Matches the variance metric's 2s granularity far
+# more closely than the old 60s-window scheme did, at the cost of a noisier
+# per-window spectral estimate (accepted tradeoff, in exchange for much finer
+# time resolution).
+PSD_WINDOW_SEC = 2.0           # WHY: sets frequency resolution (sfreq/nperseg = 0.5 Hz)
+                               # AND the time granularity of the PSD output.
+PSD_OVERLAP_FRAC = 0.5         # WHY: 50% overlap -> 1s hop for the default 2s window.
 PSD_WINDOW_FN = 'hann'
 PSD_N_LOG_BINS = 50
 PSD_FREQ_MIN_HZ = 1.0
@@ -294,10 +299,11 @@ DERIVATIVES_DIR = Path('/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives'
 BIPOLAR_PSD_DERIV_ROOT = DERIVATIVES_DIR / 'sisler' / 'preprocessed' / 'bipolar_fft'
 
 # HDF5 chunking: default is uncapped (whole run's time axis in one chunk per
-# channel) -- PSD rows are already collapsed to 1/PSD_OUTER_WINDOW_SEC, so a
-# channel's entire run is only tens to a few hundred KB (200 bytes/channel/
-# minute at 50 bins x float32), far below where sub-chunking time would help.
-# This differs from raw-voltage chunking (dense samples), which DOES need
-# small time-chunks to hit a reasonable byte-size-per-chunk. Only set a cap
-# for unusually long recordings, so no single chunk balloons past ~1MB.
+# channel). PSD rows are now spaced by the hop (PSD_WINDOW_SEC * (1 -
+# PSD_OVERLAP_FRAC), ~1s by default) -- ~60x denser than the old 60s-window
+# scheme, but a channel's entire run is still only single-digit MB even for
+# long recordings (e.g. 2hr run: ~1.4MB/channel; 24hr: ~17MB/channel), still
+# comfortably one chunk per channel. This differs from raw-voltage chunking
+# (dense samples), which DOES need small time-chunks to hit a reasonable
+# byte-size-per-chunk. Only set a cap for unusually long recordings.
 PSD_HDF5_CHUNK_MAX_HOURS = None   # e.g. 4.0 to cap chunk size for exceptionally long runs

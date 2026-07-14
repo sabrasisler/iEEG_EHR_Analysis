@@ -39,13 +39,20 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 BATCH_SIZE=${BATCH_SIZE:-4}
 N_WORKERS=${N_WORKERS:-8}
 SUBJECTS_FILE=${SUBJECTS_FILE:-preprocessing/subjects_bipolar_normal.txt}
+SKIP_VARIANCE=${SKIP_VARIANCE:-0}   # set to 1 to skip the (already-computed, unaffected by PSD
+                                    # parameter changes) bipolar variance metric CSV step
 mapfile -t ALL_SUBJECTS < "$SUBJECTS_FILE"
 START=$((SLURM_ARRAY_TASK_ID * BATCH_SIZE))
 BATCH=("${ALL_SUBJECTS[@]:START:BATCH_SIZE}")
 SUBJECTS_CSV=$(IFS=,; echo "${BATCH[*]}")
 
-echo "Array task $SLURM_ARRAY_TASK_ID -> subjects $SUBJECTS_CSV (n_workers=$N_WORKERS)"
+SKIP_FLAG=""
+if [ "$SKIP_VARIANCE" = "1" ]; then
+    SKIP_FLAG="--skip-variance-metrics"
+fi
+
+echo "Array task $SLURM_ARRAY_TASK_ID -> subjects $SUBJECTS_CSV (n_workers=$N_WORKERS, skip_variance=$SKIP_VARIANCE)"
 python -m preprocessing.run_pipeline_bipolar --subjects "$SUBJECTS_CSV" \
     --level-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc/bipolar \
     --psd-out-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/preprocessed/bipolar_fft \
-    --n-workers "$N_WORKERS"
+    --n-workers "$N_WORKERS" $SKIP_FLAG

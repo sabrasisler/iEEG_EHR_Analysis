@@ -8,9 +8,10 @@ computes BOTH:
      ONLY, no thresholding -- qc_scripts/build_bipolar_exclusions.py owns
      that, same metric/threshold split as the raw_voltage pipeline), written
      to qc/bipolar/metrics/per_window/sub-XXX.csv.
-  2. A Welch PSD per 60s outer window (default), band-averaged into 50
-     log-spaced frequency bins, written to an NWB file under
-     derivatives/preprocessed/bipolar_fft/sub-XXX/ses-XXX/.
+  2. A PSD over 2s windows at 50% overlap (default; single-level windowing,
+     no coarser outer window -- each 2s window is its own periodogram-style
+     estimate), band-averaged into 50 log-spaced frequency bins, written to
+     an NWB file under derivatives/sisler/preprocessed/bipolar_fft/sub-XXX/ses-XXX/.
 
 No exclusion/masking of any kind happens here -- see qc_scripts/CONTEXT.md's
 metric/threshold split. No QC ever runs on the FFT/PSD output; the mask-aware
@@ -19,7 +20,8 @@ variance-metric CSVs written here, never the PSD/NWB files.
 
 Usage:
   python -m preprocessing.run_pipeline_bipolar --subjects 217,222
-  python -m preprocessing.run_pipeline_bipolar --subjects 217,222 --outer-sec 60 --inner-sec 2
+  python -m preprocessing.run_pipeline_bipolar --subjects 217,222 --window-sec 2 --overlap 0.5
+  python -m preprocessing.run_pipeline_bipolar --subjects 217,222 --skip-variance-metrics
 """
 
 import argparse
@@ -67,19 +69,20 @@ def _metrics_output_path(level_root, subject):
     return config.metrics_per_window_dir(level_root) / f'sub-{subject}_bipolar_variance.csv'
 
 
-def _chunk_shape(log_power_shape, outer_sec, psd_chunk_max_hours):
+def _chunk_shape(log_power_shape, hop_sec, psd_chunk_max_hours):
     """
-    See CONTEXT/plan discussion: PSD rows are already collapsed to 1/outer_sec
-    (default 1/minute), so a channel's ENTIRE run is only tens-to-a-few-hundred
-    KB -- far below where sub-chunking time would help (unlike dense raw
-    voltage). Default: one chunk = one channel's whole run. Only cap for
-    unusually long recordings so no single chunk balloons past ~1MB.
+    Rows are now spaced by `hop_sec` (default 1s, from 2s windows at 50%
+    overlap) rather than the old 60s outer window -- ~60x denser than before,
+    but a channel's whole run is still only single-digit MB even for long
+    recordings (e.g. 2hr run: ~7200 rows x 50 bins x 4B = 1.4MB/channel; 24hr:
+    ~17MB/channel) -- still comfortably one chunk = one channel's whole run
+    by default. Only cap for unusually long recordings.
     """
     n_time, n_pairs, n_bins = log_power_shape
     if psd_chunk_max_hours is None:
         rows_per_chunk = n_time
     else:
-        rows_per_chunk = min(n_time, max(1, int(round(psd_chunk_max_hours * 3600.0 / outer_sec))))
+        rows_per_chunk = min(n_time, max(1, int(round(psd_chunk_max_hours * 3600.0 / hop_sec))))
     return (max(1, rows_per_chunk), 1, n_bins)
 
 
@@ -155,9 +158,9 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
             contains_line_noise=bool(psd_result['contains_line_noise'][i]),
         )
 
+    hop_sec = welch_params['window_sec'] * (1.0 - welch_params['overlap_frac'])
     log_power = psd_result['log_power']
-    chunk_shape = _chunk_shape(log_power.shape, welch_params['outer_window_sec'],
-                                welch_params.get('psd_chunk_max_hours'))
+    chunk_shape = _chunk_shape(log_power.shape, hop_sec, welch_params.get('psd_chunk_max_hours'))
     log_power_io = H5DataIO(
         data=log_power, chunks=chunk_shape, compression='gzip', compression_opts=4,
     )
@@ -174,17 +177,17 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
         metric='power',
         unit='log10(V^2/Hz)',
         bands=bands_table,
-        rate=1.0 / welch_params['outer_window_sec'],
+        rate=1.0 / hop_sec,
         source_channels=electrode_region,
     )
     ecephys_module.add(decomp_series)
 
     broadband_series = TimeSeries(
         name='broadband_log_power',
-        description='Mean log10-power across non-line-noise-flagged bins, per outer window/channel.',
+        description='Mean log10-power across non-line-noise-flagged bins, per window/channel.',
         data=psd_result['broadband_log_power'],
         unit='log10(V^2/Hz)',
-        rate=1.0 / welch_params['outer_window_sec'],
+        rate=1.0 / hop_sec,
     )
     ecephys_module.add(broadband_series)
 
@@ -195,7 +198,7 @@ def write_bipolar_psd_nwb(nwb_in, filtered_elec_df, pairs, psd_result, bin_edges
     print(f"    wrote {out_path}", flush=True)
 
 
-def process_session(subject, session, runs, outer_sec, inner_sec, overlap_frac,
+def process_session(subject, session, runs, window_sec, overlap_frac,
                      bin_edges, guard_hz, psd_chunk_max_hours, psd_out_root,
                      skip_variance_metrics, metrics_out_path, prov, ts, n_workers=1):
     session_pairs_sig = None
@@ -241,24 +244,24 @@ def process_session(subject, session, runs, outer_sec, inner_sec, overlap_frac,
                 config.append_table(df, metrics_out_path)
 
         psd_result = bipolar_reref.compute_welch_log_bins(
-            bipolar_v, sfreq, outer_sec, inner_sec, overlap_frac, bin_edges, guard_hz,
+            bipolar_v, sfreq, window_sec, overlap_frac, bin_edges, guard_hz,
             line_freqs=config.PSD_LINE_NOISE_FREQS_HZ, n_workers=n_workers)
         del bipolar_v
 
         if psd_result['log_power'].shape[0] == 0:
-            # Run is shorter than one outer window (e.g. <60s) -- zero PSD
-            # rows. H5DataIO's chunk shape always requests >=1 row, which
-            # HDF5 rejects when the data itself has 0 rows ("Chunk shape must
-            # not be greater than data shape"). Nothing meaningful to store
-            # for a run this short anyway -- skip it, same pattern as the
-            # existing "no bipolar pairs derived" skip above.
+            # Run is shorter than one window (e.g. <2s) -- zero PSD rows.
+            # H5DataIO's chunk shape always requests >=1 row, which HDF5
+            # rejects when the data itself has 0 rows ("Chunk shape must not
+            # be greater than data shape"). Nothing meaningful to store for a
+            # run this short anyway -- skip it, same pattern as the existing
+            # "no bipolar pairs derived" skip above.
             print(f"  WARNING: run-{run} produced 0 PSD windows (run shorter than "
-                  f"outer_sec={outer_sec}s); skipping PSD write for this run.", flush=True)
+                  f"window_sec={window_sec}s); skipping PSD write for this run.", flush=True)
             continue
 
         welch_params = {
-            'outer_window_sec': outer_sec, 'inner_segment_sec': inner_sec,
-            'overlap_frac': overlap_frac, 'window_function': config.PSD_WINDOW_FN,
+            'window_sec': window_sec, 'overlap_frac': overlap_frac,
+            'window_function': config.PSD_WINDOW_FN,
             'scaling': 'density', 'psd_chunk_max_hours': psd_chunk_max_hours,
         }
         sidecar_extra = {
@@ -308,7 +311,7 @@ def _write_run_info(level_root, subject, pairs_diverged, diverged_runs, params, 
     print(f"  Wrote {path}", flush=True)
 
 
-def run(subjects, level_root, psd_out_root, outer_sec, inner_sec, overlap_frac,
+def run(subjects, level_root, psd_out_root, window_sec, overlap_frac,
         n_bins, f_min, f_max, guard_hz, psd_chunk_max_hours, skip_variance_metrics, n_workers=1):
     bin_edges = bipolar_reref.log_bin_edges(n_bins, f_min, f_max)
     prov = config.warn_if_dirty()
@@ -316,8 +319,8 @@ def run(subjects, level_root, psd_out_root, outer_sec, inner_sec, overlap_frac,
 
     detection_params = {
         'variance_window_sec': config.BIPOLAR_VARIANCE_WINDOW_SEC,
-        'outer_window_sec': outer_sec, 'inner_segment_sec': inner_sec,
-        'overlap_frac': overlap_frac, 'n_bins': n_bins, 'f_min_hz': f_min, 'f_max_hz': f_max,
+        'psd_window_sec': window_sec, 'overlap_frac': overlap_frac,
+        'n_bins': n_bins, 'f_min_hz': f_min, 'f_max_hz': f_max,
         'line_noise_freqs_hz': list(config.PSD_LINE_NOISE_FREQS_HZ), 'line_noise_guard_hz': guard_hz,
         'psd_chunk_max_hours': psd_chunk_max_hours,
     }
@@ -338,7 +341,7 @@ def run(subjects, level_root, psd_out_root, outer_sec, inner_sec, overlap_frac,
             for session in sessions:
                 runs = [(s, r, p) for s, r, p in session_runs if s == session]
                 diverged, diverged_runs = process_session(
-                    subject, session, runs, outer_sec, inner_sec, overlap_frac, bin_edges, guard_hz,
+                    subject, session, runs, window_sec, overlap_frac, bin_edges, guard_hz,
                     psd_chunk_max_hours, psd_out_root, skip_variance_metrics, metrics_out_path, prov, ts,
                     n_workers=n_workers)
                 subj_pairs_diverged = subj_pairs_diverged or diverged
@@ -371,9 +374,12 @@ def main():
                      help=f'qc/bipolar level root for the variance metric (default: {config.BIPOLAR_LEVEL_ROOT})')
     ap.add_argument('--psd-out-root', default=str(config.BIPOLAR_PSD_DERIV_ROOT),
                      help=f'Derivatives root for PSD NWB output (default: {config.BIPOLAR_PSD_DERIV_ROOT})')
-    ap.add_argument('--outer-sec', type=float, default=config.PSD_OUTER_WINDOW_SEC)
-    ap.add_argument('--inner-sec', type=float, default=config.PSD_INNER_SEGMENT_SEC)
-    ap.add_argument('--overlap', type=float, default=config.PSD_OVERLAP_FRAC)
+    ap.add_argument('--window-sec', type=float, default=config.PSD_WINDOW_SEC,
+                     help='PSD window duration in seconds (default: 2.0, single-level -- no outer/'
+                          'coarser window; each window is its own periodogram-style PSD estimate)')
+    ap.add_argument('--overlap', type=float, default=config.PSD_OVERLAP_FRAC,
+                     help='Overlap fraction between consecutive PSD windows (default: 0.5 -> 1s hop '
+                          'for 2s windows)')
     ap.add_argument('--n-bins', type=int, default=config.PSD_N_LOG_BINS)
     ap.add_argument('--f-min', type=float, default=config.PSD_FREQ_MIN_HZ)
     ap.add_argument('--f-max', type=float, default=config.PSD_FREQ_MAX_HZ)
@@ -391,7 +397,7 @@ def main():
     subjects = [s.strip() for s in args.subjects.split(',')]
     print(f"Running bipolar reref+PSD on {len(subjects)} subject(s): {subjects} "
           f"(n_workers={args.n_workers})", flush=True)
-    failed = run(subjects, args.level_root, args.psd_out_root, args.outer_sec, args.inner_sec,
+    failed = run(subjects, args.level_root, args.psd_out_root, args.window_sec,
                  args.overlap, args.n_bins, args.f_min, args.f_max, args.guard_hz,
                  args.psd_chunk_max_hours, args.skip_variance_metrics, n_workers=args.n_workers)
     if failed:
