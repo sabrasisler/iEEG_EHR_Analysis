@@ -154,6 +154,59 @@ been processed into `analysis/qc/raw_voltage/`:
   Likely another instance of a channel whose own normal signal just runs
   quieter (same pattern as `sub-085 LAH6` above), not a threshold-tuning gap.
 
+- **`sub-211 LaTh13 run-EA1897JB`, 700-900s (a `random_examples` pick with
+  NO shading at all under `gross-std3_satmargin5_logz4`)** — a concrete case
+  study of the pattern above, with real numbers. Zoomed plots in
+  `validation/sub211_LaTh13_zoom/`:
+  - **0-100s** looks like a huge, dense oscillation (visually ±250µV) but is
+    real, continuously-varying signal, not artifact-shaped: variance
+    ≈3.4e-8 V² (**≈185µV RMS**). Not `square_wave` (bimodal-extremes fraction
+    only 0.335, need >0.9 — samples spread across the whole range, not stuck
+    at two levels); not `saturation` (peak ~250µV vs. a ~3200µV rail); not
+    `gross_artifact` either, most likely because this stretch is long/common
+    enough in the session to already be baked into the channel's own
+    `session_mean`/`session_std` baseline (self-masking — same tradeoff
+    `detect_gross_artifact.py`'s docstring already names).
+  - **800-900s** looks flat only because the plot y-axis is set by the ±3000µV
+    bursts elsewhere in the *same run*; zoomed in it's a real, continuously
+    noisy ~0-8µV signal, not dead: variance ≈5.4e-12 V² (**≈2.3µV RMS**),
+    which is **~10x above** the absolute `flatline` floor (`var_thresh=5e-13`)
+    — so the absolute threshold correctly does NOT call it flat. Only the
+    per-channel-relative `logz` method flags it (channel-baseline
+    `mean_log10var=-9.40`, `std_log10var=0.93`; z≈-2.0 to -2.04 across most of
+    600-1100s, one of the smallest logz z-scores we've seen). To exclude
+    "most" of 600-1100s here needs `std_thresh≈1.8-1.9` (86-88%); at
+    `std_thresh=2.0` only 74% is caught, and the cliff is sharp (nothing at
+    `std_thresh≥2.1`, since a small tail of noisier 2s windows around
+    660/780/950s pull those specific bins' z up above -2.1).
+  - `run-EA1897JB` is the 21st of 70 runs for sub-211 (very different
+    position than the 3 rank-2 examples above), starting ~2367.9 min
+    (~39.5h) into the session, only 21 min long.
+
+- **logz3 false-positive pattern found: early-run "ramp-up" periods.**
+  Two examples from `validation/threshold_sweeps/flatline_logz3_vs_var1e-12/`
+  (`sub-244 run-IA6192ZM LDMC5`, `sub-150 run-EA1890XB RFFL8`) show
+  continuously-active, clearly-real neural signal for the ENTIRE run with no
+  visible dead period anywhere — yet logz3 flags 3-5 bins each, all clustered
+  in roughly the first 1000-2100s of the run, where the trace is genuinely a
+  bit quieter before ramping up to its later (louder) steady-state amplitude.
+  This is a structural limitation of pooling a channel's z-score baseline
+  across its *whole session*: a normal early "settling in" period can look
+  like an outlier purely because later parts of the same session are louder,
+  not because anything is actually wrong. Not yet decided how to handle (e.g.
+  per-run instead of per-session baseline, or excluding the first N minutes
+  of each run from the baseline pool) — flagged for follow-up, no fix applied.
+
+- **sub-236 gap**: metrics ARE complete for sub-236 (all 4 types), but
+  `build_exclusions` was only ever run for it at the newer sweep labels
+  (`std3`, `pct0_marginfrac{0.05,0.1}`, `var1e-{11,12}`, `logz{3,4,5}`) — it's
+  missing the ORIGINAL defaults (`var5e-13`, `std4`, `std5`, `pct0`) and has
+  **no `square_wave/frac0.9` exclusions at all**. That's why every `build_mask`
+  run so far prints "not shared by all types (skipped): sub-236" and every
+  mask/summary in this file is still 18 subjects, not 19. Not yet fixed —
+  needs `build_exclusions --subjects 236` at the missing labels before
+  sub-236 can join any mask.
+
 - **Saturation rail-margin sweep** (`pct0` default/margin-off → looser
   `pct0_marginfrac0.05`, `pct0_marginfrac0.1`): mean exclusion
   0.70%→1.10%→1.14%, total bins excluded 98631→189455→198996. Margin 0→0.05 is
