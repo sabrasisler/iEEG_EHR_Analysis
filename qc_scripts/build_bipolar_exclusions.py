@@ -36,12 +36,11 @@ import numpy as np
 import pandas as pd
 
 from qc_scripts import config
-from qc_scripts.detect_gross_artifact import new_accumulator, finalize_baseline
 
 BIN_SEC = 60.0
 METRIC_USECOLS = ['subject_id', 'session_id', 'run_id', 'channel', 'anode_channel',
                    'cathode_channel', 'window_start_time', 'window_end_time', 'metric_value']
-MASK_USECOLS = ['session_id', 'run_id', 'channel', 'bin_start', 'excluded']
+MASK_USECOLS = ['run_id', 'channel', 'bin_start', 'excluded']
 
 
 def label_for(p):
@@ -53,59 +52,76 @@ def default_params():
 
 
 def _load_mask_lookup(raw_voltage_mask_dir, subject_id):
-    """(session_id, run_id, channel, bin_start) -> excluded bool, for one subject."""
-    mask_path = Path(raw_voltage_mask_dir) / f'{subject_id}.csv'
-    if not mask_path.exists():
-        return {}
-    df = pd.read_csv(mask_path, usecols=MASK_USECOLS)
-    return {
-        (row.session_id, row.run_id, row.channel, row.bin_start): bool(row.excluded)
-        for row in df.itertuples(index=False)
-    }
+    """Concatenated (session_id, run_id, channel, bin_start, excluded) DataFrame
+    across all of one subject's session mask files -- used as a merge key, not
+    a Python dict, so masking a subject's metric rows is a vectorized join
+    rather than a per-row lookup.
+
+    Mask files are now one-per-session (`sub-XXX_ses-YY.csv`, session dropped as a
+    column -- see CONTEXT.md's 2026-07-14 filename migration), so glob across all
+    of that subject's sessions and recover session_id from each filename."""
+    mask_paths = sorted(Path(raw_voltage_mask_dir).glob(f'{subject_id}_ses-*.csv'))
+    frames = []
+    for mask_path in mask_paths:
+        session_id = mask_path.stem.split('_ses-', 1)[1].split('_')[0]
+        session_id = f'ses-{session_id}'
+        df = pd.read_csv(mask_path, usecols=MASK_USECOLS)
+        df.insert(0, 'session_id', session_id)
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame(columns=['session_id', 'run_id', 'channel', 'bin_start', 'excluded'])
+    return pd.concat(frames, ignore_index=True)
 
 
-def _is_masked(mask_lookup, session_id, run_id, channel, bin_start):
-    return mask_lookup.get((session_id, run_id, channel, bin_start), False)
+def _mask_flags(df, mask_df, channel_col):
+    """Vectorized version of the old per-row `_is_masked` lookup: merge
+    mask_df's `excluded` column onto df keyed on (session_id, run_id,
+    channel_col, _bin), returning a boolean numpy array (unmatched -> False)."""
+    merged = df[['session_id', 'run_id', channel_col, '_bin']].merge(
+        mask_df.rename(columns={'channel': channel_col, 'bin_start': '_bin'}),
+        on=['session_id', 'run_id', channel_col, '_bin'], how='left')
+    return merged['excluded'].fillna(False).to_numpy(dtype=bool)
 
 
-def build_one_subject(metric_csv, mask_lookup, std_thresh):
+def build_one_subject(metric_csv, mask_df, std_thresh):
     df = pd.read_csv(metric_csv, usecols=METRIC_USECOLS)
     if df.empty:
         return None
 
     df['_bin'] = (df['window_start_time'] // BIN_SEC) * BIN_SEC
-    df['_masked'] = [
-        _is_masked(mask_lookup, s, r, a, b) or _is_masked(mask_lookup, s, r, c, b)
-        for s, r, a, c, b in zip(df['session_id'], df['run_id'], df['anode_channel'],
-                                  df['cathode_channel'], df['_bin'])
-    ]
+    anode_masked = _mask_flags(df, mask_df, 'anode_channel')
+    cathode_masked = _mask_flags(df, mask_df, 'cathode_channel')
+    df['_masked'] = anode_masked | cathode_masked
 
-    # Per-(session, channel) baseline over the NON-masked-out subset.
-    accs = {}
-    for (session_id, channel), grp in df[~df['_masked']].groupby(['session_id', 'channel']):
-        acc = new_accumulator()
-        acc['n'] = len(grp)
-        acc['sum'] = float(grp['metric_value'].sum())
-        acc['sumsq'] = float(np.square(grp['metric_value'].to_numpy(dtype=np.float64)).sum())
-        accs[(session_id, channel)] = finalize_baseline(acc)
+    # Per-(session, channel) baseline over the NON-masked-out subset -- same
+    # math as new_accumulator/finalize_baseline (detect_gross_artifact.py),
+    # vectorized via groupby().agg() instead of a Python accumulator loop.
+    stats = (df.loc[~df['_masked']].groupby(['session_id', 'channel'])['metric_value']
+             .agg(n='size', s='sum', ss=lambda x: float(np.square(x.to_numpy(dtype=np.float64)).sum())))
+    baseline_mean = stats['s'] / stats['n']
+    baseline_var = stats['ss'] / stats['n'] - baseline_mean ** 2
+    baseline_std = np.sqrt(baseline_var.clip(lower=0.0))
 
-    def _classify(row):
-        mean, std = accs.get((row['session_id'], row['channel']), (np.nan, np.nan))
-        if np.isnan(std) or std == 0:
-            return True   # no usable baseline -> flag the whole channel, same convention as gross_artifact
-        z = (row['metric_value'] - mean) / std
-        return bool(z > std_thresh)
-
-    df['_excl_2s'] = df.apply(_classify, axis=1)
+    # Map each row's (session, channel) baseline mean/std in one vectorized reindex
+    # instead of a per-row df.apply(...) dict lookup.
+    idx = pd.MultiIndex.from_arrays([df['session_id'], df['channel']])
+    row_mean = baseline_mean.reindex(idx).to_numpy()
+    row_std = baseline_std.reindex(idx).to_numpy()
+    with np.errstate(divide='ignore', invalid='ignore'):
+        z = (df['metric_value'].to_numpy() - row_mean) / row_std
+    degenerate = ~np.isfinite(row_std) | (row_std == 0)   # no usable baseline -> flag the whole channel,
+                                                            # same convention as gross_artifact
+    df['_excl_2s'] = (z > std_thresh) | degenerate
 
     grouped = df.groupby(['session_id', 'run_id', 'channel', 'anode_channel', 'cathode_channel', '_bin'])['_excl_2s'].any()
     subject_id = metric_csv.name.split('_')[0]
-    rows = [
-        {'subject_id': subject_id, 'session_id': s, 'run_id': r, 'channel': c,
-         'anode_channel': a, 'cathode_channel': cat, 'bin_start': b, 'bin_end': b + BIN_SEC, 'excluded': e}
-        for (s, r, c, a, cat, b), e in grouped.items()
-    ]
-    return pd.DataFrame(rows).sort_values(['run_id', 'channel', 'bin_start']).reset_index(drop=True)
+    out = grouped.reset_index(name='excluded')
+    out.insert(0, 'subject_id', subject_id)
+    out = out.rename(columns={'_bin': 'bin_start'})
+    out['bin_end'] = out['bin_start'] + BIN_SEC
+    out = out[['subject_id', 'session_id', 'run_id', 'channel', 'anode_channel',
+               'cathode_channel', 'bin_start', 'bin_end', 'excluded']]
+    return out.sort_values(['run_id', 'channel', 'bin_start']).reset_index(drop=True)
 
 
 def run(level_root, raw_voltage_mask_dir, label, std_thresh, subjects=None):
@@ -123,11 +139,11 @@ def run(level_root, raw_voltage_mask_dir, label, std_thresh, subjects=None):
 
     for metric_csv in metric_csvs:
         subject_id = metric_csv.name.split('_')[0]
-        mask_lookup = _load_mask_lookup(raw_voltage_mask_dir, subject_id)
-        if not mask_lookup:
+        mask_df = _load_mask_lookup(raw_voltage_mask_dir, subject_id)
+        if mask_df.empty:
             print(f"  NOTE: no raw_voltage mask rows found for {subject_id} at {raw_voltage_mask_dir} "
                   f"-- baseline computed with NOTHING masked out.", flush=True)
-        df = build_one_subject(metric_csv, mask_lookup, std_thresh)
+        df = build_one_subject(metric_csv, mask_df, std_thresh)
         if df is None:
             print(f"  {subject_id}: no rows, skipping.", flush=True)
             continue

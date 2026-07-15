@@ -95,7 +95,10 @@ def label_for(artifact_type, p):
     you can read the parameters off the path instead of an opaque 'default'."""
     if artifact_type == 'flatline':
         if p.get('std_thresh') is not None:
-            return f"logz{p['std_thresh']:g}"
+            base = f"linz{p['std_thresh']:g}" if p.get('linear') else f"logz{p['std_thresh']:g}"
+            if p.get('mask_label'):
+                base += f"_masked-{p['mask_label']}"
+            return base
         return f"var{p['var_thresh']:g}"
     if artifact_type == 'square_wave':
         return f"frac{p['frac_thresh']:g}"
@@ -113,8 +116,13 @@ def default_params(artifact_type):
     if artifact_type == 'flatline':
         # std_thresh=None -> absolute-only mode (current behavior, unchanged);
         # set (e.g. via --std-thresh) to additionally enable the per-channel
-        # relative log-variance z-score mode described above.
-        return {'var_thresh': config.FLATLINE_VAR_THRESH, 'std_thresh': None}
+        # relative variance z-score mode described above. linear=True computes
+        # that channel baseline on raw metric_value instead of log10(metric_value)
+        # (see --linear below). mask_label, when set, is informational only here
+        # (populated by run_type/main from --mask-from-label) -- it does not
+        # affect thresholding, just gets folded into the label/params.json.
+        return {'var_thresh': config.FLATLINE_VAR_THRESH, 'std_thresh': None,
+                'linear': False, 'mask_label': None}
     if artifact_type == 'square_wave':
         return {'frac_thresh': config.SQUARE_FRAC_THRESH, 'min_range': config.SQUARE_MIN_RANGE_V}
     if artifact_type == 'saturation':
@@ -129,18 +137,52 @@ def default_params(artifact_type):
     raise ValueError(artifact_type)
 
 
-def flatline_channel_log_stats(metric_csv, chunksize=500_000):
+def load_mask_lookup(level_root, mask_label, tag):
+    """Load masks/<mask_label>/<tag>.csv (from build_mask.py) and return
+    {(run_id, channel, bin_start): excluded_bool} for this subject/session --
+    used to keep OTHER artifact types' already-known-bad 60s bins out of
+    flatline's own per-channel baseline-stats pass (they'd otherwise inflate/
+    skew mean and std of a channel that's mostly fine but has a few
+    saturation/square-wave/gross-artifact bursts). Does not affect flatline's
+    final excluded verdict -- only which windows feed the baseline."""
+    mask_csv = config.mask_dir(level_root, mask_label) / f'{tag}.csv'
+    if not mask_csv.exists():
+        raise FileNotFoundError(f"--mask-from-label {mask_label}: missing {mask_csv}")
+    df = pd.read_csv(mask_csv, usecols=['run_id', 'channel', 'bin_start', 'excluded'])
+    return {(r, c, b): bool(e) for r, c, b, e in
+            zip(df['run_id'], df['channel'], df['bin_start'], df['excluded'])}
+
+
+def flatline_channel_stats(metric_csv, linear=False, mask_lookup=None, chunksize=500_000):
     """First pass for flatline's per-channel-relative mode: stream the metric
-    CSV once and return {channel: (mean_log10_var, std_log10_var)}, pooled over
-    every row for that channel in this subject/session (i.e. across all its
-    runs) -- same pooling convention as gross_artifact's session_mean/std, just
-    computed here instead of during the expensive detection pass, and on
-    log10(variance) since flatline variance spans many orders of magnitude."""
-    acc = {}   # channel -> [n, sum_log, sumsq_log]
-    for chunk in pd.read_csv(metric_csv, usecols=['channel', 'metric_value'], chunksize=chunksize):
-        logv = np.log10(np.clip(chunk['metric_value'].to_numpy(), 1e-20, None))
-        df = pd.DataFrame({'channel': chunk['channel'].to_numpy(), 'logv': logv})
-        g = df.groupby('channel')['logv'].agg(n='size', s='sum', ss=lambda x: float((x**2).sum()))
+    CSV once and return {channel: (mean, std)}, pooled over every row for that
+    channel in this subject/session (i.e. across all its runs) -- same pooling
+    convention as gross_artifact's session_mean/std, just computed here instead
+    of during the expensive detection pass.
+
+    linear=False (default): stats are on log10(variance), since flatline
+    variance spans many orders of magnitude (lognormal-shaped) -- see the
+    module docstring. linear=True: stats are on raw metric_value instead --
+    simpler/reuses the already-stored value as-is, at the cost of a right tail
+    that can dominate the std (see CONTEXT.md flatline logz discussion).
+
+    mask_lookup, if given, is a {(run_id, channel, bin_start): excluded} dict
+    (from load_mask_lookup) -- rows whose 60s bin (window_start_time // 60 * 60)
+    is excluded there are dropped from this baseline pass entirely."""
+    acc = {}   # channel -> [n, sum, sumsq]
+    for chunk in pd.read_csv(metric_csv, usecols=['run_id', 'channel', 'window_start_time', 'metric_value'],
+                              chunksize=chunksize):
+        if mask_lookup:
+            bins = (chunk['window_start_time'] // 60.0) * 60.0
+            keep = [not mask_lookup.get((r, c, b), False)
+                    for r, c, b in zip(chunk['run_id'], chunk['channel'], bins)]
+            chunk = chunk[np.array(keep)]
+            if chunk.empty:
+                continue
+        v = chunk['metric_value'].to_numpy()
+        val = v if linear else np.log10(np.clip(v, 1e-20, None))
+        df = pd.DataFrame({'channel': chunk['channel'].to_numpy(), 'val': val})
+        g = df.groupby('channel')['val'].agg(n='size', s='sum', ss=lambda x: float((x**2).sum()))
         for ch, row in g.iterrows():
             a = acc.setdefault(ch, [0, 0.0, 0.0])
             a[0] += int(row['n']); a[1] += row['s']; a[2] += row['ss']
@@ -158,14 +200,15 @@ def compute_excluded(artifact_type, chunk, p):
         excl_floor = chunk['metric_value'] < p['var_thresh']
         if p.get('std_thresh') is None:
             return excl_floor
-        stats = p['_channel_log_stats']
-        mean_log = chunk['channel'].map(lambda c: stats.get(c, (np.nan, np.nan))[0]).to_numpy()
-        std_log = chunk['channel'].map(lambda c: stats.get(c, (np.nan, np.nan))[1]).to_numpy()
-        logv = np.log10(np.clip(chunk['metric_value'].to_numpy(), 1e-20, None))
+        stats = p['_channel_stats']
+        mean_v = chunk['channel'].map(lambda c: stats.get(c, (np.nan, np.nan))[0]).to_numpy()
+        std_v = chunk['channel'].map(lambda c: stats.get(c, (np.nan, np.nan))[1]).to_numpy()
+        raw = chunk['metric_value'].to_numpy()
+        val = raw if p.get('linear') else np.log10(np.clip(raw, 1e-20, None))
         with np.errstate(divide='ignore', invalid='ignore'):
-            z = (logv - mean_log) / std_log
+            z = (val - mean_v) / std_v
         excl_relative = pd.Series(z < -p['std_thresh']).fillna(False).to_numpy()
-        degenerate = ~np.isfinite(std_log) | (std_log <= 0)  # no usable per-channel baseline
+        degenerate = ~np.isfinite(std_v) | (std_v <= 0)  # no usable per-channel baseline
         return excl_floor.to_numpy() | excl_relative | degenerate
     if artifact_type == 'square_wave':
         return (chunk['metric_value'] > p['frac_thresh']) & (chunk['range'] > p['min_range'])
@@ -223,13 +266,20 @@ def run_type(level_root, artifact_type, label, params, subjects=None):
         return
 
     zmode = artifact_type == 'flatline' and params.get('std_thresh') is not None
+    mask_label = params.get('mask_label') if artifact_type == 'flatline' else None
     for metric_csv in metric_csvs:
         subject_id, session_id = _parse_subject_session(metric_csv, artifact_type)
         file_params = params
         if zmode:
+            mask_lookup = None
+            if mask_label:
+                mask_lookup = load_mask_lookup(level_root, mask_label, f'{subject_id}_{session_id}')
             # first pass: this subject/session's own per-channel baseline (pooled
-            # across all its runs), before the second (thresholding) pass below.
-            file_params = dict(params, _channel_log_stats=flatline_channel_log_stats(metric_csv))
+            # across all its runs, minus any masked-out bins), before the second
+            # (thresholding) pass below.
+            stats = flatline_channel_stats(metric_csv, linear=params.get('linear', False),
+                                            mask_lookup=mask_lookup)
+            file_params = dict(params, _channel_stats=stats)
         df = build_one_subject_session(metric_csv, artifact_type, file_params)
         tag = f'{subject_id}_{session_id}'
         if df is None:
@@ -251,6 +301,11 @@ def run_type(level_root, artifact_type, label, params, subjects=None):
         'metrics_run_info': str(config.metrics_run_info_dir(level_root)),
         'run_timestamp': config.run_timestamp(),
         'git': prov,
+        # explicit top-level flag (in addition to thresholds.mask_label) so it's
+        # obvious at a glance whether this label's baseline pass was masked, and
+        # by what, without having to know to look inside `thresholds`.
+        'masked_by': ({'mask_label': mask_label, 'mask_dir': str(config.mask_dir(level_root, mask_label))}
+                       if mask_label else None),
     }
     # atomic write: concurrent array tasks (one subject each) all write this same
     # per-(type,label) file — tmp+replace prevents an interleaved/corrupted JSON.
@@ -281,6 +336,16 @@ def main():
                           'of the rail even without a sample actually crossing it (e.g. 0.10 '
                           'catches peaks at >=90%% of the rail). Default: off (exact-rail-only).')
     ap.add_argument('--std-thresh', type=float, default=None)
+    ap.add_argument('--linear', action='store_true',
+                     help='Flatline relative mode only: compute the per-channel baseline z-score '
+                          'on raw metric_value instead of log10(metric_value) -- label linz<N> '
+                          'instead of logz<N>. See build_exclusions.flatline_channel_stats docstring.')
+    ap.add_argument('--mask-from-label', default=None,
+                     help='Flatline relative mode only: masks/<label>/ (from build_mask.py) whose '
+                          '`excluded` bins are dropped from the per-channel baseline pass before '
+                          "thresholding -- e.g. a mask combining gross_artifact+saturation+square_wave "
+                          "so those types' known-bad windows don't skew a channel's own flatline "
+                          'baseline. Does not affect the final flatline excluded verdict itself.')
     ap.add_argument('--subjects', default=None,
                      help='Comma-separated subject IDs to restrict to (default: all present). '
                           'Use to skip subjects whose metrics are still being written.')
@@ -288,7 +353,8 @@ def main():
 
     overrides = {'var_thresh': args.var_thresh, 'frac_thresh': args.frac_thresh,
                  'min_range': args.min_range, 'sat_frac_thresh': args.sat_frac_thresh,
-                 'rail_margin_frac': args.rail_margin_frac, 'std_thresh': args.std_thresh}
+                 'rail_margin_frac': args.rail_margin_frac, 'std_thresh': args.std_thresh,
+                 'linear': args.linear or None, 'mask_label': args.mask_from_label}
     subjects = [s.strip() for s in args.subjects.split(',')] if args.subjects else None
 
     types = config.ARTIFACT_TYPES if args.artifact_type == 'all' else [args.artifact_type]
