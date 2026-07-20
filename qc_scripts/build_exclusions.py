@@ -144,10 +144,20 @@ def load_mask_lookup(level_root, mask_label, tag):
     flatline's own per-channel baseline-stats pass (they'd otherwise inflate/
     skew mean and std of a channel that's mostly fine but has a few
     saturation/square-wave/gross-artifact bursts). Does not affect flatline's
-    final excluded verdict -- only which windows feed the baseline."""
+    final excluded verdict -- only which windows feed the baseline.
+
+    Returns None (not an error) if this subject/session has no file in the
+    mask dir -- build_mask.py already drops subject/sessions not shared by
+    every type it combined (e.g. missing square_wave, see CONTEXT.md's
+    sub-236 gap) and prints its own warning when it does; the caller here
+    falls back to an unmasked baseline for that one subject/session rather
+    than aborting the whole run over a single missing file."""
     mask_csv = config.mask_dir(level_root, mask_label) / f'{tag}.csv'
     if not mask_csv.exists():
-        raise FileNotFoundError(f"--mask-from-label {mask_label}: missing {mask_csv}")
+        print(f"  [flatline] WARNING: --mask-from-label {mask_label} has no {tag}.csv "
+              f"(likely dropped by build_mask for missing a type) -- baseline for {tag} "
+              f"will be UNMASKED.", flush=True)
+        return None
     df = pd.read_csv(mask_csv, usecols=['run_id', 'channel', 'bin_start', 'excluded'])
     return {(r, c, b): bool(e) for r, c, b, e in
             zip(df['run_id'], df['channel'], df['bin_start'], df['excluded'])}

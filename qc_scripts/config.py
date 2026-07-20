@@ -6,6 +6,7 @@ in the detection/analysis modules.
 
 import datetime
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -298,6 +299,18 @@ CANONICAL_BANDS_HZ = {
 # WHY: same one-sided high-variance convention as GROSS_STD_THRESH, applied
 # post-bipolar-derivation instead of on raw monopolar channels.
 BIPOLAR_VARIANCE_STD_THRESH = 5.0
+
+
+def bipolar_trace_cache_dir():
+    """Scratch cache of full bipolar-referenced traces for a sample of runs
+    (preprocessing/save_bipolar_sample_traces.py), so QC threshold/mask
+    experiments (qc_scripts/plot_bipolar_flagged_runs.py) don't need to
+    re-read raw NWB + re-reference every time. Deliberately on $SCRATCH, not
+    $OAK -- this is throwaway/reproducible-on-demand data, not a derivative
+    worth keeping long-term (see org policy: scratch/job I/O belongs on
+    $SCRATCH, 90-day inactivity purge). Raises if $SCRATCH isn't set rather
+    than silently falling back to something durable."""
+    return Path(os.environ['SCRATCH']) / 'bipolar_trace_cache'
 
 # Derivatives root for PSD NWB outputs -- deliberately separate from
 # analysis/qc/ (BIDS-like derivatives/ convention, keeps large NWB outputs out

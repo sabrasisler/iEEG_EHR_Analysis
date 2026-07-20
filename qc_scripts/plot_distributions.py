@@ -27,16 +27,23 @@ import matplotlib.pyplot as plt
 
 from qc_scripts import config
 
-LOG_X = {'saturation': False, 'flatline': True, 'square_wave': False, 'gross_artifact': True}
+LOG_X = {'saturation': False, 'flatline': True, 'square_wave': False, 'gross_artifact': True,
+         'bipolar_variance': True}   # variance spans many orders of magnitude, same as gross_artifact
 THRESHOLD_LINE = {   # only where the threshold acts directly on the plotted metric
     'flatline': config.FLATLINE_VAR_THRESH,
     'square_wave': config.SQUARE_FRAC_THRESH,
+    # bipolar_variance's threshold is a z-score on this metric, not a direct cutoff -- no line,
+    # same reasoning as gross_artifact below.
 }
 CHUNK = 500_000
 NBINS = 100
 
 
 def _metric_csvs(level_root, artifact_type):
+    # bipolar_variance CSVs are one-per-subject (sub-XXX_bipolar_variance.csv), not
+    # one-per-subject-per-session like raw_voltage's -- see qc_scripts/CONTEXT.md.
+    if artifact_type == 'bipolar_variance':
+        return sorted(config.metrics_per_window_dir(level_root).glob(f'sub-*_{artifact_type}.csv'))
     return sorted(config.metrics_per_window_dir(level_root).glob(f'sub-*_ses-*_{artifact_type}.csv'))
 
 
@@ -99,9 +106,15 @@ def main():
     ap.add_argument('--level-root', default=str(config.DEFAULT_LEVEL_ROOT))
     ap.add_argument('--output-dir', default=None,
                      help='Where to write plots (default: <level-root>/metrics/plots)')
+    ap.add_argument('--artifact-types', default=None,
+                     help='Comma-separated override (default: config.ARTIFACT_TYPES, the '
+                          'raw_voltage set) -- e.g. --artifact-types bipolar_variance when '
+                          '--level-root points at qc/bipolar')
     args = ap.parse_args()
     out_dir = args.output_dir or (config.metrics_root(args.level_root) / 'plots')
-    for artifact_type in config.ARTIFACT_TYPES:
+    artifact_types = (args.artifact_types.split(',') if args.artifact_types
+                      else config.ARTIFACT_TYPES)
+    for artifact_type in artifact_types:
         plot_type(args.level_root, artifact_type, out_dir)
 
 
