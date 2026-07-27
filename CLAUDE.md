@@ -45,9 +45,9 @@ logs, and results live on Oak, NOT in the repo.**
   to a repo-relative path. If a script has no explicit output base, use the
   config module's derivatives base — do not default to `./`.
 - The ONLY things in the repo: source code, sbatch templates, config, docs,
-  tests, `CLAUDE.md`, and gitignored scratch (`logs/`, `notebooks/` scratch).
+  tests, `CLAUDE.md`, and gitignored `logs/`.
   Even scratch DATA does not belong in the repo — throwaway plots go to a
-  scratch location on Oak, not into the repo tree.
+  scratch location on Oak (`analysis/scratch/`), not into the repo tree.
 - `.gitignore` is a backstop, not the mechanism: the correct behavior is that
   nothing writes data into the repo in the first place.
 
@@ -158,5 +158,8 @@ eye or a model. A view is a step; an analysis is a stop.
 - Parallelize per-subject work as Slurm ARRAY jobs (one task per subject), not via
   multiple agents. Long arrays on `normal`; keep `ckeller1 --qos=high_p` (4-job cap)
   free for interactive work.
-- All `.sbatch` files live in `sbatch/`. Scratch notebooks in `notebooks/` (never
-  imported by pipeline code). Superseded code in `outdated/`.
+- All `.sbatch` files live in `sbatch/`. All code lives in the `src/ieeg_ehr/`
+  package and is invoked as `python -m ieeg_ehr.<subpackage>.<module>` — never
+  `cd` into the repo first. Superseded code, one-off sbatch, and the retired
+  notebooks live in `outdated/` and are never imported. Notebooks are NOT part
+  of the workflow; do not add new ones.

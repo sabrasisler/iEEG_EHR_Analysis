@@ -145,33 +145,46 @@ array workflow is smooth.
 
 ## REPO ORGANIZATION (one dedicated cleanup commit)
 
-Target:
+> **DONE 2026-07-27.** The tree below is the as-built state, which differs from
+> the original target in two ways, both noted inline: `config/` is inside the
+> package rather than at the repo root, and `notebooks/` was retired rather than
+> kept as live scratch.
+
 ```
 iEEG_EHR_Analysis/
   CLAUDE.md
   README.md
-  config/                        # pipeline_config.py, canonical mask constant, band defs, cohort paths
-  src/ (package)/
+  pyproject.toml                 # makes src/ieeg_ehr an installable package
+  docs/
+  src/ieeg_ehr/                  # ONE package; `python -m ieeg_ehr.<pkg>.<mod>`
+    config/                      # DEVIATION: inside the package, not repo-root config/ —
+                                 #   a root-level config/ is not importable from an
+                                 #   installed package. Same job: single source of
+                                 #   paths, pinned mask, band defs, cohort paths.
+    io/                          # provenance/sidecar writer, table + NWB helpers
     preprocessing/               # bipolar_reref, run_pipeline_bipolar, bipolar_bands
-    qc/                          # detectors, build_exclusions, build_mask, diagnostics, feature_level
-    features/                    # build_pain_epoch_power (cache builder), pac, connectivity, fooof, slope1f
-    views/                       # the seven view-axis functions + save_path/sidecar
-    analysis/                    # sweep runner, plotting, glmm, clustering
-    io/                          # parquet/joblib helpers, provenance/staleness sidecar writer
-  sbatch/                        # ALL .sbatch here; array_templates/ for parameterized arrays
-  notebooks/                     # scratch only; not canonical, not imported
+    qc/                          # detectors, build_exclusions, build_mask, diagnostics
+    features/                    # build_pain_epoch_power (cache builder); pac/fooof/slope1f later
+    views/                       # EMPTY — the seven view-axis functions land here (P1.3)
+    analysis/                    # plotting now; sweep runner, glmm, clustering later
+  sbatch/                        # ALL .sbatch here
   tests/
-  outdated/                      # superseded code kept for reference (old preprocessing, misplaced files)
+  outdated/                      # superseded, never imported
+    notebooks/                   #   DEVIATION: notebooks retired 2026-07-27, not live scratch
+    scripts/  sbatch/  preprocessing/
   logs/                          # gitignored
 ```
+
 Rules:
-- All `.sbatch` in `sbatch/`. Scratch notebooks in `notebooks/`, never imported.
-- `outdated/` for dead-but-kept code (distinct from `notebooks/` = active scratch).
+- All `.sbatch` in `sbatch/`. Submit from the repo root — Slurm `-o` paths are
+  relative. Jobs never `cd`; the package is installed editable.
+- `outdated/` for dead-but-kept code. **Notebooks are retired** — they live in
+  `outdated/notebooks/`, are never imported, and no new ones should be added.
 - Move `qc/` OUT of `analysis/` to the top-level derivatives `qc/` (data property,
   not analysis); code uses the existing `--level-root` param so it's mostly config.
 - One config module = single source of paths, pinned mask, band defs, cohort paths.
 - Commit + push before any definitive run (hash → provenance).
-- `.gitignore`: logs, `__pycache__`, `*.out/*.err`, scratch CSVs, tmp_*.
+- `.gitignore`: logs, `__pycache__`, `*.out/*.err`, and all data extensions.
 - Do the move as its OWN commit BEFORE the Phase 1 refactor.
 
 ---
