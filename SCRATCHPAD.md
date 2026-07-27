@@ -25,6 +25,14 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
 
 ## Open
 
+- [ ] **Why does sub-085 look off — and would feature-level artifact detection
+      just make it go away?** Hunch is that whatever is wrong is an artifact the
+      raw-voltage mask doesn't catch, in which case P2.1 (feature-level QC on
+      pre-normalization cached power) resolves it for free and no sub-085-specific
+      work is needed. Worth checking that hunch BEFORE spending time on a targeted
+      investigation — if it's right, this dissolves; if sub-085 still looks off
+      after feature-level QC, that's a much more interesting problem and says the
+      cascade is missing a detector. (→ PLANNING P2.1)
 - [ ] **Mask choice (P0.1): is `_logz4` actually the right default, or just the
       one with plots?** `_sw_logz4` is the stricter of the two full-cohort
       candidates and the only one with `summary/` and
@@ -51,6 +59,17 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       to Sherlock, so the matching code has to live somewhere the PHI master is.
       Splitting repos is cleaner for the boundary but duplicates the cohort
       schema. Not urgent until the ~150 land. (→ PLANNING P4)
+
+- [ ] **`build_bipolar_exclusions.py` output path doesn't encode which raw-voltage mask
+      produced it — re-running the same `--label` (e.g. `std10`) against a different
+      `--raw-voltage-mask` silently overwrites prior output (and the shared `params.json`)
+      for any overlapping subject.** Just happened for real (2026-07-27): an 82-subject
+      `std10` run against `gross-std3_satmargin15_sw_logz4` clobbered the earlier 17-subject
+      `std10` run's output against `gross-std3_satmargin10_logz3` for all 17 overlapping
+      subjects. Open question is the right fix — namespace the output path by mask label
+      too, or make `params.json` per-subject instead of shared — vs. just a documented
+      convention (always pick a `--label` that encodes the mask, e.g. `std10_satmargin15sw`).
+      (→ qc_scripts/build_bipolar_exclusions.py, qc_scripts/CONTEXT.md "GOTCHA" 2026-07-27)
 
 - [ ] **Should `warn_if_dirty()` also refuse when provenance is unavailable?**
       Inside a worktree on a compute node, `git_provenance()` returns

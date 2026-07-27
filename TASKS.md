@@ -45,6 +45,21 @@ date, or figure that prompted it.
 - [ ] **P0.6 dtype audit** — check the current NWB dtype, validate the float32
       round-trip (epoch averages agree to ~6+ sig figs), standardize the cache on
       float32.
+- [ ] **Roll the 5 OOM-retry subjects into the pinned mask** — `250, 251, 255,
+      256, 257` have raw_voltage metrics on disk but no mask. They are exactly
+      `remaining86` minus `new81`: they were in the metrics cohort but dropped
+      from the rollup cohort because their metrics were still OOM-retrying when
+      it launched, and the rollup was never re-run once those finished. Only the
+      cheap CSV-only steps are missing. NOT `--artifact-type all` — that uses
+      config defaults (gross std5, saturation default, flatline var5e-13), which
+      are not this mask's thresholds. The real recipe is a 4-stage chain
+      (see `sbatch/`): gross std3 + saturation marginfrac0.15 + square_wave
+      frac0.9 → intermediate mask `gross-std3_satmargin15_sw` → flatline
+      `--std-thresh 4 --mask-from-label` that intermediate → final mask +
+      summarize. sub-255 has 2 sessions, so this is 6 subject-sessions: coverage
+      goes 83 → 89 sessions, 82 → 87 subjects. Do it before P0.1 so the pinning
+      decision is made on the fuller cohort. (NOT sub-236 — different, non-OOM
+      gap; see SCRATCHPAD.)
 
 ## Next
 
