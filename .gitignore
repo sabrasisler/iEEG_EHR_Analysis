@@ -8,3 +8,5 @@ logs/
 # ad hoc scratch + generated data (not source)
 qc_scripts/tmp_*
 qc_scripts/*.csv
+pain_analysis/cache/
+pain_analysis/plots/

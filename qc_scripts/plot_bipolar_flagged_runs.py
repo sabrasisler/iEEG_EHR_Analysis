@@ -119,7 +119,7 @@ def pick_run(subject, channel, labels):
     return best
 
 
-def plot_channel(subject, channel, labels, run=None, output_dir=None):
+def plot_channel(subject, channel, labels, run=None, output_dir=None, ylim=2500.0):
     if run is not None:
         match = next((r for r in cached_runs(subject) if r[1] == run), None)
         if match is None:
@@ -159,6 +159,8 @@ def plot_channel(subject, channel, labels, run=None, output_dir=None):
     ax.plot(t, trace_uv, linewidth=0.5, color='black', zorder=10)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('µV (bipolar)')
+    if ylim is not None:
+        ax.set_ylim(-ylim, ylim)
     legend_elements = [Patch(facecolor=LABEL_COLORS[i % len(LABEL_COLORS)], alpha=0.25,
                               label=f'{label} ({counts[label]} bins)')
                        for i, label in enumerate(labels)]
@@ -193,21 +195,25 @@ def main():
                           'cached run for --targets')
     ap.add_argument('--output-dir', default=None,
                      help='Where to write PNGs (default: qc/bipolar/plots/bipolar_flagged_runs)')
+    ap.add_argument('--ylim', default='2500',
+                     help='Symmetric y-axis limit in µV, e.g. --ylim 2500 sets ylim(-2500, 2500) '
+                          '(default: 2500). Pass --ylim none to auto-scale instead.')
     args = ap.parse_args()
 
     labels = [l.strip() for l in args.labels.split(',')]
+    ylim = None if args.ylim.strip().lower() == 'none' else float(args.ylim)
 
     if args.targets:
         for pair in args.targets.split(','):
             subject, channel = pair.split(':')
             print(f"sub-{subject} / {channel}  (labels={labels}):")
-            plot_channel(subject, channel, labels, run=args.run, output_dir=args.output_dir)
+            plot_channel(subject, channel, labels, run=args.run, output_dir=args.output_dir, ylim=ylim)
 
     if args.random:
         print(f"\nSampling {args.random} random cached example(s) (seed={args.seed})...")
         for subject, channel, run in random_examples(args.random, seed=args.seed):
             print(f"sub-{subject} / {channel} / {run}  (labels={labels}):")
-            plot_channel(subject, channel, labels, run=run, output_dir=args.output_dir)
+            plot_channel(subject, channel, labels, run=run, output_dir=args.output_dir, ylim=ylim)
 
 
 if __name__ == '__main__':

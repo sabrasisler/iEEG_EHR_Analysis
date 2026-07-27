@@ -140,3 +140,16 @@ Several options on the table, not yet decided:
   are characterized, follow up on *why*/*how* individual subjects deviate from
   the group average — likely a second-stage analysis, not part of the initial
   model.
+
+### Follow-ups from the pain_analysis/ bipolar PSD heatmap first pass
+- Direct log-averaging (channel-to-region, epoch time-average, and
+  pain-bin/subject averaging all average `log10(V^2/Hz)` directly) vs.
+  linear-then-log (rest of the pipeline's convention, e.g.
+  `preprocessing/bipolar_bands.py`'s `aggregate_to_bands`, chosen there to
+  avoid Jensen's-inequality bias) — flagged to revisit/compare, not an
+  oversight.
+- Anode-only region assignment (`Desikan_Killiany_anode`) as a temporary
+  stand-in for a future virtual-electrode-coordinate-based region lookup.
+- `EPOCH_MAX_EXCLUDED_FRAC` (`pain_analysis/config.py`) as a real, tunable
+  config knob now, not just a docs mention — default `0.5`, not yet validated
+  against real exclusion rates for this cohort.
