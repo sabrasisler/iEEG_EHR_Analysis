@@ -489,8 +489,12 @@ Design, mirroring the raw_voltage split:
   The one deliberate difference from `gross_artifact`: its session baseline is **mask-aware** —
   it takes an existing `qc/raw_voltage/masks/<label>/` and excludes any bipolar window whose
   monopolar anode OR cathode is already flagged in that mask from the baseline computation, so a
-  known raw-voltage artifact doesn't inflate this detector's idea of "normal" variance. No
-  combined bipolar mask yet (standalone detector for now).
+  known raw-voltage artifact doesn't inflate this detector's idea of "normal" variance.
+  **No separate combined "bipolar mask" step, by design (confirmed 2026-07-27)**: raw_voltage
+  needs `build_mask.py` because it has 4 artifact types to OR together; bipolar has exactly ONE
+  artifact type (`bipolar_variance`), so `exclusions/bipolar_variance/<label>/sub-XXX.csv` (with
+  its per-60s-bin `excluded` column) already IS the mask — a passthrough "mask" step would add a
+  redundant identical file, not new information.
 
 **Validated on real Sherlock data (2026-07-10)** — smoke test + 3 real subjects
 (sub-039, sub-071, sub-085/85 runs):
@@ -545,3 +549,83 @@ Design, mirroring the raw_voltage split:
   under the new 2s/50%-overlap scheme on the `normal` partition (`--array=0-25%6`,
   `BATCH_SIZE=4`, `--cpus-per-task=8`/`--n-workers=8`). Check `qc_scripts.processing_status` or
   `sacct`/`squeue` for current progress when picking this up.
+
+## Bipolar exclusion: vectorization + visualization tooling (done, 2026-07-27)
+
+**`qc_scripts/build_bipolar_exclusions.py` rewritten to be fully vectorized** — the original
+version used a `zip()` list comprehension for mask-flagging, a Python `for` loop over
+`.groupby()` for the per-(session,channel) baseline, and `df.apply(_classify, axis=1)` for
+z-score classification, all of which are O(rows) Python-level calls over metric CSVs that run up
+to 7-8GB / millions of rows. Rewrote to mirror `build_exclusions.py`'s already-vectorized pattern
+(`.groupby().agg()` for baselines, `.merge()`/`MultiIndex.reindex()` for lookups, single
+array-wide z-score comparison) — verified **byte-identical output** against the old code on
+real data (`sub-085`) before trusting it for production reruns. Real-world effect: the 17-subject
+`std4` rollup against `gross-std3_satmargin10_logz3` took ~2 hours with the old code (had to be
+resubmitted after a time-limit kill); the same 17 subjects at `std6`/`std10` took under 20 minutes
+with the vectorized version.
+
+**Bug fixed in the same rewrite**: `_load_mask_lookup` was still looking for `masks/<label>/sub-XXX.csv`
+(one file per subject), but raw_voltage mask files were migrated to `sub-XXX_ses-YY.csv` (one per
+subject **per session**, see "Filenames now carry session" above) — meaning every prior
+mask-aware bipolar exclusion run had silently found ZERO mask rows and computed an **unmasked**
+baseline (confirmed via the "no raw_voltage mask rows found" log line appearing for every
+subject in an early rerun). Fixed to glob `sub-XXX_ses-*.csv` and recover `session_id` from each
+filename. **Any bipolar exclusion output produced before this fix should be considered
+not-actually-mask-aware and worth regenerating** if it's going to be used for anything real.
+
+**New scratch trace cache** (`preprocessing/save_bipolar_sample_traces.py` +
+`.sbatch`, `config.bipolar_trace_cache_dir()` → `$SCRATCH/bipolar_trace_cache/sub-XXX/ses-YY/`):
+the bipolar-referenced signal is normally transient/never persisted (see above), which made it
+impossible to visualize or experiment with thresholds without re-reading raw NWB every time. This
+script saves the **full-length**, un-truncated `bipolar_v` array (`.npz`) + a JSON sidecar
+(sfreq, `channel`/`anode_channel`/`cathode_channel` lists matching the exclusion CSVs' naming so
+they join directly, git provenance) for a deliberately small, throwaway sample of runs — reuses
+`io_utils.load_all_channels_with_electrodes` + `bipolar_reref.derive_pairs`/`rereference`, no
+re-referencing logic duplicated. Lives on `$SCRATCH` (not `$OAK`) since it's reproducible on
+demand and meant to be deleted eventually. As of 2026-07-27: 14 runs cached across 7 subjects
+(039, 071, 085, 088, 099, 150, 176).
+
+**New `qc_scripts/plot_bipolar_flagged_runs.py`** — trace + shaded-exclusion plot reading the
+scratch cache (no NWB read) and `qc/bipolar/exclusions/bipolar_variance/<label>/sub-XXX.csv`
+directly (no separate mask-rollup step needed, per the "no combined bipolar mask" note above).
+Supports `--labels std6,std10,...` to overlay multiple thresholds on the same trace panel for
+visual comparison, `--random N` to sample typical/clean (not just artifact-heavy) examples from
+the cache, and `--ylim` (default `2500`, symmetric µV y-axis limit; `--ylim none` to auto-scale).
+
+**`qc_scripts/plot_distributions.py` generalized** to also handle `bipolar_variance` (added to
+`LOG_X`, and `_metric_csvs` now branches on the different bipolar filename convention — one file
+per subject, no `_ses-` — vs. raw_voltage's per-subject-per-session files) via a new
+`--artifact-types` override flag (default still `config.ARTIFACT_TYPES`, the raw_voltage set).
+**Known limitation, not yet resolved**: its two-pass streaming (one pass to find the value range
+for log-scale bins, one to histogram) over the full 17+-subject bipolar metric CSV set is slow
+enough that a 15-minute test job was killed before finishing — fine for raw_voltage's smaller
+per-session files, not yet proven out at bipolar's per-subject multi-GB scale. Left as-is; would
+need either a longer time budget or a redesigned single-pass/precomputed-range approach if this
+becomes a regular workflow.
+
+**Exclusion labels currently on disk** (`qc/bipolar/exclusions/bipolar_variance/`):
+- Against `qc/raw_voltage/masks/gross-std3_satmargin10_logz3/` (the original 17-subject masked
+  cohort: 039, 071, 085, 088, 099, 150, 176, 191, 193, 198, 205, 207, 211, 217, 227, 244, 248):
+  `std3`, `std4`, `std5`, `std6`, `std8`, `std10`, `std12` — built while visually calibrating a
+  threshold (initial `std4`/`std5` flagged what looked like normal activity on real traces; still
+  no final threshold decision made as of 2026-07-27, `std6`-`std10` was the most recent comparison
+  point).
+- Against `qc/raw_voltage/masks/gross-std3_satmargin15_sw_logz4/` (a wider, ~82-subject cohort —
+  every subject with both a `bipolar_variance` metric CSV and a mask file under this label):
+  `std10`, built via a new per-subject-batched Slurm array
+  (`qc_scripts/build_bipolar_exclusions_array.sbatch`, `qc_scripts/subjects_bipolar_satmargin15_sw_logz4.txt`,
+  `BATCH_SIZE=5`, `--array=0-16%8`) rather than one long serial job, since some subjects' metric
+  CSVs are 7+GB — mirrors `build_exclusions_array.sbatch`'s existing per-subject-array pattern for
+  raw_voltage. All 82 subjects completed successfully.
+
+**GOTCHA (discovered 2026-07-27, not yet fixed)**: `build_bipolar_exclusions.py`'s output path is
+`exclusions/bipolar_variance/<label>/sub-XXX.csv` — the label (e.g. `std10`) encodes ONLY the
+`std_thresh`, not which raw-voltage mask produced it. Running the same label against a different
+`--raw-voltage-mask` for an overlapping subject **silently overwrites** that subject's prior
+output (and the shared `params.json`, which reflects only the most recent call). This just
+happened for real: the 82-subject `std10` run above (against `gross-std3_satmargin15_sw_logz4`)
+overwrote the earlier 17-subject `std10` run's output (against `gross-std3_satmargin10_logz3`)
+for all 17 overlapping subjects — that combination would need to be regenerated if still needed.
+**Not yet fixed** — a real gap: either the output path should incorporate the mask label, or
+`params.json` should be per-subject instead of shared, so re-running one mask/label combo can't
+clobber another's results for shared subjects.
