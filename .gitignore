@@ -46,6 +46,14 @@ logs/
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
+# git worktrees live here; the commands/ dir beside them IS tracked.
+# NOTE: `git worktree` needs git >= 2.5 -- the Sherlock login node's system git
+# is 1.8.3.1, so run `ml system git` (2.45.1) first.
+.claude/worktrees/
+
+# analyses_run.md's flock file (see io/analysis_log.py)
+docs/analyses_run.md.lock
+
 # ad hoc scratch
 tmp_*
 **/tmp_*

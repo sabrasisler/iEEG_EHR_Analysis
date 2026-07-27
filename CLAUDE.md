@@ -8,8 +8,13 @@ area:
 - `docs/architecture.md` — data/layer model, directory layout,
   cache format, feature-level QC, cohorts. Read before touching caching, QC,
   features, or directory structure.
-- `docs/kickoff_plan.md` — ordered task plan, repo org, IO, background
-  jobs, git workflow. Read before starting a new phase/task or writing sbatch.
+- `PLANNING.md` — the phases, milestones, and sequencing rationale. Read before
+  starting a new phase or task.
+- `docs/kickoff_plan.md` — repo org, IO conventions, background jobs, git
+  workflow. Read before writing sbatch. (The forward-looking half of this doc
+  now lives in `PLANNING.md` / `TASKS.md`; what remains is reference material.)
+- `docs/WORKFLOW.md` — where every kind of record goes, and the commands that
+  write them. Read before logging anything.
 - `docs/view_registry.md` — the seven view axes and their order. Read before
   writing or changing any view/normalization/averaging/binning code.
 
@@ -24,6 +29,53 @@ above win on any conflict):
 
 Do not re-derive these decisions from scratch; they are settled. If a task seems
 to require violating a rule below, stop and ask.
+
+---
+
+## TRACKING FILES — where records go
+
+Every record has exactly one home, determined by what the thing *is*, which is
+the same question as how long it lives. `docs/WORKFLOW.md` has the full routing
+table and a worked example; the short version:
+
+| The thing is… | Home |
+|---|---|
+| A standing rule (permanent) | this file |
+| A phase / milestone / the project's shape | `PLANNING.md` |
+| A thing to **DO** — checkable, has a done-state | `TASKS.md` |
+| A thing being **THOUGHT** — question/hunch, no done-state | `SCRATCHPAD.md` |
+| A settled call **and its reasons** | `DECISIONS.md` (append-only) |
+| A thing that **happened** — ran X, saw Y, Z broke | `docs/labnotebook/YYYY-MM-DD.md` (append-only) |
+| A note on one specific figure | `<figure>.png.notes.md` beside it on Oak |
+| "I ran this" — terse index line | `docs/analyses_run.md` (machine-appended) |
+
+Rules that apply whenever you touch these files:
+
+- **Tasks vs scratch: can you check it off?** Yes → task. No → scratch. One
+  realization often spawns both; split at the seam between the noticing and the
+  doing.
+- **Links, never copies.** Cross-reference by date, path, commit hash, and
+  task/phase ID. Never paste a decision into the notebook or restate a phase in
+  `TASKS.md`.
+- **Append-only means append-only.** `DECISIONS.md`, the notebook, and
+  `analyses_run.md` are never edited in place or reflowed. Corrections are
+  appended, so the record of what was believed at the time survives.
+- **A sweep result is a NOMINATION, not a finding.** Observations accumulate in
+  the notebook until they earn a `DECISIONS.md` entry at P2.6 FREEZE. Do not
+  promote one yourself.
+- **Deidentified prose only** — anonymized subject IDs, 2001-anchored timeline.
+  These files are committed to a GitHub remote.
+- **`TASKS.md` and `SCRATCHPAD.md` stay small.** If `TASKS.md` feels
+  overwhelming, far-future work has leaked in; push it down to a `PLANNING.md`
+  phase. Resolved scratch items are deleted once committed.
+- Commands: `/lognote` (write up what happened), `/annotate` (figure sidecar),
+  `/addtask`, `/addscratch`, `/standup` (read-only continuity briefing). Every
+  `/lognote` prompt is skippable — a bare entry is a success.
+
+Any script that produces analysis output calls `log_analysis()`
+(`src/ieeg_ehr/io/analysis_log.py`) beside its provenance sidecar write, passing
+the RUN directory. Add it as you next touch a script; no sweep-and-add pass.
+This is the ONE sanctioned write into the repo — a text index, never data.
 
 ---
 
