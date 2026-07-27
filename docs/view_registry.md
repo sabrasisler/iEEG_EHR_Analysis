@@ -1,7 +1,7 @@
 # Pain iEEG — View Registry
 
-> One of three companion docs: `pain_ieeg_analysis_architecture.md` (the model),
-> `analysis_kickoff_plan.md` (the task plan), and this registry (the view axes).
+> One of three companion docs: `architecture.md` (the model),
+> `kickoff_plan.md` (the task plan), and this registry (the view axes).
 > Cache format decision: **Parquet, one file per subject/session** (see architecture
 > PART 1). GLMM features expected in **log-power** (log is the default domain).
 

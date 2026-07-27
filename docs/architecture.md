@@ -3,7 +3,7 @@
 One of three companion docs handed to Claude Code in the Sherlock repo
 `/home/groups/ckeller1/sisler/iEEG_EHR_Analysis`:
 - **this** — the data/layer model + directory layout + rules
-- `analysis_kickoff_plan.md` — the ordered task plan, repo org, IO, background jobs
+- `kickoff_plan.md` — the ordered task plan, repo org, IO, background jobs
 - `view_registry.md` — the enumerated view axes
 
 Project: shared neural signatures, individual variability, and opioid modulation
@@ -28,6 +28,18 @@ Established upstream, do not redesign:
 - **Canonical bands NOT precomputed** — `bipolar_bands.py` aggregates the 50 log-bins
   into bands on demand (delta 1-4, theta 4-8, alpha 8-12, beta 15-25, gamma 25-70,
   high_gamma 70-170 Hz), linear-then-log to avoid Jensen bias.
+
+  > **DISCREPANCY — unresolved, flagged 2026-07-27 during the structural refactor.**
+  > The band edges above are NOT what the code uses. `CANONICAL_BANDS_HZ` (now
+  > `ieeg_ehr.config.psd_params`) is:
+  > `delta 1-4, theta 4-8, alpha 8-12, beta 13-30, low_gamma 30-58,
+  > high_gamma1 65-115, high_gamma2 125-175, high_gamma3 185-235`.
+  > The code splits gamma finely and specifically to fall between 60 Hz line-noise
+  > harmonics, which this doc's `gamma 25-70 / high_gamma 70-170` edges would
+  > straddle. Deliberately NOT reconciled in the refactor — which set is correct
+  > is a science decision. Resolve before the P2.2 sweep, since band choice is a
+  > sweep axis. See also `VIOLIN_BANDS_HZ`, a third, coarser grouping used only
+  > by the violin plots.
 - **QC (metric/threshold split)**: raw-voltage detectors (saturation, flatline,
   square-wave, gross-artifact) store continuous *metrics* once; cheap *exclusions*
   (per threshold) → *masks* (OR'd union). Mask candidates: `gross-std3_satmargin15_sw`

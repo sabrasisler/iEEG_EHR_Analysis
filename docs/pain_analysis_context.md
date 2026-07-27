@@ -93,7 +93,7 @@ snapshots. Only code going forward uses the convention above.
     `gross-std3_satmargin15_sw` set.
   - **Before treating either of these as "the" new cohort**, confirm with
     the user which mask label is actually the intended current-best QC
-    candidate (this may have changed since `qc_scripts/CONTEXT.md` was last
+    candidate (this may have changed since `docs/qc_context.md` was last
     updated — check there first) and whether `config.DEFAULT_MASK_LABEL` /
     `config.exploratory_subjects()` should be updated to match, or whether
     `--mask-label`/`--subjects` should just be passed explicitly per-run
@@ -101,7 +101,7 @@ snapshots. Only code going forward uses the convention above.
 
 ## Not yet done — pick up here
 
-1. **Train/test subject split.** Flagged early in `FEATURIZATION_PLAN.md`
+1. **Train/test subject split.** Flagged early in `docs/featurization_plan.md`
    ("Plan to reserve a subset of subjects purely for exploration... before
    touching the subjects that will go into any confirmatory model — to
    avoid p-hacking/confound risk") but never implemented. User wants this

@@ -1,7 +1,7 @@
 # Featurization planning — pain score analysis
 
 Starting point for thinking through how to go from the QC'd, bipolar-referenced,
-PSD-decomposed signal (see `qc_scripts/CONTEXT.md` for full pipeline detail) to
+PSD-decomposed signal (see `docs/qc_context.md` for full pipeline detail) to
 features + labels for a pain-score model. This doc summarizes where the pipeline
 currently stands, then lays out open decisions to work through.
 

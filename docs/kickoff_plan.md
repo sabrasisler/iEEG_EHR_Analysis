@@ -1,6 +1,6 @@
 # Pain iEEG — Analysis Kickoff Plan & Task Orchestration
 
-Companion to `pain_ieeg_analysis_architecture.md` and `view_registry.md`.
+Companion to `architecture.md` and `view_registry.md`.
 Ordered task plan from "preprocessed PSD exists" to "running exploratory
 analysis," plus repo org, IO conventions, and background jobs. Target repo:
 `/home/groups/ckeller1/sisler/iEEG_EHR_Analysis` (Sherlock).

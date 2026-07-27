@@ -5,13 +5,23 @@ pain encoding in ~250 EMU patients; Sisler / Keller Lab). These rules always
 apply. For full detail, READ the relevant reference doc BEFORE working on that
 area:
 
-- `docs/pain_ieeg_analysis_architecture.md` — data/layer model, directory layout,
+- `docs/architecture.md` — data/layer model, directory layout,
   cache format, feature-level QC, cohorts. Read before touching caching, QC,
   features, or directory structure.
-- `docs/analysis_kickoff_plan.md` — ordered task plan, repo org, IO, background
+- `docs/kickoff_plan.md` — ordered task plan, repo org, IO, background
   jobs, git workflow. Read before starting a new phase/task or writing sbatch.
 - `docs/view_registry.md` — the seven view axes and their order. Read before
   writing or changing any view/normalization/averaging/binning code.
+
+Background / historical detail (descriptive, not normative — the three docs
+above win on any conflict):
+
+- `docs/qc_context.md` — how the raw-voltage QC pipeline actually works:
+  the four detectors, the metric/threshold split, mask labels, and a running
+  log of threshold sweeps and case studies.
+- `docs/pain_analysis_context.md` — the pain epoch-power pipeline as it stood
+  before the Phase 1 refactor.
+- `docs/featurization_plan.md` — earlier featurization planning notes.
 
 Do not re-derive these decisions from scratch; they are settled. If a task seems
 to require violating a rule below, stop and ask.
