@@ -1,12 +1,52 @@
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
+venv/
+
 # logs anywhere (Slurm .out/.err + logs/ dirs) — never source, keep out of provenance
 logs/
 **/logs/
 *.out
 *.err
-# ad hoc scratch + generated data (not source)
-qc_scripts/tmp_*
-qc_scripts/*.csv
-pain_analysis/cache/
-pain_analysis/plots/
+
+# ---------------------------------------------------------------------------
+# CODE/DATA BOUNDARY (see CLAUDE.md). This repo holds CODE ONLY — all data,
+# derivatives, caches, features, QC outputs, cohort files, analysis outputs,
+# plots, models and results live on Oak under
+#   /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/
+# These patterns are a BACKSTOP, not the mechanism: the correct behaviour is
+# that nothing writes data into the repo in the first place.
+# ---------------------------------------------------------------------------
+
+# figures / plots
+*.png
+*.pdf
+*.svg
+*.jpg
+*.jpeg
+
+# tabular + array data
+*.csv
+*.tsv
+*.parquet
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.nwb
+*.mat
+
+# models / serialised objects
+*.joblib
+*.pkl
+*.pickle
+
+# notebook checkpoint noise
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# ad hoc scratch
+tmp_*
+**/tmp_*
+scratch/
