@@ -16,7 +16,7 @@ from ieeg_ehr.config.psd_params import CANONICAL_BANDS_HZ  # noqa: F401  re-expo
 EPOCH_MINUTES_BEFORE = 5.0
 
 # Fixed, absolute, everyone-shares-the-same-cutpoints pain bins (matches the
-# planned ordinal-model label scheme in docs/featurization_plan.md — NOT
+# planned ordinal-model label scheme (docs/architecture.md, Open decision 7) — NOT
 # subject-relative, so a region's fixed-effect relationship to pain level
 # stays interpretable independent of the subject random effect).
 PAIN_BIN_EDGES = {

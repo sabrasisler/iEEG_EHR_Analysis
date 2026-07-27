@@ -346,3 +346,21 @@ NAMING / IO
 6. GLMM feature domain: likely log-power (for normalization); per-window cache defers it.
 7. Huang-logic replication / GLMM design — its own future conversation, AFTER the
    exploratory sweep produces a frozen feature set. Not near-term.
+
+   Prior reasoning, carried over from the retired featurization plan so it isn't
+   lost before that conversation happens:
+   - **Original plan**: linear mixed-effects, band power (averaged within region,
+     within subject) as fixed effects, subject as random intercept, exploring
+     random slopes per subject. Goal is INFERENCE (group-level effects + how
+     individuals deviate), not prediction.
+   - **The tension**: pain is likely non-linear in the score (some literature
+     support), which argues for classification over continuous regression. But
+     moving to mixed-effects classification (multinomial/ordinal mixed models)
+     sits awkwardly with the "understand subject deviation from the group effect"
+     goal — random slopes are less standard and less well supported outside GLMMs.
+   - **Middle ground to consider**: ordinal regression. Pain scores are ordered
+     categories even if the response is non-linear, so an ordinal model keeps the
+     ordering that unordered classification throws away.
+   - **Sequencing**: do simple descriptive plotting before committing to a model
+     class. (This is now P2.2, and the binning options that were open then are
+     settled as view_registry AXIS 7.)

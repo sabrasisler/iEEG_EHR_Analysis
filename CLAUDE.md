@@ -21,7 +21,6 @@ above win on any conflict):
   log of threshold sweeps and case studies.
 - `docs/pain_analysis_context.md` — the pain epoch-power pipeline as it stood
   before the Phase 1 refactor.
-- `docs/featurization_plan.md` — earlier featurization planning notes.
 
 Do not re-derive these decisions from scratch; they are settled. If a task seems
 to require violating a rule below, stop and ask.

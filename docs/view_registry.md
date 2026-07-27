@@ -75,6 +75,13 @@ Notes: bands use linear-then-log aggregation (existing convention, avoids Jensen
 Notes: region-average uses linear-then-log if in log domain (Jensen again).
 Report contributing channel/subject n (coverage confound).
 
+"Anode-based for now" is a deliberate TEMPORARY stand-in: a bipolar pair is
+assigned the DK parcel of its anode (`Desikan_Killiany_anode`), which is wrong
+whenever the two contacts of a pair straddle a boundary. The intended
+replacement is a lookup on the pair's virtual electrode coordinate (the midpoint
+between contacts), not the anode. Until then, treat region assignment near
+parcel boundaries as approximate.
+
 ## AXIS 7 — Pain binarization (the outcome definition)
 - `absolute` (none=0, low=1-3, med=4-6, high=7-10; fixed across subjects)
 - `subject_relative` (DEFAULT for within-subject; none=0, low/high at subject's

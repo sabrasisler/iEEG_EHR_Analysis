@@ -169,7 +169,7 @@ def aggregate_epoch_table_to_bands(epoch_table, bin_labels, bands=None):
     (avoids Jensen's-inequality bias from averaging log values directly).
     This deliberately differs from the direct-log-averaging used for
     epoch time-averaging elsewhere in this pipeline -- see
-    FEATURIZATION_PLAN.md's "Follow-ups" section for that tradeoff.
+    docs/view_registry.md AXIS 4 for that tradeoff.
 
     Returns (subject, pain_event_id, pain_bin, region, band, band_log_power),
     epoch-level granularity preserved (same shape/use as

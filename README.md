@@ -48,7 +48,7 @@ metadata — not source, gitignored, ignore it.
 ```
 CLAUDE.md            operating rules — read first
 docs/                architecture, kickoff plan, view registry (normative)
-                     + qc_context, pain_analysis_context, featurization_plan (background)
+                     + qc_context, pain_analysis_context (background)
 src/ieeg_ehr/        THE CODE — one importable package
   config/            single source of paths, thresholds, band defs, pinned mask
   io/                provenance, table + NWB helpers, file registry builder

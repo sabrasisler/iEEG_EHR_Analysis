@@ -1,8 +1,30 @@
-# pain_analysis/ — context & handoff
+# Pain epoch pipeline — context & handoff (PRE-PHASE-1)
 
 Context for picking this work up in a fresh session. Covers the pain-score
-epoch featurization + plotting pipeline in `pain_analysis/`, its output
-naming convention, current cohort status, and what's next.
+epoch featurization + plotting pipeline, its output naming convention, cohort
+status, and what was next at the time of writing.
+
+> **SUPERSEDED-IN-PROGRESS — refreshed 2026-07-27.** This describes the pipeline
+> as it stood BEFORE the Phase 1 refactor. It is retained because it records the
+> reasoning behind the current cache's shape, but it is not a description of the
+> live system. Specifically:
+>
+> - The code moved: `pain_analysis/` → `src/ieeg_ehr/features/` (cache builder,
+>   `common.py`) and `src/ieeg_ehr/analysis/` (the five plot scripts).
+> - **The pipeline described here averages over the epoch and writes CSV.** P1.1
+>   replaces it: the cache becomes per-2s-window log-power in Parquet, with
+>   averaging and normalization moved out into the view layer
+>   (`docs/architecture.md` PART 1, `docs/view_registry.md`).
+> - **Both legacy CSV caches are archived** on Oak under
+>   `outdated/legacy_pain_epoch_psd/` and `outdated/legacy_65_subjects/`, so the
+>   plot scripts have no cache to read until P1.1 lands.
+> - **The default mask was wrong.** `gross-std3_satmargin5_logz4` (referenced
+>   below) is a 17-subject pilot that has since been deleted; every cache built
+>   with it inherits that. The pinned mask is now
+>   `ieeg_ehr.config.CANONICAL_MASK_LABEL` = `gross-std3_satmargin15_sw_logz4`.
+>
+> **Delete this file once P1.1 lands** and its reasoning has been folded into the
+> new cache builder's docstring.
 
 ## Pipeline shape (for orientation)
 
@@ -77,12 +99,12 @@ snapshots. Only code going forward uses the convention above.
 
 - **15 subjects currently in `cache/`**: 071, 085, 088, 099, 150, 176, 191,
   193, 198, 205, 207, 211, 227, 244, 248 (all under the original 19-subject
-  exploratory list in `qc_scripts/subjects_qc_raw_voltage_normal.txt` minus
+  exploratory list in `cohorts/subjects_qc_raw_voltage_normal.txt` (now on Oak) minus
   4 non-sEEG subjects that produce 0 rows: 116, 156, 162, 171).
 - **A much larger, separate mask sweep now exists**: the raw_voltage mask
   directory (`qc/raw_voltage/masks/`) currently has labels with far more
   subjects than the pipeline's current default mask
-  (`config.DEFAULT_MASK_LABEL = 'gross-std3_satmargin5_logz4'`, only 20
+  (then `config.DEFAULT_MASK_LABEL = 'gross-std3_satmargin5_logz4'`, only 20
   subjects):
   - `gross-std3_satmargin15_sw` — **82 subjects** (this is almost certainly
     what "83 subjects I currently have masked" referred to; the 83rd file
@@ -101,14 +123,14 @@ snapshots. Only code going forward uses the convention above.
 
 ## Not yet done — pick up here
 
-1. **Train/test subject split.** Flagged early in `docs/featurization_plan.md`
+1. **Train/test subject split.** Flagged early in planning (now docs/architecture.md PART 6)
    ("Plan to reserve a subset of subjects purely for exploration... before
    touching the subjects that will go into any confirmatory model — to
    avoid p-hacking/confound risk") but never implemented. User wants this
    done *before* any further tuning on the expanded cohort, specifically to
    avoid peeking at held-out data while iterating on region/band/scheme
    choices. No config constant or CLI convention for this exists yet in
-   `pain_analysis/` — needs designing (e.g. a fixed held-out subject list in
+   the pain pipeline — needs designing (e.g. a fixed held-out subject list in
    `config.py`, or a `--split {train,test,all}` flag threaded through
    `exploratory_subjects()`/`--subjects` resolution).
 2. **Re-run `build_pain_epoch_power.py`** for whichever subjects in the

@@ -1,8 +1,35 @@
 # iEEG QC pipeline — context & handoff
 
 Context for picking this work up in a fresh session. Covers the raw-voltage QC /
-artifact-rejection pipeline in `qc_scripts/`, its file organization, the design
+artifact-rejection pipeline in `ieeg_ehr/qc/`, its file organization, the design
 principles behind it, and how to run each step.
+
+> **READ THIS FIRST — refreshed 2026-07-27.** Paths in this doc were updated for
+> the structural refactor (`qc_scripts/` → `src/ieeg_ehr/qc/`, invoked as
+> `python -m ieeg_ehr.qc.<module>`; Oak `analysis/qc/` → top-level `qc/`).
+> The *narrative* below is otherwise unchanged and is a **dated running log**,
+> not a description of today's state. Three things it says are no longer true:
+>
+> 1. **Most mask and exclusion labels it discusses no longer exist.** The
+>    2026-07-27 cleanup deleted every 17-subject pilot label — including
+>    `baseline`, `gross-std3`, `gross-std4`, `gross-std3_satmargin5`,
+>    `gross-std3_satmargin5_logz4`, `gross-std3_satmargin10_logz3`,
+>    `gross-std3_satmargin15_sw_logz3` — plus the superseded `qc_variance*`
+>    output trees. Surviving labels are listed in the Oak `README.md`; the
+>    threshold-sweep *results* they were derived from are all still in
+>    `qc/raw_voltage/validation/threshold_sweeps/`.
+> 2. **The "current best candidate" mask is no longer
+>    `gross-std3_satmargin5_logz4`.** That was a 17-subject pilot and was being
+>    used as a code default in error. The pinned mask is now
+>    `ieeg_ehr.config.CANONICAL_MASK_LABEL` = `gross-std3_satmargin15_sw_logz4`
+>    (83 subject-sessions), pending formal pinning in P0.1.
+> 3. **The 17-subject pilot cohort** referenced throughout was recorded nowhere
+>    but those deleted directories. It was reconstructed from disk and saved to
+>    Oak `outdated/legacy_cohort_lists/subjects_qc_pilot_n17.txt`:
+>    `039 071 085 088 099 150 176 191 193 198 205 207 211 217 227 244 248`.
+>
+> Where this doc and `docs/architecture.md` / `docs/view_registry.md` disagree,
+> those two win — this is background.
 
 ## Filenames now carry session (done, 2026-07-14)
 
@@ -27,7 +54,7 @@ showed `ses-##`; plot **filenames** now do too
 (`sub-XXX_ses-YY_run-ZZZZ_channel.png`).
 
 The existing 18-subject cohort (all confirmed single-session, `ses-01` only)
-was migrated in place with `qc_scripts/migrate_add_session_to_filenames.py` —
+was migrated in place with `ieeg_ehr/qc/migrate_add_session_to_filenames.py` —
 a one-time, idempotent rename + column-drop (skips a file if its destination
 already exists). It supports `--stage {per_window,run_info,exclusions,masks}`
 and `--subjects` for sharding across parallel jobs, since each stage/subject
@@ -46,7 +73,7 @@ subjects beyond the current 18 (e.g. `sub-236`'s missing `flatline`/
 ## Current state (as of 2026-07-10)
 
 Pipeline code is complete, committed, and pushed (`master`). A first cohort has
-been processed into `analysis/qc/raw_voltage/`:
+been processed into `qc/raw_voltage/`:
 
 - **Metrics** exist for **17 subjects**: `039, 071, 085, 088, 099, 150, 176, 191,
   193, 198, 205, 207, 211, 217, 227, 244, 248`. `sub-236` was still running its
@@ -74,7 +101,7 @@ been processed into `analysis/qc/raw_voltage/`:
   std4-vs-5) — std3 is noticeably looser than std4, concentrated in a few noisy
   channels (e.g. sub-085 RMH1-8 pick up dozens of extra bins each).
 
-- **Reusable threshold-sweep tooling** (`qc_scripts/diagnostics/`, tracked —
+- **Reusable threshold-sweep tooling** (`ieeg_ehr/qc/diagnostics/`, tracked —
   NOT `tmp_*` scratch): `threshold_summary.py` (per-label exclusion-rate table,
   no `build_mask` needed — reads `exclusions/<type>/<label>/` directly) and
   `threshold_diff.py` (green/red trace diff plots between two labels of the
@@ -265,14 +292,14 @@ metrics ──(build_exclusions, cheap, per artifact type, sweepable)──▶ p
 per-type exclusions ──(build_mask, cheap)──▶ ONE combined 60s mask  ──▶ feeds bipolar re-referencing
 ```
 
-## Output layout: `analysis/qc/<level>/`
+## Output layout: `qc/<level>/`
 
-Root: `/oak/.../derivatives/sisler/analysis/qc/<level>/`. A *level* is a
+Root: `/oak/.../derivatives/sisler/qc/<level>/`. A *level* is a
 processing stage; current level = **`raw_voltage`** (future: `bipolar`,
 `features`). Code is level-agnostic (`--level-root`).
 
 ```
-analysis/qc/raw_voltage/
+qc/raw_voltage/
   metrics/                          # EXPENSIVE, produced once by run_pipeline
     per_window/ sub-XXX_ses-YY_{saturation,flatline,square_wave,gross_artifact}.csv
     run_info/   sub-XXX_ses-YY.json  # per-subject/session provenance: detection params + git + run_timestamp
@@ -293,15 +320,16 @@ analysis/qc/raw_voltage/
 (auto via `build_exclusions.label_for`). A threshold sweep makes sibling folders,
 e.g. `gross_artifact/std4`, `std5`. Mask labels are human-chosen (e.g. `baseline`).
 
-**Prior eras (superseded, left on disk for reference):** `analysis/qc_session_rail/`,
-`analysis/qc_variance/`, `analysis/qc_variance_gross_thresh4/`,
+**Prior eras (DELETED 2026-07-27, no longer on disk):** `analysis/qc_session_rail/`,
+`analysis/qc_variance/` (143 GB), `analysis/qc_variance_gross_thresh4/` (1.7 GB),
 `analysis/qc_variance_padded30/`. These used an older schema (had `excluded`
-columns, DC-offset gross metric, no square_wave, ±30s absolute-time padding).
-The current `qc/raw_voltage/` is the canonical one.
+columns, DC-offset gross metric, no square_wave, ±30s absolute-time padding) and
+were fully superseded by `qc/raw_voltage/`, which is the canonical one. They were
+removed to reclaim disk; the sbatch jobs that wrote them are in `outdated/sbatch/`.
 
 ## The four detectors (all per-channel, 2s windows unless noted)
 
-Config lives in `qc_scripts/config.py`. All detectors are **independent** (no
+Config lives in `ieeg_ehr/qc/config.py`. All detectors are **independent** (no
 detector's output feeds another's baseline — matters for permutation analyses).
 
 1. **saturation** (`detect_saturation.py`) — amplifier rail clipping. The rail is
@@ -342,7 +370,7 @@ absolute-time padding step (which was slow — per-channel time-sorting). Tradeo
 no cross-run bridging. `pad_exclusions.py` / `build_run_start_times.py` are
 superseded by this.
 
-## Scripts (`qc_scripts/`)
+## Scripts (`ieeg_ehr/qc/`)
 
 | Script | Role | Cost |
 |---|---|---|
@@ -364,24 +392,25 @@ square_wave `#c44e52`, gross_artifact `#55a868`.
 ## How to run (end to end)
 
 ```bash
-LEVEL=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/qc/raw_voltage
+LEVEL=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/qc/raw_voltage
+MASK=gross-std3_satmargin15_sw_logz4   # the pinned mask (ieeg_ehr.config.CANONICAL_MASK_LABEL)
 
 # 1. Metrics (expensive) — per-subject array on normal
-sbatch qc_scripts/run_pipeline_qc_raw_voltage_normal.sbatch          # reads subjects_qc_raw_voltage_normal.txt
-#   or one subject:  python -m qc_scripts.run_pipeline --subjects 217 --level-root $LEVEL
+sbatch sbatch/run_pipeline_qc_raw_voltage_normal.sbatch          # reads subjects_qc_raw_voltage_normal.txt
+#   or one subject:  python -m ieeg_ehr.qc.run_pipeline --subjects 217 --level-root $LEVEL
 
 # 2. Per-type exclusions (cheap) — all types, all present subjects (or --subjects / array)
-python -m qc_scripts.build_exclusions --level-root $LEVEL --artifact-type all
-#   sweep one type:  python -m qc_scripts.build_exclusions --level-root $LEVEL --artifact-type gross_artifact --std-thresh 4   # -> gross_artifact/std4
-#   per-subject array:  sbatch --array=0-N%8 --export=ALL,SUBJECTS_FILE=... qc_scripts/build_exclusions_array.sbatch
+python -m ieeg_ehr.qc.build_exclusions --level-root $LEVEL --artifact-type all
+#   sweep one type:  python -m ieeg_ehr.qc.build_exclusions --level-root $LEVEL --artifact-type gross_artifact --std-thresh 4   # -> gross_artifact/std4
+#   per-subject array:  sbatch --array=0-N%8 --export=ALL,SUBJECTS_FILE=... sbatch/build_exclusions_array.sbatch
 
 # 3. Combined mask (cheap)
-python -m qc_scripts.build_mask --level-root $LEVEL --label baseline   # picks config-default per-type labels
+python -m ieeg_ehr.qc.build_mask --level-root $LEVEL --label "$MASK"   # picks config-default per-type labels
 
 # 4. Summary + example plots
-python -m qc_scripts.summarize_exclusions --mask-dir $LEVEL/masks/baseline
-python -m qc_scripts.plot_flagged_runs --level-root $LEVEL --review-csv $LEVEL/masks/baseline/summary/flagged_for_review.csv --n-runs 2 --plots-dir $LEVEL/masks/baseline/plots
-python -m qc_scripts.plot_flagged_runs --level-root $LEVEL --random-any 15 --plots-dir $LEVEL/masks/baseline/plots
+python -m ieeg_ehr.qc.summarize_exclusions --mask-dir $LEVEL/masks/"$MASK"
+python -m ieeg_ehr.qc.plot_flagged_runs --level-root $LEVEL --review-csv $LEVEL/masks/"$MASK"/summary/flagged_for_review.csv --n-runs 2 --plots-dir $LEVEL/masks/"$MASK"/plots
+python -m ieeg_ehr.qc.plot_flagged_runs --level-root $LEVEL --random-any 15 --plots-dir $LEVEL/masks/"$MASK"/plots
 ```
 
 ## Provenance
@@ -391,7 +420,7 @@ Every sidecar (`metrics/run_info/sub-XXX.json`, `exclusions/.../params.json`,
 modified files) and `run_timestamp()`. Scripts **warn when the git tree is
 dirty** — a hash is only faithful if committed. Workflow: commit+push before a
 definitive run. `.gitignore` excludes logs (`logs/`, `**/logs/`, `*.out`,
-`*.err`), `__pycache__`, `qc_scripts/tmp_*`, `qc_scripts/*.csv`.
+`*.err`), `__pycache__`, and all data extensions.
 
 ## Gotchas / lessons
 
@@ -417,19 +446,19 @@ The bipolar level is now implemented, split across three folders by concern —
 preprocessing (re-reference + FFT), QC (exclusion), and archive:
 
 ```
-preprocessing/                     # NEW active reref+FFT code (this is NOT qc_scripts/)
+src/ieeg_ehr/preprocessing/        # active reref+FFT code (distinct from qc/)
   bipolar_reref.py                   pairs, re-referencing, per-2s variance, Welch->50 log bins
   run_pipeline_bipolar.py             fused pass: single read/run -> variance metrics + PSD NWB
   bipolar_bands.py                    downstream: aggregate stored log bins into canonical bands
-  run_pipeline_bipolar_normal.sbatch
+sbatch/run_pipeline_bipolar_normal.sbatch
 outdated/preprocessing/             # ARCHIVED: the old preprocess_ieeg*.py pipeline (pre-metric/
                                      # threshold-split, hard-coded canonical bands, no QC-mask
                                      # integration). Not imported by new code.
-qc_scripts/build_bipolar_exclusions.py   # QC ONLY: mask-aware z-score exclusion on the variance metric
+src/ieeg_ehr/qc/build_bipolar_exclusions.py   # QC ONLY: mask-aware z-score exclusion on the variance metric
 ```
 
 Design, mirroring the raw_voltage split:
-- `preprocessing/run_pipeline_bipolar.py` reads each run's raw NWB exactly once. While the
+- `ieeg_ehr/preprocessing/run_pipeline_bipolar.py` reads each run's raw NWB exactly once. While the
   bipolar-referenced trace is in memory (transient, never persisted — cheap enough to
   recompute later), it computes BOTH a continuous per-2s-window variance metric (written to
   `qc/bipolar/metrics/per_window/sub-XXX_bipolar_variance.csv`, same metric/threshold split as
@@ -482,7 +511,7 @@ Design, mirroring the raw_voltage split:
   scheme (always 2s non-overlapping, unaffected by `--window-sec`/`--overlap` changes) — use this
   flag (or the sbatch's `SKIP_VARIANCE=1` env var) to recompute PSD-only when only PSD parameters
   changed, without redoing the already-correct variance metrics.
-- **`qc_scripts/build_bipolar_exclusions.py`** is the ONLY QC piece for this level — it reads
+- **`ieeg_ehr/qc/build_bipolar_exclusions.py`** is the ONLY QC piece for this level — it reads
   exclusively the variance-metric CSVs (never the PSD/NWB output; no QC currently runs on FFT
   output, and that should stay true) and applies a z-score threshold
   (`z = (var - session_mean) / session_std > std_thresh`), same convention as `gross_artifact`.
@@ -547,12 +576,12 @@ Design, mirroring the raw_voltage split:
 - **As of 2026-07-13**: a full recompute of all 104 subjects' PSD (job `33957325`,
   `SKIP_VARIANCE=1` since the variance CSVs are untouched by this parameter change) is running
   under the new 2s/50%-overlap scheme on the `normal` partition (`--array=0-25%6`,
-  `BATCH_SIZE=4`, `--cpus-per-task=8`/`--n-workers=8`). Check `qc_scripts.processing_status` or
+  `BATCH_SIZE=4`, `--cpus-per-task=8`/`--n-workers=8`). Check `ieeg_ehr.qc.processing_status` or
   `sacct`/`squeue` for current progress when picking this up.
 
 ## Bipolar exclusion: vectorization + visualization tooling (done, 2026-07-27)
 
-**`qc_scripts/build_bipolar_exclusions.py` rewritten to be fully vectorized** — the original
+**`ieeg_ehr/qc/build_bipolar_exclusions.py` rewritten to be fully vectorized** — the original
 version used a `zip()` list comprehension for mask-flagging, a Python `for` loop over
 `.groupby()` for the per-(session,channel) baseline, and `df.apply(_classify, axis=1)` for
 z-score classification, all of which are O(rows) Python-level calls over metric CSVs that run up
@@ -585,14 +614,14 @@ re-referencing logic duplicated. Lives on `$SCRATCH` (not `$OAK`) since it's rep
 demand and meant to be deleted eventually. As of 2026-07-27: 14 runs cached across 7 subjects
 (039, 071, 085, 088, 099, 150, 176).
 
-**New `qc_scripts/plot_bipolar_flagged_runs.py`** — trace + shaded-exclusion plot reading the
+**New `ieeg_ehr/qc/plot_bipolar_flagged_runs.py`** — trace + shaded-exclusion plot reading the
 scratch cache (no NWB read) and `qc/bipolar/exclusions/bipolar_variance/<label>/sub-XXX.csv`
 directly (no separate mask-rollup step needed, per the "no combined bipolar mask" note above).
 Supports `--labels std6,std10,...` to overlay multiple thresholds on the same trace panel for
 visual comparison, `--random N` to sample typical/clean (not just artifact-heavy) examples from
 the cache, and `--ylim` (default `2500`, symmetric µV y-axis limit; `--ylim none` to auto-scale).
 
-**`qc_scripts/plot_distributions.py` generalized** to also handle `bipolar_variance` (added to
+**`ieeg_ehr/qc/plot_distributions.py` generalized** to also handle `bipolar_variance` (added to
 `LOG_X`, and `_metric_csvs` now branches on the different bipolar filename convention — one file
 per subject, no `_ses-` — vs. raw_voltage's per-subject-per-session files) via a new
 `--artifact-types` override flag (default still `config.ARTIFACT_TYPES`, the raw_voltage set).
@@ -613,10 +642,17 @@ becomes a regular workflow.
 - Against `qc/raw_voltage/masks/gross-std3_satmargin15_sw_logz4/` (a wider, ~82-subject cohort —
   every subject with both a `bipolar_variance` metric CSV and a mask file under this label):
   `std10`, built via a new per-subject-batched Slurm array
-  (`qc_scripts/build_bipolar_exclusions_array.sbatch`, `qc_scripts/subjects_bipolar_satmargin15_sw_logz4.txt`,
+  (`sbatch/build_bipolar_exclusions_array.sbatch`, `cohorts/subjects_bipolar_satmargin15_sw_logz4.txt`,
   `BATCH_SIZE=5`, `--array=0-16%8`) rather than one long serial job, since some subjects' metric
   CSVs are 7+GB — mirrors `build_exclusions_array.sbatch`'s existing per-subject-array pattern for
   raw_voltage. All 82 subjects completed successfully.
+
+**CAVEAT — bipolar variance is not trusted as a primary filter.** Carried over from the retired
+featurization plan: as assessed, the mask-aware bipolar-pair variance exclusion flags more
+non-artifactual events than artifactual ones. It has never been promoted to a primary filter, and
+no final threshold has been chosen (see the label list above). Treat it as a diagnostic /
+secondary signal, not a filter to gate analyses on, until it has been validated. The raw-voltage
+mask remains the operative QC layer.
 
 **GOTCHA (discovered 2026-07-27, not yet fixed)**: `build_bipolar_exclusions.py`'s output path is
 `exclusions/bipolar_variance/<label>/sub-XXX.csv` — the label (e.g. `std10`) encodes ONLY the
