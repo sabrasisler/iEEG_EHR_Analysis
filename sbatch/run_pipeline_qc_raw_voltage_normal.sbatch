@@ -1,0 +1,18 @@
+#!/bin/bash
+#SBATCH -p normal
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=32GB
+#SBATCH --array=0-19%6
+#SBATCH -J qc_raw_voltage
+#SBATCH -o logs/qc_raw_voltage_%A_%a.out
+
+module load python/3.12
+source $GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate
+
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+SUBJECT=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/cohorts/subjects_qc_raw_voltage_normal.txt)
+echo "Array task $SLURM_ARRAY_TASK_ID -> subject $SUBJECT"
+python -m ieeg_ehr.qc.run_pipeline --subjects "$SUBJECT" \
+    --level-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/qc/raw_voltage

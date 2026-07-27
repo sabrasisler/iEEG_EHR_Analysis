@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ieeg-ehr"
+version = "0.1.0"
+description = "Sensory vs affective pain encoding in intracranial EEG (Sisler / Keller Lab)"
+requires-python = ">=3.12"
+
+# Installed editable with --no-deps against the shared venv at
+# $GROUP_HOME/venvs/ieeg_ehr_analysis, so these are a declaration of what the
+# code needs, not something pip is asked to resolve. Installing them
+# unpinned would risk upgrading the working numpy/pandas/pynwb underneath a
+# 1.9 TB derivatives tree. Add new deps explicitly, one at a time.
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "pynwb",
+    "pyarrow",   # P0.3 — not yet installed; save_table still writes CSV
+    "joblib",    # P0.3 — for fitted models / FOOOF objects, never for tables
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
