@@ -27,17 +27,36 @@ WHAT LANDS ON DISK  (four tables; see config/paths.py FEATURE-LEVEL QC)
   per_window/  per (run, channel, window) -- z order statistics, SPARSE: only
                rows whose z_max exceeds FEATURE_METRIC_STORE_FLOOR.
   summary/     per (run, channel) -- n_windows / n_stored / n_nonfinite /
-               n_rv_excluded. The denominator for every rate, so the sparse table
+               n_mask_excluded. The denominator for every rate, so the sparse table
                above cannot silently overstate cleanliness.
-  zhist/       per (run, channel, rv_excluded) -- histogram of the operative z
+  zhist/       per (run, channel, mask_excluded) -- histogram of the operative z
                order statistic on a fixed grid, so distribution SHAPE (the knee
                P2.1 needs for structural threshold-setting) survives sparsity.
 
-Windows already excluded by the raw-voltage mask are DROPPED FROM THE BASELINE
+WHICH MASK IS SUBTRACTED
+------------------------
+Windows already excluded by the UPSTREAM mask are DROPPED FROM THE BASELINE
 (config.FEATURE_BASELINE_EXCLUDES_RAW_VOLTAGE) but still get metrics computed and
-an `rv_excluded` flag recorded — that is what makes "how much of what this
+a `mask_excluded` flag recorded — that is what makes "how much of what this
 detector flags was already flagged upstream?" answerable, which is one of the
 structural criteria for setting K.
+
+`--mask-level` chooses that upstream mask, and DEFAULTS TO `bipolar`:
+
+    bipolar      qc/bipolar/masks/<label>/*.parquet, keyed on bipolar PAIRS
+                 excluded = (raw_voltage[anode] | raw_voltage[cathode])
+                            | bipolar_variance
+    raw_voltage  qc/raw_voltage/masks/<label>/*.csv, keyed on MONOPOLAR contacts
+
+The bipolar mask is a strict SUPERSET (verified on real data: 16.60% vs 13.91% of
+windows on sub-039 run-DA1003FI, with zero windows excluded upstream but missed
+here) and is already keyed the way the PSD is, so no anode/cathode translation is
+applied. The metric tables are scoped on disk by BOTH level and label
+(`bp-<label>` vs `rv-<label>`), because the same channel gets a different mean/std
+depending on which mask was subtracted first — so the two cannot collide.
+
+Hence `mask_excluded` rather than `rv_excluded`: with the default level the flag
+means "the bipolar mask excluded this window", which is not the same claim.
 
 Run via Slurm (never the login node):
     sbatch sbatch/detect_power_outlier_array.sbatch
@@ -92,6 +111,49 @@ def _open_psd(nwb_path):
 def _chunks(n_time, size=CHUNK_WINDOWS):
     for t0 in range(0, n_time, size):
         yield t0, min(t0 + size, n_time)
+
+
+def expected_psd_rate():
+    """The PSD row rate implied by the current window/overlap design (1.0 Hz for
+    2s windows at 50% overlap)."""
+    hop_sec = config.PSD_WINDOW_SEC * (1.0 - config.PSD_OVERLAP_FRAC)
+    return 1.0 / hop_sec
+
+
+def resolve_mask_path(subject, session, mask_level, mask_label):
+    """Where this level's mask for one subject/session lives.
+
+    The two levels differ in BOTH location and file format, and load_mask
+    dispatches on the extension:
+      raw_voltage  masks/<label>/sub-X_ses-Y.csv       (predates the Parquet rule)
+      bipolar      masks/<label>/sub-X_ses-Y.parquet   (new artifact)
+    """
+    if mask_level == 'bipolar':
+        return config.bipolar_mask_path(subject, session, mask_label)
+    if mask_level == 'raw_voltage':
+        return config.mask_csv(subject, session, mask_label)
+    raise ValueError(f'unknown mask level: {mask_level}')
+
+
+def resolve_mask(subject, session, mask_level, mask_label):
+    """(mask_df, projector, path) for one subject/session; mask_df None if absent.
+
+    Owns the level -> (path, keying, projector) mapping in ONE place, because the
+    two levels differ in all three at once and picking the wrong projector fails
+    silently rather than loudly:
+
+      raw_voltage  CSV,     MONOPOLAR contacts -> project_to_pairs (anode|cathode)
+      bipolar      Parquet, bipolar PAIRS      -> project_pair_mask_to_windows
+
+    Handing a pair-keyed table to project_to_pairs would split 'LA1-LA2' into
+    'LA1'/'LA2', match neither, and return all-False -- "nothing is excluded",
+    the worst failure mode for a QC mask. Hence one resolver, not a flag threaded
+    through the call sites.
+    """
+    path = resolve_mask_path(subject, session, mask_level, mask_label)
+    projector = (mask_projection.project_pair_mask_to_windows if mask_level == 'bipolar'
+                 else mask_projection.project_to_pairs)
+    return mask_projection.load_mask(path), projector, path
 
 
 class _Accumulator:
@@ -173,12 +235,13 @@ def _order_stats(z, idx_by_frac):
     return out
 
 
-def process_subject_session(subject, session, mask_label, overwrite=False):
+def process_subject_session(subject, session, mask_label, mask_level=None, overwrite=False):
     z_thresh = config.FEATURE_Z_THRESH
     bin_frac = config.FEATURE_BIN_FRAC
     frac_grid = tuple(config.FEATURE_BIN_FRAC_GRID)
 
-    baseline_path = config.feature_metrics_path('baseline', subject, session, mask_label)
+    baseline_path = config.feature_metrics_path('baseline', subject, session,
+                                                mask_label, mask_level)
     if baseline_path.exists() and not overwrite:
         logger.info('sub-%s ses-%s: metrics exist, skipping (use --overwrite)', subject, session)
         return None
@@ -192,25 +255,31 @@ def process_subject_session(subject, session, mask_label, overwrite=False):
         logger.warning('sub-%s ses-%s: no bipolar_fft runs on disk, skipping', subject, session)
         return None
 
-    mask_df = None
-    if mask_label and config.FEATURE_BASELINE_EXCLUDES_RAW_VOLTAGE:
-        mask_df = mask_projection.load_mask(config.mask_csv(subject, session, mask_label))
-        if mask_df is None:
-            logger.warning('sub-%s ses-%s: no raw-voltage mask at label %s -- baseline will be '
-                           'UNMASKED for this subject/session', subject, session, mask_label)
+    mask_df, project, mask_path = resolve_mask(subject, session, mask_level, mask_label)
+    if mask_label and mask_df is None:
+        logger.warning('sub-%s ses-%s: no %s mask at %s -- baseline will be UNMASKED for this '
+                       'subject/session, which INFLATES its std and makes the detector LESS '
+                       'sensitive here than elsewhere', subject, session, mask_level, mask_path)
+    if not mask_label:
+        project = mask_projection.project_to_pairs      # all-False on mask_df=None
 
     # ---------------------------------------------------------------- pass 1
     acc = None
     bin_meta = None
     per_run_counts = {}
+    # Observed PSD rate per run, recorded rather than gated on: the hop audit is
+    # done and the stale-hop subjects are being re-run, but a rate that is not the
+    # expected one should still be visible in run_info rather than invisible.
+    run_rates = {}
     for run_id, path in runs:
         handle, decomp, meta = _open_psd(path)
         try:
             if acc is None:
                 acc = _Accumulator(len(meta['contains_line_noise']))
                 bin_meta = meta
-            excl = mask_projection.project_to_pairs(mask_df, f'run-{run_id}',
-                                                    meta['channels'], meta['run_seconds'])
+            excl = project(mask_df, f'run-{run_id}',
+                           meta['channels'], meta['run_seconds'])
+            run_rates[f'run-{run_id}'] = meta['rate']
             counts = per_run_counts.setdefault(run_id, {})
             for t0, t1 in _chunks(meta['n_time']):
                 block = np.asarray(decomp.data[t0:t1], dtype=np.float64)
@@ -220,7 +289,7 @@ def process_subject_session(subject, session, mask_label, overwrite=False):
             for j, channel in enumerate(meta['channels']):
                 counts[channel] = {
                     'n_windows': int(meta['n_time']),
-                    'n_rv_excluded': int(excl[:, j].sum()),
+                    'n_mask_excluded': int(excl[:, j].sum()),
                 }
         finally:
             handle.close()
@@ -247,8 +316,7 @@ def process_subject_session(subject, session, mask_label, overwrite=False):
         handle, decomp, meta = _open_psd(path)
         try:
             channels = meta['channels']
-            excl = mask_projection.project_to_pairs(mask_df, f'run-{run_id}',
-                                                    channels, meta['run_seconds'])
+            excl = project(mask_df, f'run-{run_id}', channels, meta['run_seconds'])
             mean = np.stack([baseline[c][0] for c in channels])[:, keep_bins]
             std = np.stack([baseline[c][1] for c in channels])[:, keep_bins]
             degen = np.stack([baseline[c][4] for c in channels])[:, keep_bins]
@@ -310,7 +378,7 @@ def process_subject_session(subject, session, mask_label, overwrite=False):
                         'window_start_time': meta['run_seconds'][t0 + wi],
                         'z_max': zmax[keep].astype(np.float32),
                         'n_bins_nonfinite': nonfinite.sum(axis=-1)[keep].astype(np.int16),
-                        'rv_excluded': excl[t0:t1][keep],
+                        'mask_excluded': excl[t0:t1][keep],
                     }
                     for f in frac_grid:
                         rec[f'z_b{f * 100:g}'] = stats[f][keep].astype(np.float32)
@@ -334,22 +402,23 @@ def process_subject_session(subject, session, mask_label, overwrite=False):
         finally:
             handle.close()
 
-    return _write_outputs(subject, session, mask_label, baseline, bin_meta, keep_bins,
+    return _write_outputs(subject, session, mask_label, mask_level, baseline, bin_meta, keep_bins,
                           per_run_counts, window_rows, zhist, hist_edges,
                           z_thresh, bin_frac, frac_grid, idx_by_frac, runs, flag_counts,
-                          mask_df is not None)
+                          mask_df is not None, run_rates)
 
 
-def _write_outputs(subject, session, mask_label, baseline, bin_meta, keep_bins,
+def _write_outputs(subject, session, mask_label, mask_level, baseline, bin_meta, keep_bins,
                    per_run_counts, window_rows, zhist, hist_edges,
                    z_thresh, bin_frac, frac_grid, idx_by_frac, runs, flag_counts,
-                   mask_applied):
+                   mask_applied, run_rates):
     params = {
         'z_thresh': z_thresh, 'bin_frac': bin_frac,
         'bin_frac_grid': list(frac_grid), 'z_side': config.FEATURE_Z_SIDE,
         'baseline_stat': 'mean_std',
         'baseline_excludes_raw_voltage': bool(config.FEATURE_BASELINE_EXCLUDES_RAW_VOLTAGE),
-        'raw_voltage_mask_label': mask_label,
+        'mask_level': mask_level,
+        'mask_label': mask_label,
         # Whether that mask was actually FOUND for this subject/session. A missing
         # mask file is not fatal (build_mask.py legitimately drops subject/sessions
         # that lack an artifact type -- the sub-236 gap), but recording only the
@@ -365,7 +434,7 @@ def _write_outputs(subject, session, mask_label, baseline, bin_meta, keep_bins,
     }
     parents = [str(p) for _rid, p in runs]
     if mask_label:
-        parents.append(str(config.mask_csv(subject, session, mask_label)))
+        parents.append(str(resolve_mask_path(subject, session, mask_level, mask_label)))
     subjects = [f'sub-{subject}']
 
     # baseline: per (channel, bin)
@@ -383,7 +452,7 @@ def _write_outputs(subject, session, mask_label, baseline, bin_meta, keep_bins,
             'n_windows_used': n, 'n_nonfinite': n_nf, 'degenerate': degen,
         }))
     baseline_df = pd.concat(frames, ignore_index=True)
-    io.write_table(baseline_df, config.feature_metrics_path('baseline', subject, session, mask_label),
+    io.write_table(baseline_df, config.feature_metrics_path('baseline', subject, session, mask_label, mask_level),
                    params=params, parents=parents, subjects=subjects)
 
     # summary: per (run, channel)
@@ -399,13 +468,13 @@ def _write_outputs(subject, session, mask_label, baseline, bin_meta, keep_bins,
                 (f'run-{run_id}', channel), (0, 0, 0))
             srows.append({
                 'run_id': f'run-{run_id}', 'channel': channel,
-                'n_windows': c['n_windows'], 'n_rv_excluded': c['n_rv_excluded'],
+                'n_windows': c['n_windows'], 'n_mask_excluded': c['n_mask_excluded'],
                 'n_nonfinite_values': int(n_nf.sum()),
                 'n_bins_degenerate': int(degen.sum()),
                 'n_baseline_windows_min': int(n_used.min()) if len(n_used) else 0,
                 # At the CONFIGURED (K, B) recorded in this table's sidecar params.
                 'n_flagged': int(n_flagged),
-                'n_flagged_not_rv_excluded': int(n_flagged_not_rv),
+                'n_flagged_not_mask_excluded': int(n_flagged_not_rv),
                 'n_windows_any_nonfinite': int(n_any_nf),
             })
     summary_df = pd.DataFrame(srows)
@@ -414,29 +483,29 @@ def _write_outputs(subject, session, mask_label, baseline, bin_meta, keep_bins,
     else:
         summary_df['n_stored'] = 0
     summary_df['n_stored'] = summary_df['n_stored'].fillna(0).astype(np.int64)
-    io.write_table(summary_df, config.feature_metrics_path('summary', subject, session, mask_label),
+    io.write_table(summary_df, config.feature_metrics_path('summary', subject, session, mask_label, mask_level),
                    params=params, parents=parents, subjects=subjects)
 
     # per_window: sparse tail
     if len(stored):
         stored = stored.sort_values(['run_id', 'channel', 'window_idx']).reset_index(drop=True)
-    io.write_table(stored, config.feature_metrics_path('per_window', subject, session, mask_label),
+    io.write_table(stored, config.feature_metrics_path('per_window', subject, session, mask_label, mask_level),
                    params=params, parents=parents, subjects=subjects)
 
-    # zhist: per (run, channel, rv_excluded)
+    # zhist: per (run, channel, mask_excluded)
     hrows = []
     centers = (hist_edges[:-1] + hist_edges[1:]) / 2
     for (run_id, channel, flag), counts in zhist.items():
         nz = np.nonzero(counts)[0]
         hrows.append(pd.DataFrame({
-            'run_id': run_id, 'channel': channel, 'rv_excluded': flag,
+            'run_id': run_id, 'channel': channel, 'mask_excluded': flag,
             'z_bin_idx': nz.astype(np.int16), 'z_bin_center': centers[nz],
             'count': counts[nz].astype(np.int64),
         }))
     zhist_df = (pd.concat(hrows, ignore_index=True) if hrows
-                else pd.DataFrame(columns=['run_id', 'channel', 'rv_excluded',
+                else pd.DataFrame(columns=['run_id', 'channel', 'mask_excluded',
                                            'z_bin_idx', 'z_bin_center', 'count']))
-    io.write_table(zhist_df, config.feature_metrics_path('zhist', subject, session, mask_label),
+    io.write_table(zhist_df, config.feature_metrics_path('zhist', subject, session, mask_label, mask_level),
                    params=dict(params, zhist_range=list(config.FEATURE_ZHIST_RANGE),
                                zhist_bins=config.FEATURE_ZHIST_BINS),
                    parents=parents, subjects=subjects)
@@ -448,25 +517,27 @@ def _write_outputs(subject, session, mask_label, baseline, bin_meta, keep_bins,
         'runs': [str(p) for _rid, p in runs],
         'git': config.git_provenance(), 'run_timestamp': config.run_timestamp(),
         'n_channels': len(baseline), 'n_window_rows_stored': int(len(stored)),
+        'psd_rate_hz_by_run': run_rates,
+        'expected_psd_rate_hz': expected_psd_rate(),
     }, indent=2, default=str))
 
     n_total = int(summary_df['n_windows'].sum()) if len(summary_df) else 0
     n_flag = int(summary_df['n_flagged'].sum()) if len(summary_df) else 0
-    n_flag_inc = int(summary_df['n_flagged_not_rv_excluded'].sum()) if len(summary_df) else 0
-    n_rv = int(summary_df['n_rv_excluded'].sum()) if len(summary_df) else 0
+    n_flag_inc = int(summary_df['n_flagged_not_mask_excluded'].sum()) if len(summary_df) else 0
+    n_rv = int(summary_df['n_mask_excluded'].sum()) if len(summary_df) else 0
     pct = (lambda x: 100.0 * x / n_total if n_total else 0.0)
     logger.info(
         'sub-%s ses-%s: %d channels, %d channel-windows | FLAGGED at K=%g B=%g: %d (%.3f%%), '
-        'of which not already raw-voltage-excluded: %d (%.3f%%) | raw-voltage excluded: %d (%.3f%%) '
+        'of which not already upstream-excluded: %d (%.3f%%) | %s-mask excluded: %d (%.3f%%) '
         '| any-nonfinite-bin: %d (%.3f%%) | stored %d rows (%.2f%% above floor %.1f) '
         '| %d degenerate channel-bins',
         subject, session, len(baseline), n_total, z_thresh, bin_frac,
-        n_flag, pct(n_flag), n_flag_inc, pct(n_flag_inc), n_rv, pct(n_rv),
+        n_flag, pct(n_flag), n_flag_inc, pct(n_flag_inc), mask_level, n_rv, pct(n_rv),
         int(summary_df['n_windows_any_nonfinite'].sum()) if len(summary_df) else 0,
         pct(int(summary_df['n_windows_any_nonfinite'].sum()) if len(summary_df) else 0),
         len(stored), pct(len(stored)), config.FEATURE_METRIC_STORE_FLOOR,
         int(summary_df['n_bins_degenerate'].sum()) if len(summary_df) else 0)
-    return config.feature_metrics_path('baseline', subject, session, mask_label)
+    return config.feature_metrics_path('baseline', subject, session, mask_label, mask_level)
 
 
 def main():
@@ -476,23 +547,36 @@ def main():
                     help='Comma- or space-separated subject IDs, e.g. 071,085')
     ap.add_argument('--session', default='all',
                     help="Session ID, or 'all' (default) for every session in the registry.")
+    ap.add_argument('--mask-level', default=config.FEATURE_BASELINE_MASK_LEVEL,
+                    choices=sorted(config.FEATURE_MASK_LEVEL_PREFIX),
+                    help='Which QC level supplies the mask whose excluded windows are dropped '
+                         f'from the baseline (default: {config.FEATURE_BASELINE_MASK_LEVEL}). '
+                         '"bipolar" is the superset: (raw_voltage[anode] | '
+                         'raw_voltage[cathode]) | bipolar_variance.')
     ap.add_argument('--mask-label', default=None,
-                    help=f'Raw-voltage mask whose excluded windows are dropped from the '
-                         f'baseline (default: config {config.CANONICAL_MASK_LABEL}). '
+                    help='Mask label within that level. Default depends on the level: '
+                         f'raw_voltage -> {config.CANONICAL_MASK_LABEL}; bipolar -> '
+                         f'{config.bipolar_mask_label(config.FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL)}. '
                          'Pass "none" to compute an UNMASKED baseline.')
     ap.add_argument('--overwrite', action='store_true')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-    mask_label = config.CANONICAL_MASK_LABEL if args.mask_label is None else args.mask_label
+    mask_level = args.mask_level
+    if args.mask_label is None:
+        mask_label = (config.bipolar_mask_label(config.FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL)
+                      if mask_level == 'bipolar' else config.CANONICAL_MASK_LABEL)
+    else:
+        mask_label = args.mask_label
     if mask_label == 'none':
         mask_label = None
 
     subjects = [s for s in args.subjects.replace(',', ' ').split() if s]
     io.warn_if_dirty()
-    logger.info('feature-level power-outlier metrics: %d subjects, mask=%s, K=%g, B=%g',
-                len(subjects), mask_label, config.FEATURE_Z_THRESH, config.FEATURE_BIN_FRAC)
+    logger.info('feature-level power-outlier metrics: %d subjects, mask=%s/%s, K=%g, B=%g',
+                len(subjects), mask_level, mask_label,
+                config.FEATURE_Z_THRESH, config.FEATURE_BIN_FRAC)
 
     registry = pd.read_csv(config.FILE_REGISTRY_CSV)
     failed = []
@@ -505,7 +589,8 @@ def main():
             sessions = [args.session]
         for session in sessions:
             try:
-                process_subject_session(subject, session, mask_label, overwrite=args.overwrite)
+                process_subject_session(subject, session, mask_label, mask_level,
+                                        overwrite=args.overwrite)
             except Exception:
                 # One malformed subject must not take down the array task's whole
                 # batch -- log the traceback, keep going, summarize at the end.

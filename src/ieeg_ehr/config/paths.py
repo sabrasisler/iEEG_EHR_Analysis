@@ -159,21 +159,38 @@ def mask_csv(subject, session, label=None):
 #                structural threshold-setting even though per_window/ is sparse.
 
 
-def feature_metrics_dir(kind, mask_label=None):
-    """One of the four feature-level metric tables, scoped by raw-voltage mask.
+# Which QC level's mask was subtracted before the baseline was taken. The prefix
+# is part of the scope directory name because the two are NOT interchangeable:
+# a bipolar mask is (raw_voltage[anode] | raw_voltage[cathode]) | bipolar_variance,
+# i.e. a strict superset of the raw-voltage-only projection, so it yields a
+# different mean/std for the same channel. Without the prefix the two would
+# collide on the label -- and the bipolar label already ENDS in the raw-voltage
+# label it was rolled against ('std10_rv-gross-...'), which would read as a
+# raw-voltage scope.
+FEATURE_MASK_LEVEL_PREFIX = {'raw_voltage': 'rv', 'bipolar': 'bp'}
+
+
+def feature_metrics_dir(kind, mask_label=None, level='raw_voltage'):
+    """One of the four feature-level metric tables, scoped by the mask subtracted.
 
     kind: 'baseline' | 'per_window' | 'summary' | 'zhist'.
-    mask_label=None means the baseline was computed UNMASKED, which is recorded
-    as 'rv-none' rather than being indistinguishable from a masked run.
+    level: which QC level the mask came from -- see FEATURE_MASK_LEVEL_PREFIX.
+    mask_label=None means the baseline was computed UNMASKED, recorded as
+    '<prefix>-none' rather than being indistinguishable from a masked run.
     """
     if kind not in ('baseline', 'per_window', 'summary', 'zhist'):
         raise ValueError(f'unknown feature metric kind: {kind}')
-    scope = f'rv-{mask_label}' if mask_label else 'rv-none'
+    if level not in FEATURE_MASK_LEVEL_PREFIX:
+        raise ValueError(f'unknown feature mask level: {level} '
+                         f'(expected one of {sorted(FEATURE_MASK_LEVEL_PREFIX)})')
+    prefix = FEATURE_MASK_LEVEL_PREFIX[level]
+    scope = f'{prefix}-{mask_label}' if mask_label else f'{prefix}-none'
     return metrics_root(FEATURE_LEVEL_ROOT) / kind / scope
 
 
-def feature_metrics_path(kind, subject, session, mask_label=None):
-    return feature_metrics_dir(kind, mask_label) / f'sub-{subject}_ses-{session}.parquet'
+def feature_metrics_path(kind, subject, session, mask_label=None, level='raw_voltage'):
+    return (feature_metrics_dir(kind, mask_label, level)
+            / f'sub-{subject}_ses-{session}.parquet')
 
 
 def feature_metrics_run_info_path(subject, session):

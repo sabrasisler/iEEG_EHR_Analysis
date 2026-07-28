@@ -86,14 +86,14 @@ def stat_column(bin_frac):
     return f'z_b{bin_frac * 100:g}'
 
 
-def build_one(metric_path, z_thresh, bin_frac, out_path, mask_label):
+def build_one(metric_path, z_thresh, bin_frac, out_path, mask_label, mask_level):
     col = stat_column(bin_frac)
     subject, session = _parse_tag(metric_path)
 
     metrics = io.read_table(metric_path,
                             columns=['run_id', 'channel', 'window_idx',
                                      'window_start_time', col, 'z_max',
-                                     'n_bins_nonfinite', 'rv_excluded'])
+                                     'n_bins_nonfinite', 'mask_excluded'])
     if config.FEATURE_Z_SIDE == 'both':
         # The metric stage already stored |z| order statistics when side='both',
         # so the comparison is identical; recorded here so the label and the
@@ -105,28 +105,30 @@ def build_one(metric_path, z_thresh, bin_frac, out_path, mask_label):
     excluded['excluded'] = True
     excluded = (excluded[['run_id', 'channel', 'window_idx', 'window_start_time',
                           'metric_value', 'z_max', 'n_bins_nonfinite',
-                          'rv_excluded', 'excluded']]
+                          'mask_excluded', 'excluded']]
                 .sort_values(['run_id', 'channel', 'window_idx'])
                 .reset_index(drop=True))
 
     # Denominators from the metric stage's own summary table, so the rate this
     # logs and records is against every window that EXISTS, not just the ones
     # that survived the storage floor.
-    summary_path = config.feature_metrics_path('summary', subject, session, mask_label)
+    summary_path = config.feature_metrics_path('summary', subject, session,
+                                               mask_label, mask_level)
     n_windows_total = n_rv = None
     if summary_path.exists():
-        s = io.read_table(summary_path, columns=['n_windows', 'n_rv_excluded'])
+        s = io.read_table(summary_path, columns=['n_windows', 'n_mask_excluded'])
         n_windows_total = int(s['n_windows'].sum())
-        n_rv = int(s['n_rv_excluded'].sum())
+        n_rv = int(s['n_mask_excluded'].sum())
 
     n_excl = len(excluded)
-    n_incremental = int((~excluded['rv_excluded']).sum()) if n_excl else 0
+    n_incremental = int((~excluded['mask_excluded']).sum()) if n_excl else 0
     params = {
         'artifact_type': ARTIFACT_TYPE,
         'z_thresh': z_thresh, 'bin_frac': bin_frac,
         'z_side': config.FEATURE_Z_SIDE,
         'stat_column': col,
-        'raw_voltage_mask_label': mask_label,
+        'mask_level': mask_level,
+        'mask_label': mask_label,
         'store_floor': config.FEATURE_METRIC_STORE_FLOOR,
         'level': 'window',
     }
@@ -135,9 +137,9 @@ def build_one(metric_path, z_thresh, bin_frac, out_path, mask_label):
                    subjects=[f'sub-{subject}'],
                    extra={'counts': {
                        'n_excluded': n_excl,
-                       'n_excluded_not_rv_excluded': n_incremental,
+                       'n_excluded_not_mask_excluded': n_incremental,
                        'n_windows_total': n_windows_total,
-                       'n_rv_excluded': n_rv,
+                       'n_mask_excluded': n_rv,
                        'n_channels': int(excluded['channel'].nunique()) if n_excl else 0,
                    },
                        'note': 'SPARSE: excluded windows only. A window absent from this '
@@ -148,11 +150,11 @@ def build_one(metric_path, z_thresh, bin_frac, out_path, mask_label):
     rate = (100.0 * n_excl / n_windows_total) if n_windows_total else float('nan')
     inc_rate = (100.0 * n_incremental / n_windows_total) if n_windows_total else float('nan')
     logger.info('  sub-%s ses-%s: %d excluded channel-windows (%.3f%% of %s), '
-                'incremental over raw-voltage: %d (%.3f%%) -> %s',
-                subject, session, n_excl, rate, n_windows_total, n_incremental,
+                'incremental over the %s mask: %d (%.3f%%) -> %s',
+                subject, session, n_excl, rate, n_windows_total, mask_level, n_incremental,
                 inc_rate, out_path.name)
     return {'subject': subject, 'session': session, 'n_excluded': n_excl,
-            'n_excluded_not_rv_excluded': n_incremental,
+            'n_excluded_not_mask_excluded': n_incremental,
             'n_windows_total': n_windows_total}
 
 
@@ -166,9 +168,13 @@ def main():
                          f'(default: config {config.FEATURE_BIN_FRAC})')
     ap.add_argument('--label', default=None,
                     help='Output folder label (default: auto from thresholds, e.g. z5_binfrac20)')
+    ap.add_argument('--mask-level', default=config.FEATURE_BASELINE_MASK_LEVEL,
+                    choices=sorted(config.FEATURE_MASK_LEVEL_PREFIX),
+                    help='Which mask level the metrics were scoped by '
+                         f'(default: {config.FEATURE_BASELINE_MASK_LEVEL}).')
     ap.add_argument('--mask-label', default=None,
-                    help='Which raw-voltage-scoped metrics to read (default: config '
-                         f'{config.CANONICAL_MASK_LABEL}). Pass "none" for the unmasked-baseline metrics.')
+                    help='Mask label within that level; default depends on the level. '
+                         'Pass "none" for the unmasked-baseline metrics.')
     ap.add_argument('--subjects', default=None,
                     help='Comma-separated subject IDs to restrict to (default: all present)')
     args = ap.parse_args()
@@ -177,7 +183,12 @@ def main():
 
     z_thresh = config.FEATURE_Z_THRESH if args.z_thresh is None else args.z_thresh
     bin_frac = config.FEATURE_BIN_FRAC if args.bin_frac is None else args.bin_frac
-    mask_label = config.CANONICAL_MASK_LABEL if args.mask_label is None else args.mask_label
+    mask_level = args.mask_level
+    if args.mask_label is None:
+        mask_label = (config.bipolar_mask_label(config.FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL)
+                      if mask_level == 'bipolar' else config.CANONICAL_MASK_LABEL)
+    else:
+        mask_label = args.mask_label
     if mask_label == 'none':
         mask_label = None
 
@@ -195,7 +206,7 @@ def main():
     label = args.label or config.feature_exclusion_label(z_thresh, bin_frac)
     stat_column(bin_frac)          # validate B before doing any work
 
-    metrics_dir = config.feature_metrics_dir('per_window', mask_label)
+    metrics_dir = config.feature_metrics_dir('per_window', mask_label, mask_level)
     paths = sorted(metrics_dir.glob('sub-*_ses-*.parquet'))
     if args.subjects:
         wanted = {s.strip().replace('sub-', '') for s in args.subjects.split(',')}
@@ -208,20 +219,22 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     io.warn_if_dirty()
-    logger.info('=== build_feature_exclusions: %s (label=%s) K=%g B=%g col=%s mask=%s ===',
-                ARTIFACT_TYPE, label, z_thresh, bin_frac, stat_column(bin_frac), mask_label)
+    logger.info('=== build_feature_exclusions: %s (label=%s) K=%g B=%g col=%s mask=%s/%s ===',
+                ARTIFACT_TYPE, label, z_thresh, bin_frac, stat_column(bin_frac),
+                mask_level, mask_label)
 
     rows = []
     for metric_path in paths:
         subject, session = _parse_tag(metric_path)
         out_path = config.feature_exclusion_path(subject, session, ARTIFACT_TYPE, label)
         try:
-            rows.append(build_one(metric_path, z_thresh, bin_frac, out_path, mask_label))
+            rows.append(build_one(metric_path, z_thresh, bin_frac, out_path,
+                                  mask_label, mask_level))
         except Exception:
             logger.exception('  sub-%s ses-%s: failed, skipping', subject, session)
 
     total_excl = sum(r['n_excluded'] for r in rows)
-    total_inc = sum(r['n_excluded_not_rv_excluded'] for r in rows)
+    total_inc = sum(r['n_excluded_not_mask_excluded'] for r in rows)
     total_win = sum(r['n_windows_total'] or 0 for r in rows)
     params_out = {
         'artifact_type': ARTIFACT_TYPE, 'label': label,
@@ -229,13 +242,14 @@ def main():
         'thresholds': {'z_thresh': z_thresh, 'bin_frac': bin_frac,
                        'z_side': config.FEATURE_Z_SIDE,
                        'stat_column': stat_column(bin_frac)},
-        'raw_voltage_mask_label': mask_label,
+        'mask_level': mask_level,
+        'mask_label': mask_label,
         'store_floor': config.FEATURE_METRIC_STORE_FLOOR,
         'metrics_per_window_dir': str(metrics_dir),
-        'metrics_summary_dir': str(config.feature_metrics_dir('summary', mask_label)),
+        'metrics_summary_dir': str(config.feature_metrics_dir('summary', mask_label, mask_level)),
         'n_subject_sessions': len(rows),
         'totals': {'n_excluded': total_excl,
-                   'n_excluded_not_rv_excluded': total_inc,
+                   'n_excluded_not_mask_excluded': total_inc,
                    'n_windows_total': total_win,
                    'pct_excluded': (100.0 * total_excl / total_win) if total_win else None,
                    'pct_excluded_incremental': (100.0 * total_inc / total_win) if total_win else None},
@@ -251,10 +265,10 @@ def main():
     os.replace(tmp, out_dir / 'params.json')
 
     logger.info('%d subject/sessions: %d excluded channel-windows of %d (%.3f%%), '
-                'incremental over raw-voltage %d (%.3f%%) -> %s',
+                'incremental over the %s mask %d (%.3f%%) -> %s',
                 len(rows), total_excl, total_win,
                 (100.0 * total_excl / total_win) if total_win else float('nan'),
-                total_inc,
+                mask_level, total_inc,
                 (100.0 * total_inc / total_win) if total_win else float('nan'), out_dir)
 
 

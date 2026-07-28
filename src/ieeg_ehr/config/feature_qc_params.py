@@ -142,6 +142,32 @@ FEATURE_ZHIST_BINS = 100
 # would otherwise skew a channel's own baseline).
 FEATURE_BASELINE_EXCLUDES_RAW_VOLTAGE = True
 
+# WHICH mask level to subtract. 'bipolar' is the default because the bipolar mask
+# is a strict SUPERSET of the raw-voltage projection --
+#     excluded = (raw_voltage[anode] | raw_voltage[cathode]) | bipolar_variance
+# -- so it removes everything the raw-voltage path would, plus variance artifacts
+# that only exist after re-referencing. It is also already keyed on the bipolar
+# PAIR, which is what the PSD is keyed on, so no anode/cathode translation is
+# needed (and none must be applied: see mask_projection.
+# project_pair_mask_to_windows on why handing a pair-keyed table to the monopolar
+# projector fails SILENTLY to all-False).
+FEATURE_BASELINE_MASK_LEVEL = 'bipolar'
+
+# The bipolar_variance exclusion label the default bipolar mask was rolled from.
+# The full mask label is built by config.bipolar_mask_label(), which appends the
+# raw-voltage label it was rolled against -- a bare 'std10' is not a safe mask
+# name (SCRATCHPAD 2026-07-27: the same bipolar label against two different
+# raw-voltage masks silently overwrote itself).
+FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL = 'std10'
+
+# NOTE ON PSD HOP: an earlier version of this detector filtered out runs whose
+# stored PSD was on the superseded 60s hop, to keep them out of the baseline.
+# That guard is GONE as of 2026-07-28: the hop audit found only three subjects and
+# their PSD is being re-run, so the filter would be dead code that also cost an
+# extra NWB open per run just to read `rate`. The observed per-run rate is still
+# RECORDED in metrics/run_info/ alongside the expected rate, so a stale-hop run
+# that slipped through is detectable after the fact rather than invisible.
+
 # A channel-bin needs at least this many usable (finite, un-masked) windows
 # before its mean/std is trusted. Below it the baseline is marked degenerate and
 # every window of that channel-bin is treated as flagged -- same convention as

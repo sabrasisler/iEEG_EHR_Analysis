@@ -31,7 +31,7 @@ masks/<label>/, never on exclusions/<type>/<label>/, for exactly that reason.
 
 Output per subject/session: masks/<label>/sub-XXX_ses-YY.parquet with the join key
 (run_id, channel, window_idx), window_start_time, one boolean per type
-(excluded_<type>) for transparency, `rv_excluded` carried through, and `excluded`
+(excluded_<type>) for transparency, `mask_excluded` carried through, and `excluded`
 = OR across types. A params.json records which <type>/<label> fed each + git.
 
 Usage:
@@ -71,12 +71,12 @@ def _default_label(chosen):
     return 'featqc-' + '_'.join(lbl.replace('_', '') for _t, lbl in sorted(chosen.items()))
 
 
-def build_one(subject, session, chosen, out_path, mask_label_rv):
+def build_one(subject, session, chosen, out_path, mask_label_rv, mask_level):
     merged = None
     per_type_counts = {}
     for artifact_type, label in sorted(chosen.items()):
         path = config.feature_exclusion_path(subject, session, artifact_type, label)
-        cols = ['run_id', 'channel', 'window_idx', 'window_start_time', 'rv_excluded']
+        cols = ['run_id', 'channel', 'window_idx', 'window_start_time', 'mask_excluded']
         df = io.read_table(path, columns=cols + ['excluded'])
         df = df.rename(columns={'excluded': f'excluded_{artifact_type}'})
         per_type_counts[artifact_type] = int(df[f'excluded_{artifact_type}'].sum())
@@ -86,31 +86,33 @@ def build_one(subject, session, chosen, out_path, mask_label_rv):
             # Outer join: each type's sparse table covers a different set of
             # windows, and a window missing from one type is simply not excluded
             # by that type (-> False), not absent from the mask.
-            merged = merged.merge(df.drop(columns=['window_start_time', 'rv_excluded']),
+            merged = merged.merge(df.drop(columns=['window_start_time', 'mask_excluded']),
                                   on=KEY, how='outer')
 
     excl_cols = [f'excluded_{t}' for t in sorted(chosen)]
     merged[excl_cols] = merged[excl_cols].fillna(False).astype(bool)
-    merged['rv_excluded'] = merged['rv_excluded'].fillna(False).astype(bool)
+    merged['mask_excluded'] = merged['mask_excluded'].fillna(False).astype(bool)
     merged['excluded'] = merged[excl_cols].any(axis=1)
     merged = merged.sort_values(KEY).reset_index(drop=True)
-    out_cols = KEY + ['window_start_time'] + excl_cols + ['rv_excluded', 'excluded']
+    out_cols = KEY + ['window_start_time'] + excl_cols + ['mask_excluded', 'excluded']
 
-    summary_path = config.feature_metrics_path('summary', subject, session, mask_label_rv)
+    summary_path = config.feature_metrics_path('summary', subject, session,
+                                               mask_label_rv, mask_level)
     n_windows_total = None
     if summary_path.exists():
         n_windows_total = int(io.read_table(summary_path, columns=['n_windows'])['n_windows'].sum())
 
     n_excl = int(merged['excluded'].sum())
-    n_inc = int((merged['excluded'] & ~merged['rv_excluded']).sum())
+    n_inc = int((merged['excluded'] & ~merged['mask_excluded']).sum())
     io.write_table(merged[out_cols], out_path,
                    params={'types': sorted(chosen), 'per_type_labels': chosen,
-                           'level': 'window', 'raw_voltage_mask_label': mask_label_rv},
+                           'level': 'window', 'mask_level': mask_level,
+                           'mask_label': mask_label_rv},
                    parents=[str(config.feature_exclusion_path(subject, session, t, l))
                             for t, l in sorted(chosen.items())],
                    subjects=[f'sub-{subject}'],
                    extra={'counts': {'n_excluded': n_excl,
-                                     'n_excluded_not_rv_excluded': n_inc,
+                                     'n_excluded_not_mask_excluded': n_inc,
                                      'n_windows_total': n_windows_total,
                                      'per_type': per_type_counts},
                           'note': 'SPARSE: a window absent from this file is not excluded '
@@ -123,7 +125,7 @@ def build_one(subject, session, chosen, out_path, mask_label_rv):
                 subject, session, len(merged), n_excl, rate, n_windows_total,
                 ', '.join(f'{t}={n}' for t, n in per_type_counts.items()))
     return {'subject': subject, 'session': session, 'n_excluded': n_excl,
-            'n_excluded_not_rv_excluded': n_inc, 'n_windows_total': n_windows_total}
+            'n_excluded_not_mask_excluded': n_inc, 'n_windows_total': n_windows_total}
 
 
 def main():
@@ -139,10 +141,13 @@ def main():
         ap.add_argument(f'--{t}', default=None,
                         help=f'Which {t} exclusion label to combine '
                              f'(default: config-default {config.feature_exclusion_label()})')
+    ap.add_argument('--mask-level', default=config.FEATURE_BASELINE_MASK_LEVEL,
+                    choices=sorted(config.FEATURE_MASK_LEVEL_PREFIX),
+                    help='Which mask level the metrics were scoped by '
+                         f'(default: {config.FEATURE_BASELINE_MASK_LEVEL}).')
     ap.add_argument('--mask-label', default=None,
-                    help='Raw-voltage mask the metrics were scoped by, used to locate the '
-                         f'summary tables for denominators (default: config '
-                         f'{config.CANONICAL_MASK_LABEL}).')
+                    help='Mask label within that level, used to locate the summary tables '
+                         'for denominators; default depends on the level.')
     ap.add_argument('--subjects', default=None,
                     help='Comma-separated subject IDs to restrict to (default: all present)')
     args = ap.parse_args()
@@ -156,7 +161,12 @@ def main():
         raise SystemExit(f'--types: unknown feature-level artifact type(s) {bad}, '
                          f'must be from {config.FEATURE_ARTIFACT_TYPES}')
 
-    mask_label_rv = config.CANONICAL_MASK_LABEL if args.mask_label is None else args.mask_label
+    mask_level = args.mask_level
+    if args.mask_label is None:
+        mask_label_rv = (config.bipolar_mask_label(config.FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL)
+                         if mask_level == 'bipolar' else config.CANONICAL_MASK_LABEL)
+    else:
+        mask_label_rv = args.mask_label
     if mask_label_rv == 'none':
         mask_label_rv = None
 
@@ -197,12 +207,13 @@ def main():
     for subject, session in sorted(common):
         out_path = config.feature_mask_path(subject, session, label)
         try:
-            rows.append(build_one(subject, session, chosen, out_path, mask_label_rv))
+            rows.append(build_one(subject, session, chosen, out_path,
+                                  mask_label_rv, mask_level))
         except Exception:
             logger.exception('  sub-%s ses-%s: failed, skipping', subject, session)
 
     total_excl = sum(r['n_excluded'] for r in rows)
-    total_inc = sum(r['n_excluded_not_rv_excluded'] for r in rows)
+    total_inc = sum(r['n_excluded_not_mask_excluded'] for r in rows)
     total_win = sum(r['n_windows_total'] or 0 for r in rows)
     params_out = {
         'mask_label': label,
@@ -211,11 +222,13 @@ def main():
         'types': sorted(chosen),
         'per_type_labels': chosen,
         'per_type_dirs': {t: str(d) for t, d in type_dirs.items()},
-        'raw_voltage_mask_label': mask_label_rv,
-        'metrics_summary_dir': str(config.feature_metrics_dir('summary', mask_label_rv)),
+        'mask_level': mask_level,
+        'mask_label': mask_label_rv,
+        'metrics_summary_dir': str(config.feature_metrics_dir('summary', mask_label_rv,
+                                                              mask_level)),
         'n_subject_sessions': len(rows),
         'totals': {'n_excluded': total_excl,
-                   'n_excluded_not_rv_excluded': total_inc,
+                   'n_excluded_not_mask_excluded': total_inc,
                    'n_windows_total': total_win,
                    'pct_excluded': (100.0 * total_excl / total_win) if total_win else None},
         'sparse': True,
@@ -230,9 +243,10 @@ def main():
     os.replace(tmp, out_dir / 'params.json')
 
     logger.info('%d subject/sessions -> %s | %d excluded channel-windows of %d (%.3f%%), '
-                'incremental over raw-voltage %d',
+                'incremental over the %s mask %d',
                 len(rows), out_dir, total_excl, total_win,
-                (100.0 * total_excl / total_win) if total_win else float('nan'), total_inc)
+                (100.0 * total_excl / total_win) if total_win else float('nan'),
+                mask_level, total_inc)
 
 
 if __name__ == '__main__':

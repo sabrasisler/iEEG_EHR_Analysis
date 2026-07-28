@@ -65,20 +65,41 @@ def split_pair(channel):
     return anode, cathode
 
 
-def load_mask(mask_path, run_id=None):
-    """Read one subject/session's raw-voltage mask CSV, optionally for one run.
+def load_mask(mask_path, run_id=None, columns=None):
+    """Read one subject/session's mask table, optionally for one run.
+
+    Dispatches on the file extension, because the two levels store their masks
+    differently and both are legitimate: the raw-voltage tree is CSV (it predates
+    the Parquet convention and works -- docs/io_conventions.md §7), while the
+    bipolar tree is Parquet (a new artifact, so it follows the current rule). A
+    caller should be able to name a mask without knowing which.
 
     Returns None if the file does not exist. That is deliberately not an error:
     build_mask.py drops subject/sessions that are missing any artifact type (the
     sub-236 gap, docs/qc_context.md), so a missing file means "this
     subject/session has no mask at this label" and the caller decides whether to
-    proceed unmasked or skip. Callers MUST log which they did.
+    proceed unmasked or skip. Callers MUST log which they did -- an absent mask
+    silently keeps artifact windows, which inflates a baseline std, deflates z,
+    and makes a detector LESS sensitive for exactly the subjects whose QC inputs
+    were incomplete.
+
+    NOTE ON KEYING: this returns the table as stored and does NOT tell you whether
+    `channel` holds monopolar contacts or bipolar pairs. That is the caller's job
+    to know, and it decides which projector is correct --
+    project_to_pairs (monopolar) vs project_pair_mask_to_windows (pair-keyed).
+    Guessing wrong returns all-False rather than failing, hence
+    project_pair_mask_to_windows' docstring.
     """
-    mask_path = pd.io.common.stringify_path(mask_path)
-    try:
-        df = pd.read_csv(mask_path, usecols=MASK_COLUMNS)
-    except (FileNotFoundError, OSError):
+    path = Path(mask_path)
+    if not path.exists():
         return None
+    cols = list(columns) if columns is not None else MASK_COLUMNS
+    if path.suffix == '.parquet':
+        # Parquet carries dtypes, so `excluded` arrives as real bool rather than
+        # the object/str a CSV round-trip can produce.
+        df = pd.read_parquet(path, columns=cols)
+    else:
+        df = pd.read_csv(path, usecols=cols)
     if run_id is not None:
         df = df[df['run_id'] == run_id]
     return df
