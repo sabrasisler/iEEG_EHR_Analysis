@@ -475,10 +475,19 @@ def sweep_run_dir(run_name, event='pain', timestamp=None):
 
 EXPLORATORY_SUBJECTS_TXT = COHORTS_ROOT / 'subjects_qc_raw_voltage_normal.txt'
 
-# sub-236's raw_voltage exclusion rollups are incomplete at the newer sweep
-# labels (docs/qc_context.md, "sub-236 gap"), so it can't safely be combined
-# into the pinned mask yet.
-_EXCLUDE_FROM_EXPLORATORY = {'236'}
+# EMPTY as of 2026-07-28. sub-236 was the only entry: its raw_voltage exclusion
+# rollups were incomplete at the newer sweep labels (docs/qc_context.md, "sub-236
+# gap"), so it could not be combined into the pinned mask. That is fixed — its one
+# real gap was `square_wave/frac0.9`, its metrics were complete all along (107 of
+# 107 readable runs), and it now has a pinned raw-voltage mask. Its PSD is also
+# clean: 107/107 runs on the current single-level design at a 1 s hop
+# (qc/psd_timing/, 2026-07-28), so it is not among the subjects awaiting a PSD
+# re-run.
+#
+# Kept as an empty set rather than deleted: it is the sanctioned place to park a
+# subject that must not enter exploratory work, and re-adding one should be a
+# one-line change rather than re-plumbing exploratory_subjects().
+_EXCLUDE_FROM_EXPLORATORY = set()
 
 
 def exploratory_subjects():
