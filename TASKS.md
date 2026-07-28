@@ -103,6 +103,15 @@ date, or figure that prompted it.
       from a worktree silently runs the main checkout's code under a commit hash
       that claims otherwise. (→ docs/labnotebook/2026-07-28.md 12:45)
 
+- [ ] **Decide what to do with the 60s-hop PSD runs in sub-247 and sub-257.**
+      24 runs (13 + 11) were written under the superseded 60s outer-window design, so
+      19 of sub-247's 58 epochs and 14 of sub-257's 51 average **5 windows instead of
+      300** — a different feature silently sharing a column with the 1s-hop epochs.
+      Either re-run the PSD for those runs under the current 2s/50% scheme (BG.1) or
+      exclude those epochs explicitly; do NOT let them into a sweep unmarked. The
+      other 81 subject-sessions are uniformly 1s-hop.
+      (→ docs/labnotebook/2026-07-28.md 12:55)
+
 ## Next
 
 - [ ] **P1.1 Refactor `build_pain_epoch_power.py`** into the epoch-definitions +
