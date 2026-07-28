@@ -48,10 +48,15 @@ expected-run denominator are resolved defensively:
                     a denominator you cannot see is a denominator you cannot
                     trust.
 
-The registry fallback can legitimately over-count: it lists runs whose NWB is
-unreadable (e.g. sub-236 has 109 registry runs but 107 parseable ones), and a
-level that skips those will look under-covered. That is why `runs_source` is a
-column and not a footnote.
+The registry fallback is the weaker denominator, and `runs_source` exists so you
+can see which rows relied on it. It reports what a subject/session HAS, not what
+the level actually READ, so at registry granularity a tier-2 hit means "this run
+has no raw-voltage mask coverage" and NOT necessarily "this run was silently
+contaminated". Runs legitimately absent from a mask include unreadable NWBs and
+subjects with no sEEG series. Treat registry-sourced tier-2 rows as a worklist to
+explain, not as confirmed contamination; `run_info`-sourced rows are the strict
+ones. Do not try to filter the registry down to "readable" runs on `n_channels` —
+see `_load_registry`.
 
 THIS IS A REPORT, NOT A COHORT FILE. Cohort membership lives only in
 `cohorts/*.json` (DECISIONS.md 2026-07-27). Filter on `fully_covered` and build
@@ -91,7 +96,16 @@ SUMMARY_COLUMNS = [
 
 def _load_registry():
     """(sub_id, ses_id, run_id) only — the registry is the level-independent
-    source of which runs a subject/session has."""
+    source of which runs a subject/session has.
+
+    DO NOT filter this on `n_channels` to try to keep only "readable" runs. That
+    was tried on 2026-07-28 and was WRONG: `n_channels` is blank for 2136 of 7902
+    rows, and the blanks include plenty of perfectly readable runs (all of
+    sub-039's and sub-071's, both of which the feature level read in full). The
+    filter silently emptied those subjects' expected-run sets, which zeroed out
+    tier 2 and made the report look clean. Blank `n_channels` means the registry
+    column was not populated for that row, NOT that the NWB is unparseable.
+    """
     return pd.read_csv(config.FILE_REGISTRY_CSV, usecols=['sub_id', 'ses_id', 'run_id'])
 
 
@@ -324,12 +338,24 @@ def main():
                        summary_df.loc[~summary_df['mask_file_exists'],
                                       ['subject', 'session']].to_dict('records'))
     if counts['n_with_missing_runs']:
-        logger.warning('%d subject-session(s) have a mask file but are MISSING RUNS from '
-                       'it — the session-pooled baseline is contaminated for these: %s',
-                       counts['n_with_missing_runs'],
-                       summary_df.loc[(summary_df['n_runs_missing'] > 0)
-                                      & summary_df['mask_file_exists'],
-                                      ['subject', 'session', 'n_runs_missing']].to_dict('records'))
+        strict = summary_df.loc[(summary_df['n_runs_missing'] > 0)
+                                & summary_df['mask_file_exists']
+                                & (summary_df['runs_source'] == 'run_info')]
+        loose = summary_df.loc[(summary_df['n_runs_missing'] > 0)
+                               & summary_df['mask_file_exists']
+                               & (summary_df['runs_source'] == 'registry')]
+        if len(strict):
+            logger.warning('%d subject-session(s) READ runs that are absent from their mask '
+                           '— the session-pooled baseline IS contaminated for these: %s',
+                           len(strict),
+                           strict[['subject', 'session', 'n_runs_missing']].to_dict('records'))
+        if len(loose):
+            logger.warning('%d subject-session(s) HAVE runs (per the registry) absent from '
+                           'their mask. Registry-sourced, so this is a worklist to explain, '
+                           'not confirmed contamination — an unreadable NWB or a subject with '
+                           'no sEEG series lands here legitimately: %s',
+                           len(loose),
+                           loose[['subject', 'session', 'n_runs_missing']].to_dict('records'))
     logger.info('wrote %s', out_dir)
 
 
