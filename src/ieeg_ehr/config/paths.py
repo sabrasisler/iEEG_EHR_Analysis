@@ -16,6 +16,7 @@ Layout under DERIVATIVES_BASE (architecture.md PART 4):
     outdated/       superseded derivatives kept for reference
 """
 
+from datetime import datetime
 from pathlib import Path
 
 from ieeg_ehr._repo import REPO_DIR   # noqa: F401  (re-exported; provenance + callers use it)
@@ -91,7 +92,11 @@ def threshold_sweep_dir(level_root):
 # ============================================================================
 # PINNED QC MASK
 # ============================================================================
-# Baked into every epoch cache, so changing it means a full expensive re-run.
+# NO LONGER baked into the epoch cache. As of 2026-07-27 the cache stores raw
+# per-window slices with no mask applied and no mask column; masking is a
+# view-time join on (run, channel, 60s bin). So switching masks is now FREE —
+# it does not invalidate the cache. This label is what views and analyses use
+# by default.
 #
 # TODO(P0.1): formally pin this. The two full-cohort (83 subject-session)
 # candidates are 'gross-std3_satmargin15_sw' and
@@ -166,6 +171,12 @@ PAIN_FEATURES_ROOT = FEATURES_ROOT / 'pain' / 'psd_epochs'
 # PAIN_FEATURES_ROOT. Kept as a constant so the old plot scripts still resolve.
 LEGACY_PAIN_CACHE_DIR = OUTDATED_ROOT / 'legacy_65_subjects' / 'cache'
 CACHE_DIR = LEGACY_PAIN_CACHE_DIR
+
+# Throwaway exploration plots. NOTE the deviation: architecture.md PART 4 draws
+# this as analysis/pain/scratch/, i.e. per-event. Left flat deliberately — runs
+# already exist at this path and it is deletable output either way; whether
+# scratch should be per-event at all is an open scratchpad question. A deliberate
+# analysis output is NOT this: it goes through analysis_run_dir() below.
 PLOTS_ROOT = ANALYSIS_DIR / 'scratch'
 
 
@@ -180,6 +191,126 @@ def epoch_channel_power_csv(subject, session):
 
 def epoch_channel_power_provenance_json(subject, session):
     return CACHE_DIR / f'sub-{subject}_ses-{session}_epoch_channel_power.provenance.json'
+
+
+# ============================================================================
+# PAIN EPOCH CACHE — the Phase 1 base unit  (P1.1)
+# ============================================================================
+# ONE base unit = one (epoch definition, QC mask) pair, because those two are
+# the only things baked INTO the cache and therefore the only two that force an
+# expensive rebuild (architecture.md PART 4):
+#
+#   features/pain/psd_epochs/<epoch_label>_mask-<mask_label>/
+#     manifest.json                                  the unit's self-description
+#     cache/       sub-XXX_ses-YY_epochs.parquet      per-window log-power, masked, PRE-norm
+#     epoch_defs/  sub-XXX_ses-YY_defs.parquet        run + window indices + pain label + mask ref
+#     views/       <label>_<config_hash>/             OPTIONAL materialized views
+#
+# Subject/session live in the FILENAME, not in rows; epochs stack inside one
+# file under an epoch_id column. The only fingerprinted name in the whole tree
+# is a materialized view's directory (io.sidecar.config_hash) — runs and plots
+# get a human label plus a timestamp.
+
+CACHE_SUBDIR = 'cache'
+EPOCH_DEFS_SUBDIR = 'epoch_defs'
+VIEWS_SUBDIR = 'views'
+
+
+def epoch_label(minutes_before=None):
+    """The epoch definition's directory-name fragment, e.g. 'epoch-5min-pre'.
+
+    pain_params is imported lazily so this module stays importable on its own
+    and paths <-> params can never become a circular import.
+    """
+    if minutes_before is None:
+        from ieeg_ehr.config.pain_params import EPOCH_MINUTES_BEFORE
+        minutes_before = EPOCH_MINUTES_BEFORE
+    return f'epoch-{minutes_before:g}min-pre'
+
+
+def pain_epoch_unit_dir(minutes_before=None):
+    """The base-unit directory for one epoch definition, e.g. 'epoch-5min-pre'.
+
+    CHANGED 2026-07-27: this used to be keyed on (epoch definition, QC mask) —
+    `epoch-5min-pre_mask-<label>`. The cache no longer applies or records a QC
+    mask; masking moved to the view layer, so the cache depends ONLY on the
+    epoch definition. Keeping the mask in the name would have asserted a
+    dependency that no longer exists, and would have forced a full rebuild of a
+    ~47 GB artifact every time the mask changed.
+
+    Consequence: CLAUDE.md's "new cache ONLY for a new epoch length or a new QC
+    mask" collapses to just epoch length, and P0.1 (pinning the mask) no longer
+    blocks building the cache. See architecture.md PART 1.
+    """
+    return PAIN_FEATURES_ROOT / epoch_label(minutes_before)
+
+
+def pain_epoch_manifest_path(minutes_before=None):
+    """The base unit's manifest.json — window length, anchor, mask label, bin
+    edges, dtype, git, date. Written once per unit (io.write_manifest), not once
+    per subject, and digested by every view sidecar that depends on the unit.
+
+    The filename is spelled out rather than imported from io.sidecar.MANIFEST_NAME
+    to keep config free of an io dependency (io does not import config either, and
+    that one-way boundary is worth a literal); tests assert both spellings agree."""
+    return pain_epoch_unit_dir(minutes_before) / 'manifest.json'
+
+
+def pain_epoch_cache_path(subject, session, minutes_before=None):
+    return (pain_epoch_unit_dir(minutes_before) / CACHE_SUBDIR
+            / f'sub-{subject}_ses-{session}_epochs.parquet')
+
+
+def pain_epoch_defs_path(subject, session, minutes_before=None):
+    return (pain_epoch_unit_dir(minutes_before) / EPOCH_DEFS_SUBDIR
+            / f'sub-{subject}_ses-{session}_defs.parquet')
+
+
+def pain_epoch_views_dir(view_label, config_hash, minutes_before=None):
+    """Where a MATERIALIZED view lands — disposable performance cache, deletable.
+
+    A view that a human reads or a model consumes is not this; that is an
+    ANALYSIS output under analysis_run_dir(). Materialize here only when
+    recompute is *measured* slow and something depends on it."""
+    return (pain_epoch_unit_dir(minutes_before) / VIEWS_SUBDIR
+            / f'{view_label}_{config_hash}')
+
+
+# ============================================================================
+# ANALYSIS RUN DIRECTORIES — the 5-level scheme
+# ============================================================================
+# 1 <event>/  2 <question>/  3 <output_type>/  4 <view_scheme>/(optional)
+# 5 <run_name>_<timestamp>/
+#
+# Levels 1-2 are opened DELIBERATELY: a new event domain, or a NAMED question
+# that already exists in the exploration log. Levels 3-5 are created freely per
+# run. Sweep combinatorics go into ROWS of a sweeps/ results.parquet, never into
+# folders. Discovery vs confirmation is a cohort reference in config, not a
+# folder level — and which subjects were in a run is read from the run's
+# provenance.json subjects[], never from its name.
+
+def _run_stamp(timestamp=None):
+    return timestamp or datetime.now().strftime('%Y%m%d-%H%M%S')
+
+
+def analysis_run_dir(question, output_type, run_name, view_scheme=None,
+                     event='pain', timestamp=None):
+    """Build (do not create) the level-5 run directory.
+
+    A timestamp is ALWAYS appended so two runs can never overwrite each other's
+    provenance.json — that has bitten this project once already.
+    """
+    path = ANALYSIS_DIR / event / question / output_type
+    if view_scheme:
+        path = path / view_scheme
+    stamp = _run_stamp(timestamp)
+    return path / (f'{run_name}_{stamp}' if run_name else stamp)
+
+
+def sweep_run_dir(run_name, event='pain', timestamp=None):
+    """A tiered nomination run. All grid combinatorics live as ROWS in this
+    run's results.parquet — never as sibling folders."""
+    return ANALYSIS_DIR / event / 'sweeps' / f'{run_name}_{_run_stamp(timestamp)}'
 
 
 # ============================================================================

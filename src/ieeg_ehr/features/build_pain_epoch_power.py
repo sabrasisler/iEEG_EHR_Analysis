@@ -1,342 +1,335 @@
+#!/usr/bin/env python3
 """
-Expensive-ish cache step: for each subject, find each pain-score event's
-5-minute pre-event PSD epoch, apply the raw_voltage QC mask (monopolar,
-translated onto bipolar pairs), average log-power per channel/freq-bin over
-the epoch, and write one CSV per subject/session
-(the epoch-power cache: sub-XXX_ses-YY_epoch_channel_power.csv).
+P1.1 cache builder: slice the continuous bipolar PSD to pain-event epochs and
+store it PER WINDOW.
 
-This is the only step in the pain feature path that touches NWB. Region grouping,
-subject weighting, and delta-from-baseline all happen later in
-plot_pain_heatmaps.py so they can be iterated on without re-running this.
+Emits two artifacts per subject/session into the base unit
+`features/pain/psd_epochs/epoch-<N>min-pre/`:
 
-Each subject/session CSV gets a sidecar `*.provenance.json` recording the
-mask label, epoch parameters, and git commit/dirty state used to generate
-it, so any cache file on Oak can be traced back to the code + inputs that
-produced it.
+  cache/sub-XXX_ses-YY_epochs.parquet   per-window log-power, long format
+  epoch_defs/sub-XXX_ses-YY_defs.parquet  tiny index: one row per epoch
+
+WHAT THIS DOES NOT DO (all of it deliberate — architecture.md PART 1, and the
+2026-07-27 decisions):
+
+  - **No averaging.** The old version averaged log-power over the epoch, which
+    forced the log-vs-linear and normalize-before-vs-after choices at cache
+    time. Both are view axes now (view_registry AXIS 3/4). Averaging before
+    normalizing is not the same as normalizing before averaging (Jensen), so
+    the cache has to keep per-window granularity for those to stay free
+    recomputes.
+  - **No normalization.** Baseline and z-scoring are view axes 2 and 3.
+  - **No QC mask, and no mask column.** The cache stores raw slices; the
+    raw-voltage mask is a view-time join on (run, channel, 60s bin). This
+    decouples the cache from the mask entirely: switching masks no longer
+    invalidates ~47 GB of cache, and P0.1 no longer blocks building it.
+  - **No line-noise filtering.** The old version skipped `contains_line_noise`
+    bins. Bin i's line-noise status is a fixed property of the frequency grid
+    (bin edges vs 60 Hz harmonics), recoverable at view time from the manifest,
+    so dropping those rows here would bake in a choice for no storage win worth
+    having.
+  - **No EPOCH_MAX_EXCLUDED_FRAC.** That threshold is mask-derived, so it moved
+    to the view layer with the mask.
+  - **Non-finite values are stored, not dropped.** A dead channel can have
+    log10(0) = -inf at some bins without tripping raw-voltage QC. The old code
+    dropped those channel-epochs; "raw slices only" means we keep them. They
+    are COUNTED and the count goes in the sidecar, so the hazard is visible
+    rather than silent. Views must handle non-finite.
+
+Memory: runs are opened one at a time and each epoch is written as its own
+Parquet row group via a streaming ParquetWriter, so peak memory is one run's
+PSD plus one epoch's frame — not the whole subject. The largest subject
+(sub-256: 199 pairs x 137 events) is ~409M rows / 1.6 GB, which would not fit
+comfortably any other way.
 
 Run on a dev/interactive Slurm shell (never the login node):
     module load python/3.12
     source $GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate
-    python -m ieeg_ehr.features.build_pain_epoch_power --subjects 071 085
+    python -m ieeg_ehr.features.build_pain_epoch_power --subjects 071
 """
 
 import argparse
-import json
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
 from pynwb import NWBHDF5IO
 
-from ieeg_ehr import config
-from ieeg_ehr import config as qc_config
-from ieeg_ehr.io import nwb as io_utils
+from ieeg_ehr import config, io
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
-BIN_SEC = 60.0
-
-CACHE_COLUMNS = [
-    'subject', 'session', 'run', 'pain_event_id', 'pain_score', 'pain_bin',
-    'channel', 'dk_anode_label', 'freq_bin_index', 'bin_low_hz', 'bin_high_hz',
-    'mean_log_power', 'n_time_rows_used', 'frac_excluded',
-]
+# Long-format cache schema (architecture.md PART 1). Kept narrow on purpose:
+# everything constant within an epoch (subject, session, run, pain score) lives
+# in the epoch_defs index and joins on epoch_id, rather than being repeated
+# across hundreds of millions of rows.
+CACHE_COLUMNS = ['epoch_id', 'window_idx', 'channel', 'bin', 'log_power']
 
 
-def load_pain_scores(subject, session):
-    csv_path = config.pain_scores_csv(subject, session)
-    if not csv_path.exists():
-        return None
-    df = pd.read_csv(csv_path)
-    df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
-    df['pain_bin'] = df['max_pain'].apply(config.pain_bin_for_score)
-    df = df.reset_index(drop=True)
-    df['pain_event_id'] = df.index
-    return df
+def _run_time_index(nwb_path):
+    """Timing metadata for one run's PSD, WITHOUT reading the data array.
 
-
-def load_mask(subject, session, mask_label):
-    mask_path = config.mask_csv(subject, session, mask_label)
-    if not mask_path.exists():
-        logger.warning('No raw_voltage mask for sub-%s ses-%s at %s', subject, session, mask_path)
-        return None
-    return pd.read_csv(mask_path, usecols=['run_id', 'channel', 'bin_start', 'excluded'])
-
-
-def _load_run_psd(nwb_path):
-    """Open one bipolar_fft NWB and pull everything needed: PSD log-power,
-    frequency bins, per-pair channel names + DK anode labels, and enough
-    timing metadata to reconstruct both run-relative and absolute
-    timestamps for each PSD row."""
-    io = NWBHDF5IO(str(nwb_path), 'r')
-    nwb = io.read()
-    decomp = nwb.processing['ecephys']['psd_log_bins']
-
-    log_power = decomp.data[:]  # (n_time, n_pairs, n_bins)
-    bands = decomp.bands.to_dataframe()
-    lo = bands['band_limits'].apply(lambda t: t[0]).to_numpy()
-    hi = bands['band_limits'].apply(lambda t: t[1]).to_numpy()
-    bin_edges = np.concatenate([lo, hi[-1:]])
-    contains_line_noise = bands['contains_line_noise'].to_numpy(dtype=bool)
-
-    elec_df = nwb.electrodes.to_dataframe()
-    channel_names = list(elec_df['location'])
-    if 'Desikan_Killiany_anode' in elec_df.columns:
-        dk_anode_labels = list(elec_df['Desikan_Killiany_anode'])
-    else:
-        # Some subjects' electrode tables lack DK atlas registration entirely
-        # (e.g. no volumetric parcellation run for them) -- treat every
-        # channel as unmapped (None) rather than crashing; region_for_dk_label
-        # already treats NaN/None as "drop, log count", so these channels
-        # just won't contribute to any ROI region downstream, same as an
-        # occipital/white-matter channel would.
-        logger.warning('No Desikan_Killiany_anode column in electrode table for %s -- '
-                        'treating all %d channels as unmapped', nwb_path, len(channel_names))
-        dk_anode_labels = [None] * len(channel_names)
-    rate = float(decomp.rate)
-    starting_time = float(decomp.starting_time)
-    session_start_time = nwb.session_start_time
-
-    io.close()
-
-    n_time = log_power.shape[0]
+    Two-pass design: this cheap pass builds the run index so each pain event can
+    be assigned to a run, and only the runs that actually carry an epoch get
+    opened again for their (potentially hundreds of MB) data.
+    """
+    with NWBHDF5IO(str(nwb_path), 'r') as handle:
+        nwb = handle.read()
+        decomp = nwb.processing['ecephys']['psd_log_bins']
+        n_time = decomp.data.shape[0]
+        rate = float(decomp.rate)
+        starting_time = float(decomp.starting_time)
+        session_start = nwb.session_start_time
     run_seconds = starting_time + np.arange(n_time) / rate
-    run_datetimes = pd.to_datetime(session_start_time) + pd.to_timedelta(run_seconds, unit='s')
-    run_datetimes = run_datetimes.tz_localize(None)
-
-    return {
-        'log_power': log_power,
-        'bin_edges': bin_edges,
-        'contains_line_noise': contains_line_noise,
-        'channel_names': channel_names,
-        'dk_anode_labels': dk_anode_labels,
-        'run_seconds': run_seconds,
-        'run_datetimes': run_datetimes,
-    }
+    dts = pd.to_datetime(session_start) + pd.to_timedelta(run_seconds, unit='s')
+    return {'path': nwb_path, 'n_time': n_time, 'rate': rate,
+            'datetimes': dts.tz_localize(None)}
 
 
-def _find_matching_run(pain_time, window_start, runs_psd):
-    """Return the run dict whose PSD covers [window_start, pain_time), or
-    None. Returns ('boundary', None) instead of (None, None) if pain_time
-    falls inside a run's range but window_start does not (i.e. the epoch
-    would cross into a prior run) -- caller should count that separately
-    from a plain no-match."""
-    for run in runs_psd:
-        dts = run['run_datetimes']
-        if dts[0] <= pain_time <= dts[-1]:
-            if window_start >= dts[0]:
-                return 'match', run
-            return 'boundary', None
-    return 'no_match', None
+def _load_run_arrays(nwb_path):
+    """The data + per-pair/per-bin metadata for one run. Called once per run
+    that carries at least one epoch."""
+    with NWBHDF5IO(str(nwb_path), 'r') as handle:
+        nwb = handle.read()
+        decomp = nwb.processing['ecephys']['psd_log_bins']
+        log_power = decomp.data[:]              # (n_time, n_pairs, n_bins)
+        bands = decomp.bands.to_dataframe()
+        lo = bands['band_limits'].apply(lambda t: t[0]).to_numpy()
+        hi = bands['band_limits'].apply(lambda t: t[1]).to_numpy()
+        bin_edges = np.concatenate([lo, hi[-1:]])
+        contains_line_noise = bands['contains_line_noise'].to_numpy(dtype=bool)
+        elec = nwb.electrodes.to_dataframe()
+        channels = list(elec['location'])
+        dk = (list(elec['Desikan_Killiany_anode'])
+              if 'Desikan_Killiany_anode' in elec.columns else [None] * len(channels))
+    return {'log_power': log_power, 'bin_edges': bin_edges,
+            'contains_line_noise': contains_line_noise,
+            'channels': channels, 'dk_anode': dk}
 
 
-def _excluded_mask(run, run_id_full, epoch_rows, mask_df):
-    """(n_epoch_rows, n_pairs) bool array: True where either the anode or
-    cathode monopolar channel is excluded in the raw_voltage mask at that
-    row's enclosing 60s bin. All-False if mask_df is None."""
-    n_sel = len(epoch_rows)
-    channel_names = run['channel_names']
-    n_pairs = len(channel_names)
+def _assign_epochs(pain_df, run_index, epoch_minutes):
+    """One row per usable pain event: which run covers its pre-event window, and
+    which PSD rows that window spans.
 
-    if mask_df is None or n_sel == 0:
-        return np.zeros((n_sel, n_pairs), dtype=bool)
-
-    anode_mono = np.array([c.split('-', 1)[0] for c in channel_names])
-    cathode_mono = np.array([c.split('-', 1)[1] for c in channel_names])
-    bin_starts = np.floor(run['run_seconds'][epoch_rows] / BIN_SEC) * BIN_SEC
-
-    row_idx, pair_idx = np.meshgrid(np.arange(n_sel), np.arange(n_pairs), indexing='ij')
-    long_df = pd.DataFrame({
-        'bin_start': bin_starts[row_idx.ravel()],
-        'anode_channel': anode_mono[pair_idx.ravel()],
-        'cathode_channel': cathode_mono[pair_idx.ravel()],
-    })
-
-    run_mask = mask_df[mask_df['run_id'] == run_id_full]
-    anode_excl = long_df.merge(
-        run_mask.rename(columns={'channel': 'anode_channel'}),
-        on=['bin_start', 'anode_channel'], how='left',
-    )['excluded'].fillna(False).to_numpy()
-    cathode_excl = long_df.merge(
-        run_mask.rename(columns={'channel': 'cathode_channel'}),
-        on=['bin_start', 'cathode_channel'], how='left',
-    )['excluded'].fillna(False).to_numpy()
-
-    return (anode_excl | cathode_excl).reshape(n_sel, n_pairs)
-
-
-def process_subject_session(subject, session, mask_label, epoch_minutes, max_excluded_frac):
-    pain_df = load_pain_scores(subject, session)
-    if pain_df is None or pain_df.empty:
-        logger.info('sub-%s ses-%s: no pain scores, skipping', subject, session)
-        return None
-
-    session_runs = io_utils.get_session_runs(subject, session)
-    mask_df = load_mask(subject, session, mask_label)
-
-    runs_psd = []
-    for _, run, _raw_nwb_path in session_runs:
-        nwb_path = config.bipolar_psd_nwb_path(subject, session, run)
-        if not nwb_path.exists():
-            logger.warning('sub-%s ses-%s run-%s: no bipolar_fft NWB at %s', subject, session, run, nwb_path)
-            continue
-        run_data = _load_run_psd(nwb_path)
-        run_data['run'] = run
-        run_data['run_id_full'] = f'run-{run}'
-        runs_psd.append(run_data)
-
-    if not runs_psd:
-        logger.warning('sub-%s ses-%s: no usable bipolar_fft runs, skipping', subject, session)
-        return None
-
-    n_no_match = 0
-    n_boundary_drop = 0
-    n_dropped_channel_epochs = 0
-    out_rows = []
-
-    for _, pain_row in pain_df.iterrows():
-        pain_bin = pain_row['pain_bin']
-        if pain_bin is None:
-            continue
-        pain_time = pain_row['date']
+    An epoch is dropped if no run covers it, or if the window would straddle a
+    run boundary (the PSD is discontinuous across runs, so a straddling epoch
+    would silently mix two recordings).
+    """
+    epochs, n_no_match, n_boundary = [], 0, 0
+    for _, row in pain_df.iterrows():
+        pain_time = row['date']
         window_start = pain_time - pd.Timedelta(minutes=epoch_minutes)
-
-        status, run = _find_matching_run(pain_time, window_start, runs_psd)
-        if status == 'no_match':
-            n_no_match += 1
+        hit = None
+        for run_id, meta in run_index.items():
+            dts = meta['datetimes']
+            if len(dts) and dts[0] <= pain_time <= dts[-1]:
+                if window_start < dts[0]:
+                    n_boundary += 1
+                    hit = 'boundary'
+                    break
+                sel = np.where((dts >= window_start) & (dts < pain_time))[0]
+                if len(sel) == 0:
+                    break
+                hit = (run_id, int(sel[0]), int(sel[-1]) + 1, len(sel))
+                break
+        if hit is None or hit == 'boundary':
+            if hit is None:
+                n_no_match += 1
             continue
-        if status == 'boundary':
-            n_boundary_drop += 1
-            continue
+        run_id, r0, r1, n_win = hit
+        epochs.append({'run': run_id, 'row_start': r0, 'row_stop': r1,
+                       'n_windows': n_win, 'pain_event_id': int(row['pain_event_id']),
+                       'pain_score': row['max_pain'], 'pain_time': pain_time,
+                       'window_start': window_start})
+    return epochs, n_no_match, n_boundary
 
-        dts = run['run_datetimes']
-        row_mask = (dts >= window_start) & (dts < pain_time)
-        epoch_rows = np.where(row_mask)[0]
-        if len(epoch_rows) == 0:
-            n_no_match += 1
-            continue
 
-        excluded = _excluded_mask(run, run['run_id_full'], epoch_rows, mask_df)
-        epoch_log_power = run['log_power'][epoch_rows]  # (n_epoch_rows, n_pairs, n_bins)
-        n_epoch_rows = epoch_log_power.shape[0]
+def build_subject_session(subject, session, epoch_minutes, overwrite=False):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
 
-        for pair_i, channel in enumerate(run['channel_names']):
-            row_excluded = excluded[:, pair_i]
-            n_kept = int((~row_excluded).sum())
-            frac_excluded = 1.0 - (n_kept / n_epoch_rows)
-            if frac_excluded > max_excluded_frac:
-                n_dropped_channel_epochs += 1
-                continue
-
-            kept_power = epoch_log_power[~row_excluded, pair_i, :]  # (n_kept, n_bins)
-            if not np.all(np.isfinite(kept_power)):
-                # A dead/flat channel can have literally zero stored linear
-                # power at some bins (log10(0) = -inf) without ever tripping
-                # the raw_voltage QC mask (e.g. a channel that's flat only at
-                # this specific frequency/time, not overall). One -inf here
-                # would otherwise poison this channel's mean_log_power for
-                # every downstream aggregate/plot that touches it -- drop the
-                # whole channel-epoch instead, same as an over-excluded one.
-                n_dropped_channel_epochs += 1
-                continue
-            mean_log_power = kept_power.mean(axis=0)  # (n_bins,)
-            dk_label = run['dk_anode_labels'][pair_i]
-
-            for bin_i in range(len(mean_log_power)):
-                if run['contains_line_noise'][bin_i]:
-                    continue
-                out_rows.append((
-                    subject, session, run['run'], int(pain_row['pain_event_id']),
-                    pain_row['max_pain'], pain_bin, channel, dk_label, bin_i,
-                    run['bin_edges'][bin_i], run['bin_edges'][bin_i + 1],
-                    mean_log_power[bin_i], n_kept, frac_excluded,
-                ))
-
-    logger.info(
-        'sub-%s ses-%s: %d pain events, %d no matching run, %d dropped (epoch crosses run boundary), '
-        '%d channel-epochs dropped (exclusion frac > %.2f)',
-        subject, session, len(pain_df), n_no_match, n_boundary_drop,
-        n_dropped_channel_epochs, max_excluded_frac,
-    )
-
-    if not out_rows:
+    cache_path = config.pain_epoch_cache_path(subject, session, epoch_minutes)
+    defs_path = config.pain_epoch_defs_path(subject, session, epoch_minutes)
+    if cache_path.exists() and not overwrite:
+        logger.info('sub-%s ses-%s: cache exists, skipping (use --overwrite)', subject, session)
         return None
 
-    out_df = pd.DataFrame(out_rows, columns=CACHE_COLUMNS)
-    out_path = config.epoch_channel_power_csv(subject, session)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_df.to_csv(out_path, index=False)
-    logger.info('sub-%s ses-%s: wrote %d rows to %s', subject, session, len(out_df), out_path)
+    scores = config.pain_scores_csv(subject, session)
+    if not scores.exists():
+        logger.warning('sub-%s ses-%s: no pain scores at %s', subject, session, scores)
+        return None
+    pain_df = pd.read_csv(scores, parse_dates=['date'])
+    if 'pain_event_id' not in pain_df.columns:
+        pain_df = pain_df.reset_index().rename(columns={'index': 'pain_event_id'})
+    pain_df = pain_df.dropna(subset=['date', 'max_pain'])
 
-    _write_provenance(subject, session, mask_label, epoch_minutes, max_excluded_frac, {
-        'n_pain_events': len(pain_df),
-        'n_no_matching_run': n_no_match,
-        'n_boundary_drop': n_boundary_drop,
-        'n_dropped_channel_epochs': n_dropped_channel_epochs,
-        'n_rows_written': len(out_df),
-    })
-    return out_path
+    registry = pd.read_csv(config.FILE_REGISTRY_CSV)
+    runs = registry[(registry.sub_id == f'sub-{subject}')
+                    & (registry.ses_id == f'ses-{session}')].run_id.unique()
 
+    run_index = {}
+    for r in runs:
+        rid = str(r).replace('run-', '')
+        p = config.bipolar_psd_nwb_path(subject, session, rid)
+        if p.exists():
+            run_index[rid] = _run_time_index(p)
+    if not run_index:
+        logger.warning('sub-%s ses-%s: no bipolar_fft runs on disk, skipping', subject, session)
+        return None
 
-def _write_provenance(subject, session, mask_label, epoch_minutes, max_excluded_frac, counts):
-    provenance = {
-        'script': 'ieeg_ehr/features/build_pain_epoch_power.py',
-        'git': qc_config.git_provenance(),
-        'subject': subject,
-        'session': session,
-        'params': {
-            'mask_label': mask_label or config.CANONICAL_MASK_LABEL,
-            'mask_dir': str(config.raw_voltage_mask_dir(mask_label)),
-            'epoch_minutes': epoch_minutes,
-            'max_excluded_frac': max_excluded_frac,
-            'pain_bin_edges': config.PAIN_BIN_EDGES,
-        },
-        'inputs': {
-            'pain_scores_csv': str(config.pain_scores_csv(subject, session)),
-            'bipolar_psd_deriv_root': str(config.BIPOLAR_PSD_DERIV_ROOT),
-        },
-        'counts': counts,
-    }
-    prov_path = config.epoch_channel_power_provenance_json(subject, session)
-    prov_path.write_text(json.dumps(provenance, indent=2))
+    epochs, n_no_match, n_boundary = _assign_epochs(pain_df, run_index, epoch_minutes)
+    if not epochs:
+        logger.warning('sub-%s ses-%s: %d pain events, none usable (%d no run, %d boundary)',
+                       subject, session, len(pain_df), n_no_match, n_boundary)
+        return None
 
+    for i, e in enumerate(epochs):
+        e['epoch_id'] = i
 
-def process_subject(subject, mask_label, epoch_minutes, max_excluded_frac):
-    sessions = sorted({s for s, _run, _p in io_utils.get_session_runs(subject)})
-    if not sessions:
-        logger.warning('sub-%s: no runs found in file registry, skipping', subject)
-        return
-    for session in sessions:
-        process_subject_session(subject, session, mask_label, epoch_minutes, max_excluded_frac)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    defs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    schema = pa.schema([
+        ('epoch_id', pa.int32()),
+        ('window_idx', pa.int16()),
+        ('channel', pa.dictionary(pa.int16(), pa.string())),
+        ('bin', pa.int8()),
+        ('log_power', pa.float32()),
+    ])
+
+    writer = pq.ParquetWriter(cache_path, schema, compression='snappy')
+    n_rows = n_nonfinite = 0
+    bin_edges = contains_line_noise = None
+    n_channels_by_epoch = {}
+    try:
+        # Group by run so each run's PSD is read exactly once.
+        by_run = {}
+        for e in epochs:
+            by_run.setdefault(e['run'], []).append(e)
+
+        for run_id, run_epochs in by_run.items():
+            arrays = _load_run_arrays(run_index[run_id]['path'])
+            if bin_edges is None:
+                bin_edges = arrays['bin_edges']
+                contains_line_noise = arrays['contains_line_noise']
+            lp = arrays['log_power']
+            channels = arrays['channels']
+            n_pairs, n_bins = lp.shape[1], lp.shape[2]
+
+            for e in run_epochs:
+                block = lp[e['row_start']:e['row_stop']]        # (n_win, n_pairs, n_bins)
+                n_win = block.shape[0]
+                n_channels_by_epoch[e['epoch_id']] = n_pairs
+                n_nonfinite += int((~np.isfinite(block)).sum())
+
+                # C-order ravel of (win, pair, bin) -> the index columns are the
+                # matching repeat/tile pattern. Built with numpy rather than a
+                # Python loop: this is ~3M rows per epoch.
+                tbl = pa.table({
+                    'epoch_id': pa.array(np.full(block.size, e['epoch_id'], dtype=np.int32)),
+                    'window_idx': pa.array(np.repeat(np.arange(n_win, dtype=np.int16),
+                                                     n_pairs * n_bins)),
+                    'channel': pa.array(np.tile(np.repeat(channels, n_bins), n_win)
+                                        ).dictionary_encode(),
+                    'bin': pa.array(np.tile(np.arange(n_bins, dtype=np.int8), n_win * n_pairs)),
+                    'log_power': pa.array(
+                        block.reshape(-1).astype(config.CACHE_FLOAT_DTYPE, copy=False)),
+                }, schema=schema)
+                writer.write_table(tbl)
+                n_rows += block.size
+            del arrays, lp
+    finally:
+        writer.close()
+
+    defs = pd.DataFrame([{
+        'epoch_id': e['epoch_id'], 'subject_id': f'sub-{subject}',
+        'session_id': f'ses-{session}', 'run_id': f"run-{e['run']}",
+        'pain_event_id': e['pain_event_id'], 'pain_score': e['pain_score'],
+        'pain_time': e['pain_time'], 'window_start': e['window_start'],
+        'row_start': e['row_start'], 'row_stop': e['row_stop'],
+        'n_windows': e['n_windows'], 'n_channels': n_channels_by_epoch[e['epoch_id']],
+    } for e in epochs])
+
+    epoch_params = {'epoch_minutes_before': epoch_minutes, 'anchor': 'pain_score_time',
+                    'masked': False, 'averaged': False, 'normalized': False}
+    io.write_table(defs, defs_path, kind='table',
+                   script='ieeg_ehr/features/build_pain_epoch_power.py',
+                   params=epoch_params, subjects=[f'sub-{subject}'])
+
+    io.write_sidecar(cache_path, kind='table',
+                     script='ieeg_ehr/features/build_pain_epoch_power.py',
+                     params=dict(epoch_params, dtype=str(config.CACHE_FLOAT_DTYPE),
+                                 schema=CACHE_COLUMNS),
+                     parents=[str(run_index[r]['path']) for r in by_run],
+                     subjects=[f'sub-{subject}'],
+                     extra={'n_rows': int(n_rows), 'n_epochs': len(epochs),
+                            'n_pain_events': int(len(pain_df)),
+                            'n_no_matching_run': n_no_match,
+                            'n_boundary_drop': n_boundary,
+                            'n_nonfinite_values': int(n_nonfinite)})
+
+    logger.info('sub-%s ses-%s: %d epochs, %d rows -> %s (%.2f GB)%s',
+                subject, session, len(epochs), n_rows, cache_path.name,
+                cache_path.stat().st_size / 1e9,
+                f'  [{n_nonfinite} non-finite]' if n_nonfinite else '')
+    return cache_path, bin_edges, contains_line_noise
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--subjects', nargs='+', default=None,
-                         help='Subject IDs without sub- prefix (default: config.exploratory_subjects()).')
-    parser.add_argument('--mask-label', default=None,
-                         help=f'Raw-voltage mask label (default: {config.CANONICAL_MASK_LABEL}).')
-    parser.add_argument('--epoch-minutes', type=float, default=config.EPOCH_MINUTES_BEFORE)
-    parser.add_argument('--max-excluded-frac', type=float, default=config.EPOCH_MAX_EXCLUDED_FRAC)
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--subjects', nargs='+', required=True,
+                    help='Subject IDs, e.g. 071 085 (or sub-071).')
+    ap.add_argument('--session', default='01')
+    ap.add_argument('--epoch-minutes', type=float, default=None,
+                    help=f'Pre-event window length (default: config {config.EPOCH_MINUTES_BEFORE}).')
+    ap.add_argument('--overwrite', action='store_true')
+    ap.add_argument('--write-manifest', action='store_true',
+                    help='Write the base unit manifest.json. One task in an array should '
+                         'set this; it describes the unit, not the subject.')
+    args = ap.parse_args()
 
-    subjects = args.subjects or config.exploratory_subjects()
-    logger.info('Processing %d subjects: %s', len(subjects), subjects)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    warnings.filterwarnings('ignore', category=UserWarning, module='pynwb')
 
-    failed = []
-    for subject in subjects:
-        try:
-            process_subject(subject, args.mask_label, args.epoch_minutes, args.max_excluded_frac)
-        except Exception:
-            # One subject's unexpected failure (e.g. a malformed/unusual NWB)
-            # must not take down the rest of the batch -- log the full
-            # traceback and keep going, then summarize failures at the end.
-            logger.exception('sub-%s: unhandled error, skipping this subject', subject)
-            failed.append(subject)
+    epoch_minutes = args.epoch_minutes if args.epoch_minutes is not None else config.EPOCH_MINUTES_BEFORE
+    io.warn_if_dirty()
 
-    if failed:
-        logger.warning('%d/%d subjects failed and were skipped: %s', len(failed), len(subjects), failed)
+    bin_edges = line_noise = None
+    for s in args.subjects:
+        subject = s.replace('sub-', '')
+        for session in ([args.session] if args.session != 'all'
+                        else _sessions_for(subject)):
+            result = build_subject_session(subject, session, epoch_minutes,
+                                           overwrite=args.overwrite)
+            if result and bin_edges is None:
+                _, bin_edges, line_noise = result
+
+    if args.write_manifest and bin_edges is not None:
+        unit = config.pain_epoch_unit_dir(epoch_minutes)
+        io.write_manifest(unit, script='ieeg_ehr/features/build_pain_epoch_power.py',
+                          params={'epoch_minutes_before': epoch_minutes,
+                                  'anchor': 'pain_score_time',
+                                  'window_sec': config.PSD_WINDOW_SEC,
+                                  'overlap_frac': config.PSD_OVERLAP_FRAC,
+                                  'n_log_bins': config.PSD_N_LOG_BINS,
+                                  'dtype': str(config.CACHE_FLOAT_DTYPE),
+                                  'schema': CACHE_COLUMNS,
+                                  'masked': False, 'averaged': False, 'normalized': False},
+                          extra={'bin_edges_hz': [float(x) for x in bin_edges],
+                                 'contains_line_noise': [bool(x) for x in line_noise],
+                                 'note': 'Cache is RAW slices: no QC mask, no line-noise '
+                                         'filtering, no averaging, no normalization. Masking '
+                                         'is a view-time join; line-noise status is derivable '
+                                         'from bin_edges_hz above.'})
+        logger.info('wrote unit manifest -> %s', unit / 'manifest.json')
+
+
+def _sessions_for(subject):
+    reg = pd.read_csv(config.FILE_REGISTRY_CSV)
+    ses = reg[reg.sub_id == f'sub-{subject}'].ses_id.unique()
+    return [str(s).replace('ses-', '') for s in ses]
 
 
 if __name__ == '__main__':
