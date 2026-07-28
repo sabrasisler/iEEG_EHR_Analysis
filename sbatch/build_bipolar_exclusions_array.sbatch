@@ -2,7 +2,7 @@
 #SBATCH -p normal
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64GB
+#SBATCH --mem=24GB
 #SBATCH --array=0-16%8
 #SBATCH -J bipolar_excl
 #SBATCH -o logs/bipolar_excl_%A_%a.out
@@ -14,6 +14,15 @@
 # 82 subjects / BATCH_SIZE=5 -> ceil(82/5)-1 = 16, hence --array=0-16.
 # Recompute if SUBJECTS_FILE/BATCH_SIZE changes:
 #   python3 -c "import math; print(math.ceil(N_SUBJECTS/BATCH_SIZE)-1)"
+#
+# MEMORY: 24GB, lowered from 64GB on 2026-07-28. The 64GB was inferred from input
+# CSV sizes (7+GB) before the vectorized rewrite. MEASURED MaxRSS on a real task is
+# 9.36GB (job 36181325_0, sub-250, BATCH_SIZE=1) -- build_bipolar_exclusions reads
+# only METRIC_USECOLS, not whole rows. The oversized ask had a real cost: it left
+# 4 tasks unscheduled for ~4h behind ~1100 pending jobs on `normal` while the same
+# work at 24GB would have run. Subjects within a task are processed SEQUENTIALLY,
+# so the peak does not scale with BATCH_SIZE. Raise this again only against a
+# measured MaxRSS, not a file size.
 
 module load python/3.12
 source $GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate
