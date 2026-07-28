@@ -390,6 +390,22 @@ def pain_epoch_defs_path(subject, session, minutes_before=None):
             / f'sub-{subject}_ses-{session}_defs.parquet')
 
 
+CHANNEL_META_SUBDIR = 'channel_meta'
+
+
+def pain_epoch_channel_meta_path(subject, session, minutes_before=None):
+    """Per-channel metadata the cache cannot hold: pair ORDER (which decodes the
+    cache's C-order ravel) and DK labels (which the region axis needs), keyed
+    (run_id, pair_index).
+
+    Lives beside the cache rather than in views/ because it is a property of the
+    cache's own encoding, not of any one view config -- every view of this unit
+    reads the same table. Run TIMING is deliberately NOT here: it is constant per
+    run, so it goes in the epoch_defs index instead."""
+    return (pain_epoch_unit_dir(minutes_before) / CHANNEL_META_SUBDIR
+            / f'sub-{subject}_ses-{session}_channels.parquet')
+
+
 def pain_epoch_views_dir(view_label, config_hash, minutes_before=None):
     """Where a MATERIALIZED view lands — disposable performance cache, deletable.
 

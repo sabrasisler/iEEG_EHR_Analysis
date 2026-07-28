@@ -28,6 +28,17 @@ export PATH="$HOME/bin:$PATH"
 module load python/3.12
 source "$GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate"
 
+# RUN THE CODE THIS JOB WAS SUBMITTED FROM.
+# `ieeg_ehr` is pip-installed editable against the MAIN checkout, so a bare
+# `python -m ieeg_ehr...` executes /…/iEEG_EHR_Analysis/src regardless of where
+# sbatch was invoked. Submitting from a worktree would then silently run the main
+# checkout's code -- old code, under a commit hash that claims otherwise, which is
+# exactly what the commit-before-you-run rule exists to prevent. Prepending the
+# submit directory's src/ makes "what ran" and "what I submitted" the same thing;
+# it is a no-op when submitting from the main checkout.
+export PYTHONPATH="${SLURM_SUBMIT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+python -c "import ieeg_ehr; print('ieeg_ehr:', ieeg_ehr.__file__)"
+
 DEFS_DIR="/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/features/pain/psd_epochs/epoch-5min-pre/epoch_defs"
 mapfile -t STEMS < <(ls "$DEFS_DIR"/sub-*_ses-*_defs.parquet | xargs -n1 basename | sed 's/_defs\.parquet$//')
 
