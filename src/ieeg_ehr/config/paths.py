@@ -56,6 +56,19 @@ OUTDATED_ROOT     = DERIVATIVES_BASE / 'outdated'
 DEFAULT_LEVEL_ROOT   = QC_ROOT / 'raw_voltage'
 BIPOLAR_LEVEL_ROOT   = QC_ROOT / 'bipolar'
 FEATURE_LEVEL_ROOT   = QC_ROOT / 'feature_level'
+PSD_TIMING_ROOT      = QC_ROOT / 'psd_timing'
+
+
+def psd_timing_dir():
+    """Which PSD runs were written by the CURRENT windowing design.
+
+    Under qc/ rather than preprocessed/ because it is a data-QUALITY fact about the
+    stored PSD that every downstream consumer inherits, which is what this tree is
+    for — not a feature. It deliberately does NOT follow the
+    metrics/exclusions/masks layout of the other levels: there is no threshold to
+    sweep here. A run either was or was not written by the current algorithm, so
+    there is one table and no metric/threshold split to make."""
+    return PSD_TIMING_ROOT
 
 
 def metrics_root(level_root):
