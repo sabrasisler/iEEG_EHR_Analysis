@@ -164,6 +164,51 @@ def subjects_with_epoch_cache(minutes_before=None):
                    for p in cache_dir.glob('sub-*_ses-*_epochs.parquet')})
 
 
+def viewable_subjects(split='discovery', mask_label=None, minutes_before=None, path=None):
+    """Subjects in `split` that can ACTUALLY produce a view today.
+
+    Intersects the split with everything a view run needs -- epoch cache, bipolar
+    mask, and a PSD written by the current windowing design -- and logs each
+    reason for exclusion separately. Computed rather than stored in a text file
+    because every one of those inputs is still moving (PSD re-extractions, mask
+    rollouts, new subjects), so a saved list would be wrong within hours.
+
+    Subjects with no DK labels are NOT excluded here: they are viewable per
+    channel, they merely produce an empty REGION table, and that is the view's
+    own loud error rather than a cohort fact.
+    """
+    from ieeg_ehr.config.paths import (CACHE_SUBDIR, bipolar_mask_dir,
+                                       bipolar_mask_label, pain_epoch_unit_dir)
+    from ieeg_ehr.qc import psd_timing
+
+    subjects = subjects_for_split(split, path=path)
+    cache = set(subjects_with_epoch_cache(minutes_before))
+    mask_dir = bipolar_mask_dir(mask_label or bipolar_mask_label('std10'))
+    masked = {p.name.split('_')[0].replace('sub-', '')
+              for p in mask_dir.glob('sub-*_ses-*.parquet')}
+    stale = set(psd_timing.rerun_subjects(psd_timing.load_run_timing(on_missing='none')
+                                          if psd_timing.run_timing_path().exists() else None)) \
+        if psd_timing.run_timing_path().exists() else set()
+    stale = {_norm(s) for s in stale}
+
+    out, dropped = [], {'no_epoch_cache': [], 'no_bipolar_mask': [], 'stale_psd': []}
+    for s in subjects:
+        if s not in cache:
+            dropped['no_epoch_cache'].append(s)
+        elif s not in masked:
+            dropped['no_bipolar_mask'].append(s)
+        elif s in stale:
+            dropped['stale_psd'].append(s)
+        else:
+            out.append(s)
+    for reason, ids in dropped.items():
+        if ids:
+            logger.warning('split=%s: %d subject(s) excluded (%s): %s',
+                           split, len(ids), reason, ids)
+    logger.info('split=%s: %d/%d subjects viewable', split, len(out), len(subjects))
+    return out
+
+
 def split_of(subject, path=None):
     """'discovery' or 'unassigned' for one subject."""
     return 'discovery' if _norm(subject) in set(discovery_subjects(path)) else 'unassigned'
@@ -279,9 +324,16 @@ def main():
     ap.add_argument('--build', action='store_true', help='Write the cohort file once')
     ap.add_argument('--overwrite', action='store_true')
     ap.add_argument('--show', action='store_true', help='Print the current assignment')
+    ap.add_argument('--runnable', metavar='SPLIT', nargs='?', const='discovery',
+                    help='Print subjects in SPLIT that can actually produce a view '
+                         '(one per line) -- for sizing and driving a Slurm array')
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
+    if args.runnable:
+        for s_ in viewable_subjects(args.runnable):
+            print(s_)
+        return
     if args.build:
         build_discovery_cohort_file(overwrite=args.overwrite)
     if args.show or not args.build:
