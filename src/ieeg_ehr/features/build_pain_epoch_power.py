@@ -57,6 +57,7 @@ import pandas as pd
 from pynwb import NWBHDF5IO
 
 from ieeg_ehr import config, io
+from ieeg_ehr.qc import psd_timing
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,8 @@ def _assign_epochs(pain_df, run_index, epoch_minutes):
     return epochs, n_no_match, n_boundary
 
 
-def build_subject_session(subject, session, epoch_minutes, overwrite=False):
+def build_subject_session(subject, session, epoch_minutes, overwrite=False,
+                          nonstandard_hop='refuse'):
     import pyarrow as pa
     import pyarrow.parquet as pq
 

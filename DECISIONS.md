@@ -301,3 +301,58 @@ point the epochs become ordinary 1s-hop epochs and the exclusion gate is deleted
 rather than kept. If a future analysis deliberately wants coarse-time-resolution
 features, that is a NEW feature family with its own epoch definition, not a
 re-admission of these rows.
+
+---
+
+## 2026-07-28 (addendum) — CORRECTION to the 60s-hop rationale above
+
+The entry above states the 5-window epochs have "~sqrt(60) more noise per
+estimate." **That is wrong**, and the record of it stays because this file is
+append-only. The decision it justified — exclude, then re-run the PSD — is
+unchanged; only the reason is.
+
+**What the files actually are.** Read off the NWB `DecompositionSeries`
+descriptions (sub-247 has one of each, which is how this was settled):
+
+    superseded  {"outer_window_sec": 60.0, "inner_segment_sec": 2.0, "overlap_frac": 0.5}
+                two-level: a 60 s outer window of ~59 overlapping 2 s inner
+                segments, Welch-AVERAGED into one spectrum per minute
+    current     {"window_sec": 2.0, "overlap_frac": 0.5, ...}
+                single-level: each 2 s window is its own periodogram, stepped 1 s
+
+So each 60 s value is an average of ~59 segments and is therefore *less* noisy per
+value, not more; and a 5-minute epoch under the old design covers ~295 inner
+segments — comparable raw data to 300 windows of the new design. The sqrt(60)
+claim inverted this.
+
+**The real reasons to exclude:**
+
+1. **Different estimator, with Jensen frozen into storage.** The old files hold
+   `log(linear-mean of ~59 segments)`; the new hold `log(single 2 s segment)`. An
+   epoch mean is then approximately `log(arithmetic mean)` versus a geometric mean
+   of per-second values. That is exactly the AXIS 4 log-vs-linear choice — except
+   baked into the file, where no view can undo it. The whole point of the
+   per-window cache is that this choice stays a free recompute; these runs remove
+   that freedom.
+2. **QC granularity.** A 60 s window maps 1:1 onto a 60 s mask bin, so masking is
+   all-or-nothing per minute, and `EPOCH_MAX_EXCLUDED_FRAC` operates over 5 values
+   rather than 300.
+3. **Feature-level QC** computes its per-window z metrics on 60 s windows instead
+   of 2 s — a different distribution feeding one threshold.
+
+**Also corrected: the cascade is narrower than claimed.** The entry above implies a
+PSD re-run invalidates "bipolar variance → std10 → bipolar mask." It does not. The
+bipolar variance metric is computed on the **time-domain** signal, and sub-247's
+metric CSV is on a 2 s grid (`window_start_time` = 0, 2, 4, 6, 8 …) even though its
+PSD is 60 s. The real cascade is PSD → epoch cache → views, plus
+`qc/feature_level/` power metrics. So the re-run should pass
+`--skip-variance-metrics`.
+
+**Mechanism, for the record:** an incomplete reprocessing pass, not corruption.
+`run_pipeline_bipolar.py` has no skip-if-exists and no `--runs` flag, so a partial
+re-run leaves both designs on disk with no complaint — which is why the audit
+(`qc/psd_timing/`) is derived per RUN rather than per subject.
+
+**Where it lives:** `src/ieeg_ehr/qc/psd_timing.py` (the check + `assert_subject_ok`),
+`src/ieeg_ehr/qc/audit_psd_timing.py` (the cohort sweep + re-run list),
+`docs/labnotebook/2026-07-28.md`.

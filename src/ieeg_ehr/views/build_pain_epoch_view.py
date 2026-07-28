@@ -35,17 +35,27 @@ import pandas as pd
 
 from ieeg_ehr import config, io
 from ieeg_ehr.config import roi_schemes
+from ieeg_ehr.qc import psd_timing
 from ieeg_ehr.views import axes, cache_reader, channel_meta, view_config as vc
 
 logger = logging.getLogger(__name__)
 
 
 def build_subject_view(subject, session, view_config, epoch_minutes=None,
-                       collect_epochs=True):
+                       collect_epochs=True, nonstandard_hop='refuse'):
     """Returns (epoch_table, subject_table, stats) for one subject/session."""
     t0 = time.time()
     epoch_minutes = epoch_minutes or view_config.epoch_minutes
     n_bins = config.PSD_N_LOG_BINS
+
+    # Was this subject's PSD written by the CURRENT windowing design? ONE lookup in
+    # the cached qc/psd_timing/ table -- no NWB reads, nothing per epoch. Runs from
+    # the superseded 60 s outer-window design store log(Welch-mean of ~59 segments)
+    # instead of log(single 2 s segment), which freezes the log-vs-linear averaging
+    # choice into the file where no view can undo it (DECISIONS.md 2026-07-28 +
+    # correction). Default refuses; an UNAUDITED subject also refuses, because
+    # silence must not read as approval.
+    psd_timing.assert_subject_ok(subject, policy=nonstandard_hop)
 
     defs = cache_reader.load_defs(subject, session, epoch_minutes)
     parquet_file, cache_path = cache_reader.open_cache(subject, session, epoch_minutes)
@@ -236,6 +246,9 @@ def main():
     ap.add_argument('--no-save', action='store_true',
                     help='Compute and report only. Default SAVES, so the numbers can be '
                          'inspected before a figure is trusted.')
+    ap.add_argument('--nonstandard-hop', choices=['refuse', 'drop', 'allow'], default='refuse',
+                    help='What to do when a subject was not written by the current PSD '
+                         'windowing design. Default refuses (DECISIONS.md 2026-07-28).')
     vc.add_view_arguments(ap)
     args = ap.parse_args()
 
@@ -248,7 +261,8 @@ def main():
     all_stats = []
     for s in args.subjects:
         subject = s.replace('sub-', '')
-        epoch_table, subject_table, stats = build_subject_view(subject, args.session, view)
+        epoch_table, subject_table, stats = build_subject_view(
+            subject, args.session, view, nonstandard_hop=args.nonstandard_hop)
         all_stats.append(stats)
         if args.no_save:
             continue
