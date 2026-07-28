@@ -53,7 +53,11 @@ date, or figure that prompted it.
       views MUST upcast to float64 to average (a float32 accumulator holds only
       6.0 sig figs) and to exponentiate to linear. Delete this line at the next
       commit. (→ DECISIONS 2026-07-27, docs/labnotebook/2026-07-27.md)
-- [ ] **Roll the 5 OOM-retry subjects into the pinned mask** — `250, 251, 255,
+- [x] **Roll the 5 OOM-retry subjects into the pinned mask** — done 2026-07-27
+      16:42–16:57 but never ticked; confirmed 2026-07-28 by inspection (all 89
+      mask CSVs present at the pinned label, coverage exactly the 89 sessions /
+      87 subjects predicted below). Delete this line at the next commit. Original
+      note kept for the record: `250, 251, 255,
       256, 257` have raw_voltage metrics on disk but no mask. They are exactly
       `remaining86` minus `new81`: they were in the metrics cohort but dropped
       from the rollup cohort because their metrics were still OOM-retrying when
@@ -80,6 +84,33 @@ date, or figure that prompted it.
       `config.CACHE_FLOAT_DTYPE` (float32) on write, and record the dtype in the
       manifest.
 - [ ] **P1.2 Storage sanity check** on one subject before building at scale.
+- [ ] **Make a missing mask impossible to miss.** Three paths silently fall back
+      to an unmasked baseline, and the failure is invisible in the output: an
+      unmasked baseline keeps artifact windows → inflates the std → deflates z →
+      the detector gets *less* sensitive for exactly the subjects whose QC inputs
+      were incomplete. Sites: `feature_level/detect_power_outlier.py:195-200`
+      (no mask file), `build_exclusions.py:153-159` (flatline
+      `--mask-from-label` with no mask file), and
+      `mask_projection.project_to_pairs` (an absent run, contact, or 60s bin all
+      read as "not excluded"). Escalate from `logger.warning` to a banner block
+      plus an explicit `--allow-unmasked` opt-in, so an array task cannot quietly
+      emit a degraded baseline. **Also: stop a label from claiming a mask it did
+      not use** — sub-236's flatline sat at
+      `logz4_masked-gross-std3_satmargin15_sw` with an unmasked baseline for
+      months, because the intermediate mask never contained it; if the fallback
+      fires, the output should not carry a `masked-<x>` label. **And record
+      per-run mask coverage in run_info**, so
+      `qc/report_mask_coverage.py`'s tier 2 does not have to reconstruct it by
+      joining against the mask CSVs.
+      (→ docs/labnotebook/2026-07-28.md)
+- [ ] **Revisit `_EXCLUDE_FROM_EXPLORATORY = {'236'}`** in `config/paths.py` now
+      that sub-236 has a real pinned mask (built 2026-07-28: its only gap was
+      `square_wave/frac0.9`; metrics were complete all along — 107 of 107
+      *readable* runs, the 2 absent registry runs being unparseable NWBs). It was
+      excluded because its rollups were incomplete, which is no longer true. Then
+      it needs bipolar `std10` and feature-level metrics to join the cohort, and
+      `cohorts/subjects_pain_epoch_cache.txt` (87) would go to 88.
+      (→ SCRATCHPAD "sub-236", docs/labnotebook/2026-07-28.md)
 
 ## Notebook-system follow-ups
 
