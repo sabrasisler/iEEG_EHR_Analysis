@@ -63,125 +63,36 @@ EPOCH_MAX_EXCLUDED_FRAC = 0.5
 # ============================================================================
 # REGION GROUPING
 # ============================================================================
+# The Desikan-Killiany -> ROI mapping now lives in config/roi_schemes.py as an
+# ORDERED DICT of category -> substring patterns, replacing the if/elif ladder
+# that used to sit here. Reason: the ladder's branch order was load-bearing
+# (specific parcels before catch-alls) and ROI_REGIONS was maintained separately,
+# so changing one ROI meant two edits plus reasoning about control flow. With a
+# dict, insertion order IS precedence, and a scheme can be swapped by name or
+# loaded from a JSON file on Oak without a commit.
+#
+# Behaviour is unchanged, and that is TESTED, not asserted: tests/
+# test_roi_schemes.py holds a verbatim copy of the original chain and checks both
+# agree on every DK label in the cohort.
+#
+# These names are re-exported so every existing `config.ROI_REGIONS` /
+# `config.region_for_dk_label(...)` call site keeps working untouched. Both
+# functions now take an optional `scheme=`.
 
-# Fine-grained, pain-circuitry-motivated Desikan-Killiany parcel -> ROI
-# category mapping (per user instruction, replacing the earlier coarse-lobe
-# placeholder). Order matters -- more specific checks (e.g. medialorbitofrontal
-# -> vmPFC) must come before general catch-alls (e.g. 'frontal' -> Frontal
-# (other)). Categories not in ROI_CATEGORIES below (Exclude, White Matter,
-# CSF/Ventricles, Occipital, Cerebellum, Other, Unlabeled) are dropped from
-# the region-level plots -- not a final decision on what to do with them,
-# just where things start per user instruction.
-def categorize_desikan_killiany(dk_label):
-    if pd.isna(dk_label):
-        return 'Unlabeled'
-    dk_label = str(dk_label).lower().strip("'\"")
+from ieeg_ehr.config.roi_schemes import (   # noqa: F401  (re-exported)
+    DEFAULT_ROI_SCHEME,
+    NON_ROI_CATEGORIES,
+    ROI_SCHEMES,
+    categorize_desikan_killiany,
+    region_for_dk_label,
+    resolve_roi_scheme,
+    roi_regions,
+    scheme_provenance,
+)
 
-    # -- Exclude / artifacts -------------------------------------------------
-    if any(x in dk_label for x in ['empty', 'unknown', 'undefined']):
-        return 'Exclude'
-
-    # -- Non-neural tissue ----------------------------------------------------
-    if any(x in dk_label for x in ['white-matter', 'ventraldc', 'cc_', 'wm-']):
-        return 'White Matter'
-    if any(x in dk_label for x in ['ventricle', 'csf', 'choroid-plexus', 'hypointensities']):
-        return 'CSF/Ventricles'
-
-    # -- Subcortical ------------------------------------------------------------
-    if 'hippocampus' in dk_label:
-        return 'Hippocampus'
-    if 'amygdala' in dk_label:
-        return 'Amygdala'
-    if 'thalamus' in dk_label:
-        return 'Thalamus'
-
-    # Basal Ganglia (grouped)
-    if any(x in dk_label for x in ['caudate', 'putamen', 'pallidum', 'accumbens']):
-        return 'Basal Ganglia'
-
-    if 'thalamus' in dk_label:
-        return 'Thalamus'
-
-    # -- Insula -----------------------------------------------------------------
-    if 'insula' in dk_label:
-        return 'Insula'
-
-    # -- Cingulate ----------------------------------------------------------------
-    if any(x in dk_label for x in ['caudalanteriorcingulate', 'rostralanteriorcingulate']):
-        return 'ACC'
-    if any(x in dk_label for x in ['posteriorcingulate', 'isthmuscingulate']):
-        return 'PCC'
-
-    # -- Prefrontal -- specific regions BEFORE general frontal catch-all --------
-    # vmPFC: medial OFC + frontal pole
-    if any(x in dk_label for x in ['medialorbitofrontal', 'frontalpole']):
-        return 'vmPFC'
-
-    # OFC: lateral orbital frontal
-    if 'lateralorbitofrontal' in dk_label:
-        return 'OFC'
-
-    # dlPFC: middle frontal gyrus (BA9/46)
-    if any(x in dk_label for x in ['rostralmiddlefrontal', 'caudalmiddlefrontal']):
-        return 'dlPFC'
-
-    # -- Somatosensory ------------------------------------------------------------
-    # S1: primary somatosensory (postcentral gyrus)
-    if 'postcentral' in dk_label:
-        return 'S1'
-
-    # S2: parietal operculum -- not a named DK label, captured under Parietal
-    # below (true S2 sits in the parietal operculum which DK doesn't isolate
-    # cleanly; flag here as a reminder -- supramarginal is the closest proxy)
-    if 'supramarginal' in dk_label:
-        return 'S2 (supramarginal)'
-
-    # -- Remaining frontal (SFG, etc.) --------------------------------------------
-    if any(x in dk_label for x in ['frontal', 'frontalpole', 'precentral', 'paracentral',
-                                   'parsopercularis', 'parsorbitalis', 'parstriangularis']):
-        return 'Frontal (other)'
-
-    # -- Temporal -----------------------------------------------------------------
-    if any(x in dk_label for x in [
-        'temporal', 'fusiform', 'entorhinal',
-        'parahippocampal', 'bankssts', 'transversetemporal', 'temporalpole',
-    ]):
-        return 'Temporal'
-
-    # -- Parietal -----------------------------------------------------------------
-    if any(x in dk_label for x in ['parietal', 'precuneus']):
-        return 'Parietal'
-
-    # -- Occipital ----------------------------------------------------------------
-    if any(x in dk_label for x in ['occipital', 'cuneus', 'pericalcarine', 'lingual']):
-        return 'Occipital'
-
-    # -- Cerebellum ---------------------------------------------------------------
-    if 'cerebellum' in dk_label:
-        return 'Cerebellum'
-
-    return 'Other'
-
-
-# Categories actually shown as rows in the region x freq-bin heatmaps, in
-# plot order. Everything else categorize_desikan_killiany() can return
-# (Exclude, White Matter, CSF/Ventricles, Occipital, Cerebellum, Other,
-# Unlabeled) is dropped -- not a final decision on what to do with those,
-# just where this analysis starts per user instruction.
-ROI_REGIONS = [
-    'Hippocampus', 'Amygdala', 'Thalamus', 'Basal Ganglia', 'Insula', 'ACC', 'PCC',
-    'vmPFC', 'OFC', 'dlPFC', 'S1', 'S2 (supramarginal)', 'Frontal (other)',
-    'Temporal', 'Parietal',
-]
-
-
-def region_for_dk_label(dk_label):
-    """Map one Desikan_Killiany_anode string to an ROI_REGIONS category, or
-    None if it falls outside the current ROI set (e.g. occipital, white
-    matter, unknown) -- callers must drop None and log how many channels
-    were dropped, not silently exclude."""
-    category = categorize_desikan_killiany(dk_label)
-    return category if category in ROI_REGIONS else None
+# The default scheme's display rows, as a plain list -- kept as a module constant
+# because dozens of call sites read `config.ROI_REGIONS` directly.
+ROI_REGIONS = roi_regions()
 
 
 # ============================================================================

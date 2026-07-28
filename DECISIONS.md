@@ -248,3 +248,56 @@ recipe if the import fails.
 **What would reverse it:** the P1.2 storage check choosing HDF5/Zarr over Parquet
 for the cache — that changes `write_table`'s backend for the cache only, not the
 sidecar contract, which is format-agnostic on purpose.
+
+---
+
+## 2026-07-28 — Exclude the 60s-hop PSD runs from analysis; re-run their PSD
+
+**Decision:** the runs whose stored `psd_log_bins` has `rate = 1/60` (a 60-second
+hop, from the superseded 60s outer-window design) are **excluded from analysis**.
+Their PSD is to be **re-run** under the current 2 s window / 50% overlap scheme
+(`config/psd_params.py`), and until that lands their epochs do not enter any view,
+sweep, or figure.
+
+**Scope as measured** (backfill audit, array `36197924`, 2937 runs across all 83
+subject-sessions — `docs/labnotebook/2026-07-28.md` 12:55):
+
+| | 1 s hop | 60 s hop (excluded) |
+|---|---|---|
+| sub-247 ses-01 | 39 epochs, 300 windows, 33 runs | **19 epochs, 5 windows, 13 runs** |
+| sub-257 ses-01 | 37 epochs, 300 windows, 25 runs | **14 epochs, 5 windows, 11 runs** |
+
+The other 81 subject-sessions are uniformly `starting_time=0.0, rate=1.0`.
+
+**Why exclude rather than keep and annotate:** a 5-window epoch mean and a
+300-window epoch mean are not the same feature. They share a column name
+(`value`), a units label, and a `pain_bin`, but differ by ~sqrt(60) in the noise of
+each estimate, and the 5-window epochs sample a 5-minute window at 60x coarser
+time resolution. Pooling them means a region's average silently mixes two feature
+definitions, and any per-subject effect size for sub-247/sub-257 is a blend of the
+two. Down-weighting instead of excluding was rejected because the correct weight
+depends on the very noise structure the mixture obscures.
+
+**Why re-run rather than drop the runs permanently:** the raw voltage is intact —
+only the derived PSD is stale — so this is a recompute, not lost data. 24 runs is
+cheap next to a 33-epoch loss across two subjects, and sub-247/sub-257 otherwise
+have healthy 1s-hop coverage (39 and 37 epochs) that would be weakened by dropping
+the subjects wholesale.
+
+**Why this was findable at all:** `epoch_start_sec`/`hop_sec` are stored PER RUN in
+`epoch_defs` and audited against the expected `(0.0, 1.0)` rather than assumed. The
+shortcut on the table was hardcoding a 1 s hop from the manifest's window/overlap
+params, which would have (a) misaligned the 60 s QC mask join by 60x for these runs,
+silently, and (b) left the feature mixture invisible. Recording this because it is a
+concrete case where "store the observed value and check it" beat "derive it from
+config".
+
+**Where it lives:** `TASKS.md` (the re-run + the exclusion gate),
+`docs/labnotebook/2026-07-28.md` (12:55, the audit that found it),
+`src/ieeg_ehr/features/backfill_epoch_defs_timing.py` (the audit itself, re-runnable).
+
+**What would reverse it:** the PSD re-run completing for those 24 runs, at which
+point the epochs become ordinary 1s-hop epochs and the exclusion gate is deleted
+rather than kept. If a future analysis deliberately wants coarse-time-resolution
+features, that is a NEW feature family with its own epoch definition, not a
+re-admission of these rows.

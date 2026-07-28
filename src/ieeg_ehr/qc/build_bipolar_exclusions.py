@@ -36,11 +36,16 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import config
+from ieeg_ehr.qc import mask_projection
 
-BIN_SEC = 60.0
+# One source of truth for the bin width and for THE PAIR RULE: mask_projection
+# owns both, so this detector's baseline and the view layer's masking cannot
+# drift apart (see that module's docstring -- two implementations would mean the
+# baseline and the analysis disagreed about which windows are usable, which is
+# invisible in any single number).
+BIN_SEC = mask_projection.BIN_SEC
 METRIC_USECOLS = ['subject_id', 'session_id', 'run_id', 'channel', 'anode_channel',
                    'cathode_channel', 'window_start_time', 'window_end_time', 'metric_value']
-MASK_USECOLS = ['run_id', 'channel', 'bin_start', 'excluded']
 
 
 def label_for(p):
@@ -51,46 +56,18 @@ def default_params():
     return {'std_thresh': config.BIPOLAR_VARIANCE_STD_THRESH}
 
 
-def _load_mask_lookup(raw_voltage_mask_dir, subject_id):
-    """Concatenated (session_id, run_id, channel, bin_start, excluded) DataFrame
-    across all of one subject's session mask files -- used as a merge key, not
-    a Python dict, so masking a subject's metric rows is a vectorized join
-    rather than a per-row lookup.
-
-    Mask files are now one-per-session (`sub-XXX_ses-YY.csv`, session dropped as a
-    column -- see CONTEXT.md's 2026-07-14 filename migration), so glob across all
-    of that subject's sessions and recover session_id from each filename."""
-    mask_paths = sorted(Path(raw_voltage_mask_dir).glob(f'{subject_id}_ses-*.csv'))
-    frames = []
-    for mask_path in mask_paths:
-        session_id = mask_path.stem.split('_ses-', 1)[1].split('_')[0]
-        session_id = f'ses-{session_id}'
-        df = pd.read_csv(mask_path, usecols=MASK_USECOLS)
-        df.insert(0, 'session_id', session_id)
-        frames.append(df)
-    if not frames:
-        return pd.DataFrame(columns=['session_id', 'run_id', 'channel', 'bin_start', 'excluded'])
-    return pd.concat(frames, ignore_index=True)
-
-
-def _mask_flags(df, mask_df, channel_col):
-    """Vectorized version of the old per-row `_is_masked` lookup: merge
-    mask_df's `excluded` column onto df keyed on (session_id, run_id,
-    channel_col, _bin), returning a boolean numpy array (unmatched -> False)."""
-    merged = df[['session_id', 'run_id', channel_col, '_bin']].merge(
-        mask_df.rename(columns={'channel': channel_col, 'bin_start': '_bin'}),
-        on=['session_id', 'run_id', channel_col, '_bin'], how='left')
-    return merged['excluded'].fillna(False).to_numpy(dtype=bool)
-
-
 def build_one_subject(metric_csv, mask_df, std_thresh):
     df = pd.read_csv(metric_csv, usecols=METRIC_USECOLS)
     if df.empty:
         return None
 
     df['_bin'] = (df['window_start_time'] // BIN_SEC) * BIN_SEC
-    anode_masked = _mask_flags(df, mask_df, 'anode_channel')
-    cathode_masked = _mask_flags(df, mask_df, 'cathode_channel')
+    # THE PAIR RULE: a 2s window leaves the baseline if EITHER contributing
+    # monopolar contact's enclosing 60s bin is flagged. Both legs matter -- the
+    # last contact on every shaft appears ONLY as a cathode, so dropping the
+    # cathode lookup would hide those contacts' artifacts entirely.
+    anode_masked = mask_projection.or_pair_flags_60s(df, mask_df, 'anode_channel')
+    cathode_masked = mask_projection.or_pair_flags_60s(df, mask_df, 'cathode_channel')
     df['_masked'] = anode_masked | cathode_masked
 
     # Per-(session, channel) baseline over the NON-masked-out subset -- same
@@ -139,7 +116,7 @@ def run(level_root, raw_voltage_mask_dir, label, std_thresh, subjects=None):
 
     for metric_csv in metric_csvs:
         subject_id = metric_csv.name.split('_')[0]
-        mask_df = _load_mask_lookup(raw_voltage_mask_dir, subject_id)
+        mask_df = mask_projection.load_mask_lookup(raw_voltage_mask_dir, subject_id)
         if mask_df.empty:
             print(f"  NOTE: no raw_voltage mask rows found for {subject_id} at {raw_voltage_mask_dir} "
                   f"-- baseline computed with NOTHING masked out.", flush=True)

@@ -194,6 +194,62 @@ def feature_mask_path(subject, session, label):
 
 
 # ============================================================================
+# BIPOLAR-LEVEL QC  (the pair-keyed level)
+# ============================================================================
+# Two naming asymmetries here are inherited, not chosen, so they are spelled out
+# rather than silently absorbed by callers:
+#
+# 1. Exclusions are ONE FILE PER SUBJECT (`sub-019.csv`) with session_id as a
+#    COLUMN, because build_bipolar_exclusions.py reads a per-subject metric CSV.
+#    Every other level is one file per subject/session. Masks below go back to
+#    per-subject/session, matching raw_voltage and feature_level.
+# 2. Exclusions are CSV (existing artifacts, ~82 subjects on disk); the mask is
+#    PARQUET. That follows io_conventions.md §7 -- do not bulk-convert what
+#    exists, write everything NEW as Parquet -- and matches feature_mask_path()
+#    one level over, which is already Parquet.
+#
+# There is only ONE bipolar artifact type (`bipolar_variance`), so unlike
+# raw_voltage (four detectors) the exclusions table is already that level's
+# union. The mask below is therefore not an OR across bipolar detectors; it is
+# the JOIN of this level with the raw-voltage level, projected onto pairs.
+
+BIPOLAR_ARTIFACT_TYPE = 'bipolar_variance'
+
+
+def bipolar_exclusion_dir(label):
+    return exclusion_dir(BIPOLAR_LEVEL_ROOT, BIPOLAR_ARTIFACT_TYPE, label)
+
+
+def bipolar_exclusion_path(subject, label):
+    """Per-SUBJECT (not per-session) bipolar_variance exclusions -- see note 1."""
+    return bipolar_exclusion_dir(label) / f'sub-{subject}.csv'
+
+
+def bipolar_mask_dir(label):
+    return mask_dir(BIPOLAR_LEVEL_ROOT, label)
+
+
+def bipolar_mask_path(subject, session, label):
+    """The rolled-up bipolar mask: raw-voltage (projected to pairs) OR
+    bipolar_variance. Parquet -- see note 2."""
+    return bipolar_mask_dir(label) / f'sub-{subject}_ses-{session}.parquet'
+
+
+def bipolar_mask_label(bipolar_variance_label, raw_voltage_label=None):
+    """Default output label, encoding BOTH inputs.
+
+    A bare `std10` is not a safe mask name: the same bipolar label rolled against
+    a different raw-voltage mask is a DIFFERENT mask, and re-running would
+    silently overwrite the earlier one. That already happened once at the
+    exclusions level on 2026-07-27 -- an 82-subject `std10` run clobbered a
+    17-subject `std10` run for all 17 overlapping subjects (SCRATCHPAD). Encoding
+    both inputs in the directory name makes the collision impossible instead of
+    merely documented.
+    """
+    return f'{bipolar_variance_label}_rv-{raw_voltage_label or CANONICAL_MASK_LABEL}'
+
+
+# ============================================================================
 # PREPROCESSED FEATURE FAMILIES
 # ============================================================================
 # Deliberately separate from qc/ (BIDS-like derivatives convention; keeps large
@@ -332,6 +388,22 @@ def pain_epoch_cache_path(subject, session, minutes_before=None):
 def pain_epoch_defs_path(subject, session, minutes_before=None):
     return (pain_epoch_unit_dir(minutes_before) / EPOCH_DEFS_SUBDIR
             / f'sub-{subject}_ses-{session}_defs.parquet')
+
+
+CHANNEL_META_SUBDIR = 'channel_meta'
+
+
+def pain_epoch_channel_meta_path(subject, session, minutes_before=None):
+    """Per-channel metadata the cache cannot hold: pair ORDER (which decodes the
+    cache's C-order ravel) and DK labels (which the region axis needs), keyed
+    (run_id, pair_index).
+
+    Lives beside the cache rather than in views/ because it is a property of the
+    cache's own encoding, not of any one view config -- every view of this unit
+    reads the same table. Run TIMING is deliberately NOT here: it is constant per
+    run, so it goes in the epoch_defs index instead."""
+    return (pain_epoch_unit_dir(minutes_before) / CHANNEL_META_SUBDIR
+            / f'sub-{subject}_ses-{session}_channels.parquet')
 
 
 def pain_epoch_views_dir(view_label, config_hash, minutes_before=None):
