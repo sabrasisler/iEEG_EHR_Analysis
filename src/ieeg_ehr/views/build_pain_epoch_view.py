@@ -194,9 +194,29 @@ def build_subject_view(subject, session, view_config, epoch_minutes=None,
         mapped = sum(1 for v in region_of.values() if v is not None)
         stats['n_channels_mapped'] = mapped
         stats['n_channels_unmapped'] = len(region_of) - mapped
+        stats['n_channels_no_dk_label'] = int(
+            meta.loc[meta['dk_anode'].isna(), 'channel'].nunique())
         logger.info('sub-%s ses-%s: %d/%d channels map to an ROI (%d dropped as '
                     'white matter / occipital / unlabeled)', subject, session, mapped,
                     len(region_of), len(region_of) - mapped)
+        if mapped == 0:
+            # Distinguish "no DK localization at all" from "localized, but every
+            # parcel falls outside the ROI set" -- the first is an upstream data gap
+            # that no ROI scheme can fix, the second is a scheme choice. Both
+            # produce an empty table, so saying which one happened is the whole
+            # value of this message.
+            if meta['dk_anode'].isna().all():
+                logger.error(
+                    'sub-%s ses-%s: NO Desikan_Killiany_anode labels in the NWB '
+                    'electrodes table (all %d rows null) -- this subject has no '
+                    'anatomical localization and CANNOT enter a region-level view. '
+                    'The view table will be EMPTY. Use --region none to analyse it '
+                    'per channel.', subject, session, len(meta))
+            else:
+                logger.error(
+                    'sub-%s ses-%s: DK labels present but NONE fall inside ROI scheme '
+                    '%r -- the view table will be EMPTY. Check the scheme, not the data.',
+                    subject, session, view_config.roi_scheme)
     logger.info('sub-%s ses-%s: %d epochs, %.2f GB, %.1fs (%.1f s/GB), '
                 'mask-excluded %.3f, %d channel-epochs dropped for coverage',
                 subject, session, len(defs), stats['cache_bytes'] / 1e9,

@@ -122,6 +122,30 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       whether scratch should be per-event at all — if the answer is no, the doc is
       what's wrong, not the code. (→ docs/labnotebook/2026-07-27.md, config/paths.py)
 
+- [ ] **Should a low-n region cell be plotted at all?** The first group z-score
+      heatmap was dominated by one S2 (supramarginal) cell at +5.2 that came from a
+      single subject, 2 channels, 4 epochs — and specifically from line-noise
+      frequency bins. Dropping line-noise bins fixes this instance, but the general
+      question stands: a region row backed by one subject is not comparable to one
+      backed by 77, yet they share a colour scale. Options are a minimum-n mask on
+      display, a robust (percentile) colour scale, or leaving it and reading the n
+      annotations. Do NOT settle this by tuning until P2.1 feature-level QC has run —
+      it may simply remove the offending channels.
+      (→ docs/labnotebook/2026-07-28.md 12:45)
+- [ ] **Is `drop_line_noise_bins` the right DEFAULT for the view?** Currently False,
+      matching the cache's deliberate choice to store them. But the harmonic bins
+      produced every extreme value in the first figure, which argues the useful
+      default is True and the cache's choice only means "recoverable", not
+      "recommended". Interacts with the canonical band edges, which are already drawn
+      to fall BETWEEN harmonics — so for `freq: canonical_bands` this may be moot and
+      only matter for `log_bins_50`. (→ config/psd_params.py, view_registry AXIS 5)
+- [ ] **Why does sub-159 (and 093, 154, 240) have no DK column while 79 others do?**
+      Is this a FreeSurfer/localization pipeline gap that could be filled upstream, or
+      are these subjects genuinely un-localizable (no imaging)? If fillable, that is 4
+      subjects recovered for every region-level analysis. Note MNI_coord_* may still
+      be present even where the DK column is not — worth checking before writing them
+      off. (→ docs/labnotebook/2026-07-28.md 12:45)
+
 ## Next steps (session-end dump — `/standup` reads this tomorrow)
 
 - [ ] Lab-notebook system is built but unexercised. The real test is whether

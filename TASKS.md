@@ -73,6 +73,36 @@ date, or figure that prompted it.
       decision is made on the fuller cohort. (NOT sub-236 — different, non-OOM
       gap; see SCRATCHPAD.)
 
+- [ ] **Finish the defs-timing backfill across the cohort.** ~71 of 83
+      subject-sessions still lack `epoch_start_sec`/`hop_sec`; array `36197924` is
+      queued but 12 were done inline. No full-cohort view run until this lands —
+      `views/cache_reader.load_defs` refuses without them, by design.
+      (→ docs/labnotebook/2026-07-28.md 12:45)
+- [ ] **Roll the bipolar mask out to the full cohort** once
+      `bipolar_excl` (`36181325`) finishes adding std10 for `250 251 255 256 257`.
+      `python -m ieeg_ehr.qc.build_bipolar_mask` is re-runnable and skips subjects
+      missing either input; currently 7 subject-sessions exist.
+- [ ] **Decide what to do with the 4 subject-sessions that have no DK labels**
+      (`093 154 159 240` — no `Desikan_Killiany_anode` column in the NWB electrodes
+      table at all). They cannot enter a region-level view under any ROI scheme and
+      currently produce an empty table plus a loud error. Options: exclude from
+      region analyses via the cohort file, or run them `--region none` per channel.
+      Either way the region-level n is 79, not 83, and that belongs in the coverage
+      denominator. (→ docs/labnotebook/2026-07-28.md 12:45)
+- [ ] **Give `build_bipolar_exclusions.py` a NaN-safe baseline count.**
+      `.agg(n='size')` counts NaN `metric_value` rows while `sum` skips them, so any
+      NaN metric biases the baseline mean low. Not hit today (no NaNs in the two
+      subjects audited) but it is a real latent bug.
+      (→ docs/labnotebook/2026-07-28.md 12:45)
+- [ ] **Convert `qc/bipolar/exclusions/` to Parquet** once array `36181325`
+      finishes writing CSV. The reader already accepts either extension; only the
+      writer needs flipping, plus a sidecar. Deliberately deferred to avoid a
+      half-converted tree mid-array. (→ docs/io_conventions.md §7)
+- [ ] **Add `PYTHONPATH=${SLURM_SUBMIT_DIR}/src` to the other sbatch files.**
+      Only `backfill_epoch_defs_timing.sbatch` has it. Without it a job submitted
+      from a worktree silently runs the main checkout's code under a commit hash
+      that claims otherwise. (→ docs/labnotebook/2026-07-28.md 12:45)
+
 ## Next
 
 - [ ] **P1.1 Refactor `build_pain_epoch_power.py`** into the epoch-definitions +
