@@ -84,7 +84,7 @@ def _run_time_index(nwb_path):
     run_seconds = starting_time + np.arange(n_time) / rate
     dts = pd.to_datetime(session_start) + pd.to_timedelta(run_seconds, unit='s')
     return {'path': nwb_path, 'n_time': n_time, 'rate': rate,
-            'datetimes': dts.tz_localize(None)}
+            'starting_time': starting_time, 'datetimes': dts.tz_localize(None)}
 
 
 def _load_run_arrays(nwb_path):
@@ -242,6 +242,14 @@ def build_subject_session(subject, session, epoch_minutes, overwrite=False):
     finally:
         writer.close()
 
+    # epoch_start_sec / hop_sec make the epoch's windows locatable in RUN-RELATIVE
+    # SECONDS, which is the coordinate the 60s QC mask grid is keyed on:
+    #     run_seconds(window_idx) = epoch_start_sec + window_idx * hop_sec
+    # Stored here, in the tiny per-epoch index, and NOT as cache columns: they are
+    # constant within a run, and the cache reaches 409M rows for one subject, so a
+    # per-row copy would add gigabytes to repeat one scalar (see CACHE_COLUMNS).
+    # Storing them in this derived form rather than as raw starting_time/rate means
+    # a consumer reconstructs nothing and cannot get the arithmetic wrong.
     defs = pd.DataFrame([{
         'epoch_id': e['epoch_id'], 'subject_id': f'sub-{subject}',
         'session_id': f'ses-{session}', 'run_id': f"run-{e['run']}",
@@ -249,6 +257,9 @@ def build_subject_session(subject, session, epoch_minutes, overwrite=False):
         'pain_time': e['pain_time'], 'window_start': e['window_start'],
         'row_start': e['row_start'], 'row_stop': e['row_stop'],
         'n_windows': e['n_windows'], 'n_channels': n_channels_by_epoch[e['epoch_id']],
+        'epoch_start_sec': (run_index[e['run']]['starting_time']
+                            + e['row_start'] / run_index[e['run']]['rate']),
+        'hop_sec': 1.0 / run_index[e['run']]['rate'],
     } for e in epochs])
 
     epoch_params = {'epoch_minutes_before': epoch_minutes, 'anchor': 'pain_score_time',
