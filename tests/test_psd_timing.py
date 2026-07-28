@@ -219,6 +219,16 @@ def test_rerun_and_ok_subject_lists_partition_the_cohort():
     assert not set(pt.rerun_subjects(table)) & set(pt.ok_subjects(table))
 
 
-def test_missing_audit_table_raises_with_the_fix_in_the_message():
+def test_missing_audit_table_raises_with_the_fix_in_the_message(tmp_path, monkeypatch):
+    """The error must name the command that fixes it.
+
+    Points run_timing_path() at a nonexistent file rather than relying on the real
+    one being absent -- the first version of this test passed only until the audit
+    was actually built, which makes a test a function of the filesystem instead of
+    the code.
+    """
+    monkeypatch.setattr(pt, 'run_timing_path', lambda: tmp_path / 'nope.parquet')
     with pytest.raises(FileNotFoundError, match='audit_psd_timing'):
         pt.load_run_timing()
+    # and 'none' is the explicit opt-out, which must NOT raise
+    assert pt.load_run_timing(on_missing='none') is None
