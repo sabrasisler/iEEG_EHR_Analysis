@@ -29,6 +29,7 @@ from ieeg_ehr.config.paths import (          # explicit: used below
     metrics_root,
 )
 from ieeg_ehr.config.qc_params import *      # noqa: F401,F403
+from ieeg_ehr.config.feature_qc_params import *  # noqa: F401,F403
 from ieeg_ehr.config.psd_params import *     # noqa: F401,F403
 from ieeg_ehr.config.pain_params import *    # noqa: F401,F403
 from ieeg_ehr.config.cache_params import *   # noqa: F401,F403

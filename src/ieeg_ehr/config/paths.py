@@ -126,6 +126,74 @@ def mask_csv(subject, session, label=None):
 
 
 # ============================================================================
+# FEATURE-LEVEL QC  (P2.1)
+# ============================================================================
+# The third QC level, alongside raw_voltage/ and bipolar/, and it reuses the same
+# metrics/ + exclusions/<type>/<label>/ + masks/<label>/ + validation/ layout via
+# the generic builders above. Two differences from those levels, both deliberate:
+#
+# 1. NEW ARTIFACTS ARE PARQUET, not CSV. The raw-voltage tree stays CSV because
+#    it already exists and works (docs/io_conventions.md §7); this level is new,
+#    so it follows the current convention. Per-window feature metrics are also
+#    far too large for CSV.
+#
+# 2. METRICS ARE SCOPED BY THE RAW-VOLTAGE MASK LABEL. The baseline mean/std
+#    excludes windows that mask already flagged (feature_qc_params.
+#    FEATURE_BASELINE_EXCLUDES_RAW_VOLTAGE), so the metric is a function of which
+#    mask was subtracted first. Baking the label into the path keeps two
+#    candidates' metrics from silently overwriting each other -- exactly the
+#    collision build_bipolar_exclusions.py hit on 2026-07-27 (SCRATCHPAD.md) by
+#    NOT namespacing on the mask that produced it.
+#
+# Four metric tables per subject/session, because they answer different
+# questions at very different sizes:
+#
+#   baseline/    per (channel, bin): mean, std, counts. Tiny. The actual metric.
+#   per_window/  per (run, channel, window): z order statistics. SPARSE -- only
+#                rows above FEATURE_METRIC_STORE_FLOOR (see that constant; the
+#                denominators live in summary/ so nothing is silently capped).
+#   summary/     per (run, channel): n_windows / n_stored / n_nonfinite /
+#                n_rv_excluded. Dense, tiny, and the denominator for every rate.
+#   zhist/       per (run, channel): histogram of the z order statistic on a
+#                fixed grid. Dense, tiny, and preserves distribution SHAPE for
+#                structural threshold-setting even though per_window/ is sparse.
+
+
+def feature_metrics_dir(kind, mask_label=None):
+    """One of the four feature-level metric tables, scoped by raw-voltage mask.
+
+    kind: 'baseline' | 'per_window' | 'summary' | 'zhist'.
+    mask_label=None means the baseline was computed UNMASKED, which is recorded
+    as 'rv-none' rather than being indistinguishable from a masked run.
+    """
+    if kind not in ('baseline', 'per_window', 'summary', 'zhist'):
+        raise ValueError(f'unknown feature metric kind: {kind}')
+    scope = f'rv-{mask_label}' if mask_label else 'rv-none'
+    return metrics_root(FEATURE_LEVEL_ROOT) / kind / scope
+
+
+def feature_metrics_path(kind, subject, session, mask_label=None):
+    return feature_metrics_dir(kind, mask_label) / f'sub-{subject}_ses-{session}.parquet'
+
+
+def feature_metrics_run_info_path(subject, session):
+    """Per-subject/session record of how the metrics were produced (thresholds,
+    parent mask, git provenance). One file per subject/session so parallel array
+    tasks cannot race on a shared file -- same reason as
+    metrics_run_info_dir(level_root) at the raw-voltage level."""
+    return metrics_run_info_dir(FEATURE_LEVEL_ROOT) / f'sub-{subject}_ses-{session}.json'
+
+
+def feature_exclusion_path(subject, session, artifact_type, label):
+    return (exclusion_dir(FEATURE_LEVEL_ROOT, artifact_type, label)
+            / f'sub-{subject}_ses-{session}.parquet')
+
+
+def feature_mask_path(subject, session, label):
+    return mask_dir(FEATURE_LEVEL_ROOT, label) / f'sub-{subject}_ses-{session}.parquet'
+
+
+# ============================================================================
 # PREPROCESSED FEATURE FAMILIES
 # ============================================================================
 # Deliberately separate from qc/ (BIDS-like derivatives convention; keeps large
