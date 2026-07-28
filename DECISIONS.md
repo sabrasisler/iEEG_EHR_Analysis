@@ -356,3 +356,54 @@ re-run leaves both designs on disk with no complaint — which is why the audit
 **Where it lives:** `src/ieeg_ehr/qc/psd_timing.py` (the check + `assert_subject_ok`),
 `src/ieeg_ehr/qc/audit_psd_timing.py` (the cohort sweep + re-run list),
 `docs/labnotebook/2026-07-28.md`.
+
+---
+
+## 2026-07-28 — Discovery cohort LOCKED at the documented 65 (P0.2)
+
+**Decision:** `cohorts/discovery-core-2026-07-28.json` holds the permanent
+discovery set = the 65 subjects of `cohorts/legacy/subjects_65.txt`. Everything
+else is **`unassigned`**, NOT hold-out. `--split {discovery,unassigned,all}` gates
+analysis, default `discovery`; `--split heldout` RAISES.
+
+**Why the 65 and not the 60.** Only 60 of them have legacy analysis output; five
+(`122 138 212 235 259`) were drawn into the cohort but never produced any, so on a
+strict "has been seen" test they could have remained hold-out-eligible. They are
+discovery anyway: the cohort was DEFINED by a documented random draw (15 forced +
+50 sampled, seed 20260723, from an 82-subject mask pool —
+`cohorts/legacy/selection_provenance.json`), and withholding the members that
+happened to fail processing would make discovery a survivorship-filtered subset of
+its own sampling frame. They are unprocessed discovery subjects, and are recorded
+as `selected_not_analysed` so the distinction survives.
+
+**Why the rest are `unassigned`.** The matched hold-out is built OFFLINE on the PHI
+side, matching on {pain-range, sEEG/ECoG, age, sex}; age is PHI and is not on
+Sherlock (PLANNING P4). So no code here may assert hold-out membership.
+`--split heldout` raises rather than returning the leftovers, because silently
+equating "not discovery" with "matched hold-out" would redefine the comparison set
+as whatever happened to be left over.
+
+**Splits gate ANALYSIS, not preprocessing.** QC, masks and PSD extraction
+legitimately run over every subject on disk. Views, sweeps, models and figures do
+not.
+
+**An explicit `--subjects` list is still checked** against the split
+(`assert_split_allowed`). Without that the flag would be advisory, and hand-naming
+a hold-out-eligible subject would work — which cannot be undone.
+
+**Consequence already incurred, recorded here because it bears on the cohort:**
+two `unassigned` subjects, **sub-222 and sub-231**, were included in the P1.3
+timing runs and appear in the group and per-subject heatmaps of 2026-07-28
+(`analysis/scratch/view_heatmap/subject_relative/p13_std10_*`). The gate did not
+exist yet, and the sample was drawn from "subjects with cache+mask" rather than
+from a cohort. No analytic choice was made from those figures — they were a
+plumbing/timing validation — but the data has been looked at. Their status needs an
+explicit call (see `TASKS.md`); it is not resolved by this entry.
+
+**Where it lives:** `src/ieeg_ehr/config/cohorts.py`,
+`cohorts/discovery-core-2026-07-28.json`, `views/build_pain_epoch_view.py`
+(`--split`).
+
+**What would reverse it:** nothing reverses the discovery lock — that is the point.
+A *different* cohort must be a NEW dated file, never an edit of this one, so any
+artifact citing this filename always means the same 65 subjects.

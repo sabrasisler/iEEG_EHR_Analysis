@@ -33,6 +33,7 @@ from ieeg_ehr.config.feature_qc_params import *  # noqa: F401,F403
 from ieeg_ehr.config.psd_params import *     # noqa: F401,F403
 from ieeg_ehr.config.pain_params import *    # noqa: F401,F403
 from ieeg_ehr.config.cache_params import *   # noqa: F401,F403
+from ieeg_ehr.config.cohorts import *        # noqa: F401,F403
 
 # Re-exported for backwards compatibility with `config.<name>` call sites.
 from ieeg_ehr.io.provenance import (         # noqa: F401
