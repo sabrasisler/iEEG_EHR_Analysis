@@ -103,14 +103,16 @@ date, or figure that prompted it.
       from a worktree silently runs the main checkout's code under a commit hash
       that claims otherwise. (→ docs/labnotebook/2026-07-28.md 12:45)
 
-- [ ] **Decide what to do with the 60s-hop PSD runs in sub-247 and sub-257.**
-      24 runs (13 + 11) were written under the superseded 60s outer-window design, so
-      19 of sub-247's 58 epochs and 14 of sub-257's 51 average **5 windows instead of
-      300** — a different feature silently sharing a column with the 1s-hop epochs.
-      Either re-run the PSD for those runs under the current 2s/50% scheme (BG.1) or
-      exclude those epochs explicitly; do NOT let them into a sweep unmarked. The
-      other 81 subject-sessions are uniformly 1s-hop.
-      (→ docs/labnotebook/2026-07-28.md 12:55)
+- [ ] **Re-run the PSD for the 24 60s-hop runs** (sub-247: 13 runs, sub-257: 11
+      runs) under the current 2s/50% scheme, then delete the exclusion gate below.
+      Raw voltage is intact — only the derived PSD is stale — so this is a recompute.
+      Decided 2026-07-28: these are EXCLUDED from analysis until then, not
+      down-weighted. (→ DECISIONS.md 2026-07-28, notebook 2026-07-28 12:55)
+- [ ] **Gate the 60s-hop epochs out of the view layer** so the exclusion cannot be
+      forgotten: refuse (or drop with a loud count) any epoch whose `hop_sec` is not
+      the expected 1.0, rather than relying on whoever runs the sweep to remember.
+      33 epochs across sub-247/sub-257 average 5 windows where every other epoch
+      averages 300. (→ DECISIONS.md 2026-07-28)
 
 ## Next
 
