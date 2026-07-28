@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=view_discovery
 #SBATCH --partition=normal
-#SBATCH --time=02:00:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=24GB
+#SBATCH --time=00:30:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8GB
 #SBATCH --output=logs/view_discovery_%A_%a.out
-#SBATCH --array=0-58%12
+#SBATCH --array=0-58%16
 #
 # Build the P1.3 view for every DISCOVERY subject that can actually produce one,
 # in BOTH normalizations (z-score and baseline-subtract / "delta power").
@@ -30,6 +30,19 @@
 # ONE SUBJECT PER TASK so a single bad subject cannot take down the batch; the view
 # builder refuses a stale-PSD subject by design, and that must fail one task rather
 # than 59.
+#
+# RESOURCES, against a MEASURED MaxRSS -- not inferred from cache size.
+# Job 36201027 ran 5 subjects x 2 normalizations sequentially and peaked at 4.19 GB
+# (and 4:20 wall), so per-subject peak is at most that; 8 GB is ~2x headroom. The
+# work is effectively single-threaded (only pyarrow decompression threads), so 1 CPU.
+#
+# 8 GB with 1 CPU matters on `normal`, which allows at most 8 GB/CORE: the previous
+# 24 GB / 2 CPU ask was 12 GB/core, so Slurm charged ceil(24/8)=3 cores and at %12
+# reserved 36 cores to do ~12 cores of work -- wasteful AND slower to schedule.
+#
+# --time=00:30:00 rather than 2h for the same reason: measured worst case is a couple
+# of minutes (largest subject's channel_meta build dominates), and short jobs backfill
+# far better on a partition with 42k cores queued.
 #
 # Array bound must match the runnable count. Recompute with:
 #   python -m ieeg_ehr.config.cohorts --runnable discovery 2>/dev/null | wc -l
