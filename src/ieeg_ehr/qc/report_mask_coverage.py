@@ -48,14 +48,15 @@ expected-run denominator are resolved defensively:
                     a denominator you cannot see is a denominator you cannot
                     trust.
 
-The registry fallback is the weaker denominator and is reported per row in
-`runs_source` for that reason. It USED to over-count badly: the registry lists
-runs whose NWB it could not parse (sub-236 has 109 rows but 107 readable), and a
-level that skips those looked under-covered. `_load_registry` now drops rows with
-no `n_channels`, which removed 100% of the false positives it produced (see that
-function). It is still the weaker signal — it reports what a subject/session HAS
-rather than what the level actually READ, so a level that skipped a readable run
-for its own reasons will still show up here.
+The registry fallback is the weaker denominator, and `runs_source` exists so you
+can see which rows relied on it. It reports what a subject/session HAS, not what
+the level actually READ, so at registry granularity a tier-2 hit means "this run
+has no raw-voltage mask coverage" and NOT necessarily "this run was silently
+contaminated". Runs legitimately absent from a mask include unreadable NWBs and
+subjects with no sEEG series. Treat registry-sourced tier-2 rows as a worklist to
+explain, not as confirmed contamination; `run_info`-sourced rows are the strict
+ones. Do not try to filter the registry down to "readable" runs on `n_channels` —
+see `_load_registry`.
 
 THIS IS A REPORT, NOT A COHORT FILE. Cohort membership lives only in
 `cohorts/*.json` (DECISIONS.md 2026-07-27). Filter on `fully_covered` and build
@@ -94,27 +95,18 @@ SUMMARY_COLUMNS = [
 
 
 def _load_registry():
-    """(sub_id, ses_id, run_id) for every READABLE run — the level-independent
+    """(sub_id, ses_id, run_id) only — the registry is the level-independent
     source of which runs a subject/session has.
 
-    Rows with a blank `n_channels` are dropped. Those are NWBs the registry
-    builder itself could not parse (2136 of them cohort-wide as of 2026-07-28),
-    and every pipeline stage skips them by design -- so counting them as
-    "expected" makes a level look under-covered for runs nothing could ever have
-    read. MEASURED: before this filter the bipolar level reported 37
-    subject/sessions with missing runs, and every single missing run was one of
-    these unparseable rows (sub-085's 2, sub-236's 2, sub-256's 5, ...) -- i.e.
-    100% false positives.
+    DO NOT filter this on `n_channels` to try to keep only "readable" runs. That
+    was tried on 2026-07-28 and was WRONG: `n_channels` is blank for 2136 of 7902
+    rows, and the blanks include plenty of perfectly readable runs (all of
+    sub-039's and sub-071's, both of which the feature level read in full). The
+    filter silently emptied those subjects' expected-run sets, which zeroed out
+    tier 2 and made the report look clean. Blank `n_channels` means the registry
+    column was not populated for that row, NOT that the NWB is unparseable.
     """
-    reg = pd.read_csv(config.FILE_REGISTRY_CSV,
-                      usecols=['sub_id', 'ses_id', 'run_id', 'n_channels'])
-    n_all = len(reg)
-    reg = reg[reg['n_channels'].notna()]
-    n_dropped = n_all - len(reg)
-    if n_dropped:
-        logger.info('registry: ignoring %d/%d rows with no n_channels (unparseable NWBs '
-                    'that every stage skips)', n_dropped, n_all)
-    return reg.drop(columns=['n_channels'])
+    return pd.read_csv(config.FILE_REGISTRY_CSV, usecols=['sub_id', 'ses_id', 'run_id'])
 
 
 def _resolve_cohort(level_root, registry):
@@ -346,12 +338,24 @@ def main():
                        summary_df.loc[~summary_df['mask_file_exists'],
                                       ['subject', 'session']].to_dict('records'))
     if counts['n_with_missing_runs']:
-        logger.warning('%d subject-session(s) have a mask file but are MISSING RUNS from '
-                       'it — the session-pooled baseline is contaminated for these: %s',
-                       counts['n_with_missing_runs'],
-                       summary_df.loc[(summary_df['n_runs_missing'] > 0)
-                                      & summary_df['mask_file_exists'],
-                                      ['subject', 'session', 'n_runs_missing']].to_dict('records'))
+        strict = summary_df.loc[(summary_df['n_runs_missing'] > 0)
+                                & summary_df['mask_file_exists']
+                                & (summary_df['runs_source'] == 'run_info')]
+        loose = summary_df.loc[(summary_df['n_runs_missing'] > 0)
+                               & summary_df['mask_file_exists']
+                               & (summary_df['runs_source'] == 'registry')]
+        if len(strict):
+            logger.warning('%d subject-session(s) READ runs that are absent from their mask '
+                           '— the session-pooled baseline IS contaminated for these: %s',
+                           len(strict),
+                           strict[['subject', 'session', 'n_runs_missing']].to_dict('records'))
+        if len(loose):
+            logger.warning('%d subject-session(s) HAVE runs (per the registry) absent from '
+                           'their mask. Registry-sourced, so this is a worklist to explain, '
+                           'not confirmed contamination — an unreadable NWB or a subject with '
+                           'no sEEG series lands here legitimately: %s',
+                           len(loose),
+                           loose[['subject', 'session', 'n_runs_missing']].to_dict('records'))
     logger.info('wrote %s', out_dir)
 
 
