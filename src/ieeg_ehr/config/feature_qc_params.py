@@ -195,11 +195,24 @@ FEATURE_EXCLUDE_LINE_NOISE_BINS = True
 FEATURE_ARTIFACT_TYPES = ['power_outlier']
 
 
-def feature_exclusion_label(z_thresh=None, bin_frac=None, side=None):
-    """A self-documenting exclusion label, e.g. 'z5_binfrac20'.
+def feature_exclusion_label(z_thresh=None, bin_frac=None, side=None, scope=None):
+    """A self-documenting exclusion label, e.g.
+    'z5_binfrac20_bp-std10_rv-gross-std3_satmargin15_sw_logz4'.
 
-    Same convention as build_exclusions.label_for: read the thresholds off the
-    path instead of an opaque 'default'.
+    Same convention as build_exclusions.label_for: read the parameters off the path
+    instead of an opaque 'default'.
+
+    `scope` (from config.feature_mask_scope) names WHICH upstream mask the metrics
+    were computed against, and it belongs in the label because the thresholds alone
+    do not identify the output. The same K and B applied to a bipolar-scoped
+    baseline and a raw-voltage-scoped one give DIFFERENT exclusions -- the baseline
+    std differs, so z differs -- and without the scope both would write into
+    'z5_binfrac20/', silently mixing two definitions in one directory. Exactly the
+    overwrite build_bipolar_exclusions.py hit on 2026-07-27, fixed there the same
+    way (bipolar_mask_label appends the raw-voltage label it was rolled against).
+
+    Omitting `scope` is allowed but only sensible for display; anything that WRITES
+    should pass it.
     """
     z_thresh = FEATURE_Z_THRESH if z_thresh is None else z_thresh
     bin_frac = FEATURE_BIN_FRAC if bin_frac is None else bin_frac
@@ -207,4 +220,6 @@ def feature_exclusion_label(z_thresh=None, bin_frac=None, side=None):
     label = f'z{z_thresh:g}_binfrac{bin_frac * 100:g}'
     if side != 'high':
         label += f'_{side}'
+    if scope:
+        label += f'_{scope}'
     return label

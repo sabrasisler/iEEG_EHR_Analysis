@@ -203,7 +203,8 @@ def main():
             f'excluded windows. Lower the floor and re-run detect_power_outlier.py, or '
             f'pick a higher K.')
 
-    label = args.label or config.feature_exclusion_label(z_thresh, bin_frac)
+    scope = config.feature_mask_scope(mask_label, mask_level)
+    label = args.label or config.feature_exclusion_label(z_thresh, bin_frac, scope=scope)
     stat_column(bin_frac)          # validate B before doing any work
 
     metrics_dir = config.feature_metrics_dir('per_window', mask_label, mask_level)
@@ -244,6 +245,7 @@ def main():
                        'stat_column': stat_column(bin_frac)},
         'mask_level': mask_level,
         'mask_label': mask_label,
+        'mask_scope': scope,
         'store_floor': config.FEATURE_METRIC_STORE_FLOOR,
         'metrics_per_window_dir': str(metrics_dir),
         'metrics_summary_dir': str(config.feature_metrics_dir('summary', mask_label, mask_level)),

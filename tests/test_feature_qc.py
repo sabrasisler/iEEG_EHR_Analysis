@@ -220,6 +220,46 @@ def test_exclusion_label_is_self_documenting():
     assert config.feature_exclusion_label(5.0, 0.20, 'both') == 'z5_binfrac20_both'
 
 
+def test_mask_scope_distinguishes_levels():
+    """The same label at two levels must not produce the same scope -- and note the
+    bipolar label already ENDS in the raw-voltage label it was rolled against, so
+    without the prefix it would read as a raw-voltage scope."""
+    bp = config.feature_mask_scope('std10_rv-gross-std3_sw', 'bipolar')
+    rv = config.feature_mask_scope('gross-std3_sw', 'raw_voltage')
+    assert bp.startswith('bp-')
+    assert rv.startswith('rv-')
+    assert bp != rv
+    assert config.feature_mask_scope(None, 'bipolar') == 'bp-none'
+
+
+def test_exclusion_label_scope_prevents_overwrite():
+    """Same K and B against two different upstream masks must NOT collide.
+
+    The baseline std differs between a bipolar-scoped and a raw-voltage-scoped
+    baseline, so z differs, so the exclusions differ. Without the scope in the label
+    both would write into 'z5_binfrac20/' -- the overwrite
+    build_bipolar_exclusions.py hit on 2026-07-27.
+    """
+    bp = config.feature_exclusion_label(
+        5.0, 0.20, scope=config.feature_mask_scope('std10_rv-gross-std3', 'bipolar'))
+    rv = config.feature_exclusion_label(
+        5.0, 0.20, scope=config.feature_mask_scope('gross-std3', 'raw_voltage'))
+    assert bp != rv, 'two upstream masks share one exclusion label'
+    assert bp.startswith('z5_binfrac20_')
+    # and the exclusion dirs they resolve to must differ
+    assert (config.exclusion_dir(config.FEATURE_LEVEL_ROOT, 'power_outlier', bp)
+            != config.exclusion_dir(config.FEATURE_LEVEL_ROOT, 'power_outlier', rv))
+
+
+def test_metrics_dir_and_exclusion_label_share_one_scope():
+    """The metrics directory and the exclusion label must be built from the SAME
+    scope string, or they could drift and an exclusion could name a scope whose
+    metrics live somewhere else."""
+    scope = config.feature_mask_scope('std10_rv-x', 'bipolar')
+    assert config.feature_metrics_dir('per_window', 'std10_rv-x', 'bipolar').name == scope
+    assert config.feature_exclusion_label(5.0, 0.20, scope=scope).endswith(scope)
+
+
 def test_configured_frac_is_in_the_stored_grid():
     """The operative B must be one of the stored order statistics, or the metric
     tables cannot answer the configured rule at all."""

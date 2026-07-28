@@ -170,6 +170,24 @@ def mask_csv(subject, session, label=None):
 FEATURE_MASK_LEVEL_PREFIX = {'raw_voltage': 'rv', 'bipolar': 'bp'}
 
 
+def feature_mask_scope(mask_label=None, level='raw_voltage'):
+    """The scope string naming which upstream mask was subtracted, e.g.
+    'bp-std10_rv-gross-std3_satmargin15_sw_logz4' or 'rv-gross-std3_...'.
+
+    ONE definition, used for BOTH the metrics scope directory and the downstream
+    exclusion/mask labels. That is the point: if the two were built separately they
+    could drift, and an exclusion label that did not name its upstream mask would
+    let two different baselines write into one directory -- the same collision
+    build_bipolar_exclusions.py hit on 2026-07-27, and the reason
+    bipolar_mask_label() appends the raw-voltage label it was rolled against.
+    """
+    if level not in FEATURE_MASK_LEVEL_PREFIX:
+        raise ValueError(f'unknown feature mask level: {level} '
+                         f'(expected one of {sorted(FEATURE_MASK_LEVEL_PREFIX)})')
+    prefix = FEATURE_MASK_LEVEL_PREFIX[level]
+    return f'{prefix}-{mask_label}' if mask_label else f'{prefix}-none'
+
+
 def feature_metrics_dir(kind, mask_label=None, level='raw_voltage'):
     """One of the four feature-level metric tables, scoped by the mask subtracted.
 
@@ -180,12 +198,8 @@ def feature_metrics_dir(kind, mask_label=None, level='raw_voltage'):
     """
     if kind not in ('baseline', 'per_window', 'summary', 'zhist'):
         raise ValueError(f'unknown feature metric kind: {kind}')
-    if level not in FEATURE_MASK_LEVEL_PREFIX:
-        raise ValueError(f'unknown feature mask level: {level} '
-                         f'(expected one of {sorted(FEATURE_MASK_LEVEL_PREFIX)})')
-    prefix = FEATURE_MASK_LEVEL_PREFIX[level]
-    scope = f'{prefix}-{mask_label}' if mask_label else f'{prefix}-none'
-    return metrics_root(FEATURE_LEVEL_ROOT) / kind / scope
+    return (metrics_root(FEATURE_LEVEL_ROOT) / kind
+            / feature_mask_scope(mask_label, level))
 
 
 def feature_metrics_path(kind, subject, session, mask_label=None, level='raw_voltage'):

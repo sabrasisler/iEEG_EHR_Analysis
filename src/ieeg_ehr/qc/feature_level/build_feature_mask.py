@@ -62,13 +62,20 @@ def _parse_tag(path):
 
 
 def _default_label(chosen):
-    """A mask label that names its inputs, e.g. 'featqc-z5binfrac20'.
+    """A mask label that names its inputs, e.g.
+    'featqc-z5_binfrac20_bp-std10_rv-gross-std3_satmargin15_sw_logz4'.
 
     Same instinct as build_exclusions.label_for: the path should say what produced
-    it rather than 'default'. Multi-type masks concatenate, so the name grows with
-    the number of types -- pass --label explicitly once that gets unwieldy.
+    it rather than 'default'. The per-type exclusion labels already carry the
+    upstream mask scope, so this inherits it -- which is what keeps a
+    bipolar-scoped mask from overwriting a raw-voltage-scoped one.
+
+    Underscores are NOT stripped (an earlier version did): the scope contains them,
+    and mangling it would defeat the point of naming it. Multi-type masks join with
+    '+', so the name grows with the number of types -- pass --label explicitly once
+    that gets unwieldy.
     """
-    return 'featqc-' + '_'.join(lbl.replace('_', '') for _t, lbl in sorted(chosen.items()))
+    return 'featqc-' + '+'.join(lbl for _t, lbl in sorted(chosen.items()))
 
 
 def build_one(subject, session, chosen, out_path, mask_label_rv, mask_level):
@@ -170,7 +177,9 @@ def main():
     if mask_label_rv == 'none':
         mask_label_rv = None
 
-    chosen = {t: (getattr(args, t) or config.feature_exclusion_label()) for t in types}
+    scope = config.feature_mask_scope(mask_label_rv, mask_level)
+    chosen = {t: (getattr(args, t) or config.feature_exclusion_label(scope=scope))
+              for t in types}
     type_dirs = {t: config.exclusion_dir(config.FEATURE_LEVEL_ROOT, t, lbl)
                  for t, lbl in chosen.items()}
     for t, d in type_dirs.items():
@@ -224,6 +233,7 @@ def main():
         'per_type_dirs': {t: str(d) for t, d in type_dirs.items()},
         'mask_level': mask_level,
         'mask_label': mask_label_rv,
+        'mask_scope': scope,
         'metrics_summary_dir': str(config.feature_metrics_dir('summary', mask_label_rv,
                                                               mask_level)),
         'n_subject_sessions': len(rows),
