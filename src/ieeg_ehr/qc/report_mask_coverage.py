@@ -48,10 +48,14 @@ expected-run denominator are resolved defensively:
                     a denominator you cannot see is a denominator you cannot
                     trust.
 
-The registry fallback can legitimately over-count: it lists runs whose NWB is
-unreadable (e.g. sub-236 has 109 registry runs but 107 parseable ones), and a
-level that skips those will look under-covered. That is why `runs_source` is a
-column and not a footnote.
+The registry fallback is the weaker denominator and is reported per row in
+`runs_source` for that reason. It USED to over-count badly: the registry lists
+runs whose NWB it could not parse (sub-236 has 109 rows but 107 readable), and a
+level that skips those looked under-covered. `_load_registry` now drops rows with
+no `n_channels`, which removed 100% of the false positives it produced (see that
+function). It is still the weaker signal — it reports what a subject/session HAS
+rather than what the level actually READ, so a level that skipped a readable run
+for its own reasons will still show up here.
 
 THIS IS A REPORT, NOT A COHORT FILE. Cohort membership lives only in
 `cohorts/*.json` (DECISIONS.md 2026-07-27). Filter on `fully_covered` and build
@@ -90,9 +94,27 @@ SUMMARY_COLUMNS = [
 
 
 def _load_registry():
-    """(sub_id, ses_id, run_id) only — the registry is the level-independent
-    source of which runs a subject/session has."""
-    return pd.read_csv(config.FILE_REGISTRY_CSV, usecols=['sub_id', 'ses_id', 'run_id'])
+    """(sub_id, ses_id, run_id) for every READABLE run — the level-independent
+    source of which runs a subject/session has.
+
+    Rows with a blank `n_channels` are dropped. Those are NWBs the registry
+    builder itself could not parse (2136 of them cohort-wide as of 2026-07-28),
+    and every pipeline stage skips them by design -- so counting them as
+    "expected" makes a level look under-covered for runs nothing could ever have
+    read. MEASURED: before this filter the bipolar level reported 37
+    subject/sessions with missing runs, and every single missing run was one of
+    these unparseable rows (sub-085's 2, sub-236's 2, sub-256's 5, ...) -- i.e.
+    100% false positives.
+    """
+    reg = pd.read_csv(config.FILE_REGISTRY_CSV,
+                      usecols=['sub_id', 'ses_id', 'run_id', 'n_channels'])
+    n_all = len(reg)
+    reg = reg[reg['n_channels'].notna()]
+    n_dropped = n_all - len(reg)
+    if n_dropped:
+        logger.info('registry: ignoring %d/%d rows with no n_channels (unparseable NWBs '
+                    'that every stage skips)', n_dropped, n_all)
+    return reg.drop(columns=['n_channels'])
 
 
 def _resolve_cohort(level_root, registry):
