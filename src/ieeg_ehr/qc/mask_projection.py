@@ -36,12 +36,23 @@ implies: exclusion is coarse (60s) relative to the window grid (1s), so a
 raw-voltage tree's granularity, not a choice made here.
 """
 
+import logging
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 BIN_SEC = 60.0
 
 MASK_COLUMNS = ['run_id', 'channel', 'bin_start', 'excluded']
+
+# The join key for a per-subject (multi-session) mask lookup. session_id is part
+# of it because load_mask_lookup() concatenates across a subject's sessions and
+# run_id is only unique WITHIN a session -- joining without it would let one
+# session's verdict leak onto an identically-named run in another.
+LOOKUP_KEY = ['session_id', 'run_id', 'channel', 'bin_start']
 
 
 def split_pair(channel):
@@ -71,6 +82,74 @@ def load_mask(mask_path, run_id=None):
     if run_id is not None:
         df = df[df['run_id'] == run_id]
     return df
+
+
+def load_mask_lookup(mask_dir, subject_id):
+    """All of ONE subject's mask rows, across every session, as a merge key.
+
+    Session lives in the FILENAME at the raw-voltage level (`sub-019_ses-01.csv`,
+    per the 2026-07-14 filename migration) rather than in a column, so it is
+    recovered here and inserted -- see LOOKUP_KEY for why joining without it is
+    unsafe.
+
+    Returns an EMPTY frame with the right columns when nothing matches, never
+    None. Callers that treat "no mask" as "nothing excluded" MUST say so in a log
+    line: an absent mask silently keeps artifact windows, which inflates a
+    baseline std, deflates z, and makes a detector LESS sensitive for exactly the
+    subjects whose QC inputs were incomplete (docs/labnotebook/2026-07-28.md).
+    """
+    frames = []
+    for mask_path in sorted(Path(mask_dir).glob(f'{subject_id}_ses-*.csv')):
+        session_id = mask_path.stem.split('_ses-', 1)[1].split('_')[0]
+        df = pd.read_csv(mask_path, usecols=MASK_COLUMNS)
+        df.insert(0, 'session_id', f'ses-{session_id}')
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame(columns=['session_id'] + MASK_COLUMNS)
+    return pd.concat(frames, ignore_index=True)
+
+
+def or_pair_flags_60s(df, mask_df, channel_col):
+    """Per-row bool: is this row's 60s bin excluded for the contact named in
+    `channel_col`?
+
+    THE PAIR RULE at 60s-bin granularity. Call it twice -- once with
+    'anode_channel', once with 'cathode_channel' -- and OR the results; that is
+    the same rule project_to_pairs applies at window granularity, which is the
+    whole reason both live in this module.
+
+    `df` must already carry a `_bin` column (floor of run seconds to BIN_SEC).
+    `mask_df` is a load_mask_lookup() frame, keyed on MONOPOLAR contact.
+
+    Returns a numpy array POSITIONALLY aligned to `df`, so a caller can assign it
+    straight onto a column. That alignment holds only if the merge cannot
+    multiply rows, hence the duplicate-key check: a duplicated mask key would
+    silently shift every row after the first duplicate, which is invisible in any
+    single number and would quietly bias every downstream effect size.
+    """
+    if mask_df is None or len(mask_df) == 0:
+        return np.zeros(len(df), dtype=bool)
+
+    n_dupes = int(mask_df.duplicated(LOOKUP_KEY).sum())
+    if n_dupes:
+        raise ValueError(
+            f'mask lookup has {n_dupes} duplicate {LOOKUP_KEY} rows; a left merge '
+            'on it would multiply rows and break positional alignment. Fix the '
+            'mask source rather than de-duplicating here -- duplicates mean two '
+            'disagreeing verdicts for one bin, and silently keeping either is wrong.'
+        )
+
+    on = ['session_id', 'run_id', channel_col, '_bin']
+    merged = df[on].merge(
+        mask_df.rename(columns={'channel': channel_col, 'bin_start': '_bin'}),
+        on=on, how='left',
+    )
+    # .eq(True) rather than .fillna(False).astype(bool): the merged column is
+    # object dtype (bool + NaN from unmatched rows), and fillna-then-downcast on
+    # object is deprecated in pandas and changes behaviour on upgrade.
+    # Unmatched -> NaN -> False, which is the "no mask row means not excluded"
+    # convention every raw-voltage consumer already uses.
+    return merged['excluded'].eq(True).to_numpy()
 
 
 def project_to_pairs(mask_df, run_id, channel_names, run_seconds):
@@ -114,18 +193,76 @@ def project_to_pairs(mask_df, run_id, channel_names, run_seconds):
         c = mono[:, mono_cols[cathode]] if cathode in mono_cols else absent
         pair_by_bin[:, j] = a | c
 
-    # Each window -> the row of pair_by_bin for its enclosing 60s bin. Windows
-    # whose bin is absent from the mask entirely map to an all-False row appended
-    # at the end, so "no mask row" means "not excluded" (matching the fillna(False)
-    # convention the raw-voltage consumers already use) rather than dropping the
-    # window or raising.
+    return _gather_by_bin(bin_starts, pair_by_bin, run_seconds, n_pairs)
+
+
+def _gather_by_bin(bin_starts, by_bin, run_seconds, n_cols):
+    """Broadcast a per-60s-bin verdict matrix out to per-window rows.
+
+    Each window takes the row of `by_bin` for its enclosing 60s bin. Windows whose
+    bin is absent from the mask entirely map to an all-False row appended at the
+    end, so "no mask row" means "not excluded" -- matching the convention the
+    raw-voltage consumers already use -- rather than dropping the window or
+    raising. The per-window step is a gather, not a join, which is what keeps this
+    cheap for ~10^5 windows x ~200 pairs.
+    """
     want = np.floor(np.asarray(run_seconds, dtype=np.float64) / BIN_SEC) * BIN_SEC
     pos = np.searchsorted(bin_starts, want)
     pos = np.clip(pos, 0, len(bin_starts) - 1)
     missing = bin_starts[pos] != want
-    pair_by_bin = np.vstack([pair_by_bin, np.zeros((1, n_pairs), dtype=bool)])
+    by_bin = np.vstack([by_bin, np.zeros((1, n_cols), dtype=bool)])
     pos = np.where(missing, len(bin_starts), pos)
-    return pair_by_bin[pos]
+    return by_bin[pos]
+
+
+def project_pair_mask_to_windows(mask_df, run_id, channel_names, run_seconds):
+    """(n_windows, n_pairs) bool from an ALREADY-PAIR-KEYED mask, e.g. one from
+    qc/bipolar/masks/ or qc/bipolar/exclusions/bipolar_variance/.
+
+    The pair-level twin of project_to_pairs, and deliberately a SEPARATE entry
+    point rather than an auto-detecting branch inside it. Handing a pair-keyed
+    table to project_to_pairs does not fail loudly: it splits 'LA1-LA2' into
+    'LA1'/'LA2', finds neither among the table's pair-named channels, and returns
+    all-False for every window -- a silent "nothing is excluded", which is the
+    worst possible failure mode for a QC mask. Making the caller state which
+    keying it holds is the point.
+
+    Unlike project_to_pairs there is no anode/cathode OR here, because a
+    pair-keyed mask has already applied the pair rule.
+    """
+    n_win = len(run_seconds)
+    n_pairs = len(channel_names)
+    if mask_df is None or n_win == 0 or n_pairs == 0:
+        return np.zeros((n_win, n_pairs), dtype=bool)
+
+    run_mask = mask_df[mask_df['run_id'] == run_id]
+    if run_mask.empty:
+        return np.zeros((n_win, n_pairs), dtype=bool)
+
+    pivot = (run_mask.pivot_table(index='bin_start', columns='channel',
+                                  values='excluded', aggfunc='any')
+             .fillna(False).astype(bool))
+    bin_starts = pivot.index.to_numpy(dtype=np.float64)
+    cols = {name: i for i, name in enumerate(pivot.columns)}
+    by_pair = pivot.to_numpy()
+
+    absent = np.zeros(len(bin_starts), dtype=bool)
+    missing_pairs = [c for c in channel_names if c not in cols]
+    if missing_pairs:
+        # Loud, because an absent pair reads as "clean" and there is no other
+        # signal that it was never actually evaluated.
+        logger.warning(
+            'run %s: %d/%d pairs absent from the pair-keyed mask and treated as '
+            'NOT excluded (e.g. %s). If this is most of the montage, the mask '
+            'probably does not match this run\'s channel naming.',
+            run_id, len(missing_pairs), n_pairs, missing_pairs[:5],
+        )
+
+    out_by_bin = np.empty((len(bin_starts), n_pairs), dtype=bool)
+    for j, channel in enumerate(channel_names):
+        out_by_bin[:, j] = by_pair[:, cols[channel]] if channel in cols else absent
+
+    return _gather_by_bin(bin_starts, out_by_bin, run_seconds, n_pairs)
 
 
 def excluded_fraction(excluded):
