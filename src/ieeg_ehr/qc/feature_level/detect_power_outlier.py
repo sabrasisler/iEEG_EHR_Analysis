@@ -235,7 +235,8 @@ def _order_stats(z, idx_by_frac):
     return out
 
 
-def process_subject_session(subject, session, mask_label, mask_level=None, overwrite=False):
+def process_subject_session(subject, session, mask_label, mask_level=None, overwrite=False,
+                            allow_unmasked=False):
     z_thresh = config.FEATURE_Z_THRESH
     bin_frac = config.FEATURE_BIN_FRAC
     frac_grid = tuple(config.FEATURE_BIN_FRAC_GRID)
@@ -257,6 +258,19 @@ def process_subject_session(subject, session, mask_label, mask_level=None, overw
 
     mask_df, project, mask_path = resolve_mask(subject, session, mask_level, mask_label)
     if mask_label and mask_df is None:
+        # A mask was ASKED FOR and is not there. Default to skipping rather than
+        # silently computing an unmasked baseline: an unmasked baseline keeps
+        # artifact windows, which INFLATES std, DEFLATES z, and makes this detector
+        # LESS sensitive for exactly the subjects whose QC inputs were incomplete.
+        # It would also land in the same scope directory as properly masked
+        # subjects, so the cohort would silently mix two baseline definitions.
+        # --allow-unmasked opts into it deliberately.
+        if not allow_unmasked:
+            logger.warning('sub-%s ses-%s: SKIPPING -- no %s mask at %s. Pass --allow-unmasked '
+                           'to compute an unmasked baseline instead (it will be weaker, and '
+                           'flagged as mask_applied=false in the sidecar).',
+                           subject, session, mask_level, mask_path)
+            return None
         logger.warning('sub-%s ses-%s: no %s mask at %s -- baseline will be UNMASKED for this '
                        'subject/session, which INFLATES its std and makes the detector LESS '
                        'sensitive here than elsewhere', subject, session, mask_level, mask_path)
@@ -559,6 +573,12 @@ def main():
                          f'{config.bipolar_mask_label(config.FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL)}. '
                          'Pass "none" to compute an UNMASKED baseline.')
     ap.add_argument('--overwrite', action='store_true')
+    ap.add_argument('--allow-unmasked', action='store_true',
+                    help='Compute a baseline even when the requested mask is missing for a '
+                         'subject/session. OFF by default: an unmasked baseline is weaker '
+                         '(artifacts inflate std, deflating z) and would sit in the same '
+                         'scope directory as masked subjects. Recorded as '
+                         'mask_applied=false either way.')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -590,7 +610,8 @@ def main():
         for session in sessions:
             try:
                 process_subject_session(subject, session, mask_label, mask_level,
-                                        overwrite=args.overwrite)
+                                        overwrite=args.overwrite,
+                                        allow_unmasked=args.allow_unmasked)
             except Exception:
                 # One malformed subject must not take down the array task's whole
                 # batch -- log the traceback, keep going, summarize at the end.

@@ -53,15 +53,27 @@ OAK=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler
 # and the epoch cache must cover the same subjects or the mask cannot be applied
 # to part of the cache.
 : "${SUBJECTS_FILE:=$OAK/cohorts/subjects_pain_epoch_cache.txt}"
-: "${MASK_LABEL:=}"     # empty -> config.CANONICAL_MASK_LABEL; 'none' -> unmasked baseline
+# Empty -> the config defaults, i.e. mask level 'bipolar' and the bipolar mask
+# label built from FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL. The bipolar mask is
+# the superset ((raw_voltage[anode] | raw_voltage[cathode]) | bipolar_variance)
+# and is already keyed on pairs, which is how the PSD is keyed.
+: "${MASK_LEVEL:=}"    # 'bipolar' | 'raw_voltage'
+: "${MASK_LABEL:=}"    # 'none' -> unmasked baseline (see --allow-unmasked below)
 
 SUBJECT=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$SUBJECTS_FILE")
 [ -n "$SUBJECT" ] || { echo "No subject at array index $SLURM_ARRAY_TASK_ID in $SUBJECTS_FILE"; exit 1; }
 
 MASK_FLAG=""
-[ -n "$MASK_LABEL" ] && MASK_FLAG="--mask-label $MASK_LABEL"
-echo "Array task $SLURM_ARRAY_TASK_ID -> subject $SUBJECT (mask=${MASK_LABEL:-<config default>})"
+[ -n "$MASK_LEVEL" ] && MASK_FLAG="$MASK_FLAG --mask-level $MASK_LEVEL"
+[ -n "$MASK_LABEL" ] && MASK_FLAG="$MASK_FLAG --mask-label $MASK_LABEL"
+echo "Array task $SLURM_ARRAY_TASK_ID -> subject $SUBJECT" \
+     "(mask=${MASK_LEVEL:-<config default>}/${MASK_LABEL:-<config default>})"
 
+# NOT --allow-unmasked: a subject/session whose mask is missing is SKIPPED rather
+# than given a weaker unmasked baseline that would sit in the same scope directory
+# as the properly masked ones. The cohort file has more subjects than the bipolar
+# mask covers, so this is load-bearing, not theoretical -- check the logs for
+# SKIPPING lines and reconcile before treating the cohort as complete.
 python -W ignore -m ieeg_ehr.qc.feature_level.detect_power_outlier \
     --subjects "$SUBJECT" --session all --overwrite $MASK_FLAG
 
