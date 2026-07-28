@@ -304,7 +304,8 @@ CACHE RULES
 - Per-2s-window LOG-power, never epoch-averaged (Jensen; normalization is per-window).
 - New cache (expensive re-run) only for new epoch length or new QC mask.
 - build_pain_epoch_power.py: emit epoch defs + per-window Parquet cache; do NOT
-  average, do NOT normalize (views do that). Store float32 after round-trip check.
+  average, do NOT normalize (views do that). Store float32 (P0.6: round-trip
+  validated; views must upcast to float64 to average or exponentiate).
 
 analysis/ ORGANIZATION (5 levels)
 1 <event>/  2 <question>/(named only)  3 <output_type>/  4 <view_scheme>/(optional)  5 <run>_<timestamp>/
@@ -340,7 +341,9 @@ NAMING / IO
 
 1. Pin the QC mask before the big cache build (baked in → change = re-run).
 2. P1.2 storage check: Parquet vs HDF5/Zarr for the per-window cache; confirm fit.
-3. dtype audit: standardize cache on float32 after round-trip validation.
+3. ~~dtype audit: standardize cache on float32 after round-trip validation.~~
+   **RESOLVED 2026-07-27 (P0.6).** Cache stores float32; views compute in float64.
+   See DECISIONS 2026-07-27 and `config/cache_params.py`.
 4. Offline cohort-matching code: same repo as Sherlock analysis, or separate PHI repo?
 5. Feature-level QC thresholds (K, X, Y, Z) — set on structural grounds.
 6. GLMM feature domain: likely log-power (for normalization); per-window cache defers it.

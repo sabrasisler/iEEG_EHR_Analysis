@@ -82,6 +82,46 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       should be a hard stop for a *definitive* run rather than a warning.
       (→ docs/labnotebook/2026-07-27.md, io/provenance.py)
 
+- [ ] **Some stored PSD runs are entirely non-finite — is that expected, and
+      should the mask or the PSD writer catch it?** Found incidentally by the P0.6
+      dtype audit: two of sub-071's runs (the two smallest, ~2 MB and ~4 MB raw)
+      have a stored `psd_log_bins` that is 100% `-inf`/NaN, because the raw
+      voltage is a single constant value repeated — so PSD == 0 and log10(0) ==
+      -inf for every window/channel/bin. sub-071's first *usable* run is still
+      18.4% non-finite. Open questions: are these dead runs a known
+      recording-side artifact (amp disconnected?), and should something refuse to
+      write an all-`-inf` PSD rather than storing it? Note the raw-voltage QC mask
+      operates on voltage, so a *constant* trace may pass flatline detection
+      depending on the variance threshold. Cheap to check — the audit already
+      lists the offending runs. (→ P0.6 audit summary.txt, PLANNING P2.1)
+- [ ] **A stored log-power of -36.8 is physically odd — near-dead channel, or a
+      units/scaling problem?** sub-088's minimum stored log10-power is -36.8
+      (i.e. ~1.6e-37 V²/Hz), against a cohort-typical floor of about -19. It is
+      what forced the "exponentiate in float64" rule in P0.6, so it is handled
+      numerically — but the *physical* question is untouched. If it is a dead
+      channel, feature-level QC (P2.1) should catch it on structural grounds and
+      this dissolves. If a whole subject sits orders of magnitude below the rest,
+      that is a scaling/`conversion` bug worth finding before the sweep.
+      (→ P0.6 audit summary.txt, PLANNING P2.1)
+- [ ] **`io/nwb.py`'s float32 cast of the raw voltage is NOT bit-exact — does it
+      matter anywhere?** The raw `ElectricalSeries` is stored float64, and the
+      P0.6 audit measured the cast: sub-085 and sub-088 are *not* exactly
+      representable in float32 (sub-088 has exactly 65536 distinct values = 16-bit
+      ADC, scaled by a float64 `conversion`, and the product is not a float32).
+      The induced relative error is ~6e-8 on voltage — far below ADC quantisation,
+      so almost certainly irrelevant, and it is upstream of P0.6's scope
+      (cache dtype) rather than part of it. Recording it because it is the one
+      place in the chain where a dtype choice is measurably lossy and nobody has
+      written down that it's acceptable. (→ P0.6 audit dtype_audit.json,
+      `io/nwb.py`)
+
+- [ ] **`config.PLOTS_ROOT` is `analysis/scratch/`, but `architecture.md` PART 4
+      draws scratch as `analysis/pain/scratch/`.** Noticed during P0.3 while adding
+      the `analysis_run_dir` builders, deliberately not "fixed": runs already exist
+      at the current path and it is throwaway output either way. Open question is
+      whether scratch should be per-event at all — if the answer is no, the doc is
+      what's wrong, not the code. (→ docs/labnotebook/2026-07-27.md, config/paths.py)
+
 ## Next steps (session-end dump — `/standup` reads this tomorrow)
 
 - [ ] Lab-notebook system is built but unexercised. The real test is whether

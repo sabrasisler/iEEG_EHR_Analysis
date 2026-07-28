@@ -14,6 +14,21 @@ Cache stores: per-2s-window, per-channel, per-freq-bin **log-power**, float32,
 QC-masked (raw-voltage mask + feature-level mask applied/flagged). One columnar
 file per subject/session (Parquet or HDF5 — NOT NWB, NOT one-file-per-epoch).
 
+**Precision rule for every view below (P0.6): store narrow, compute wide.** The
+cache is float32; views UPCAST to `config.CACHE_ACCUMULATE_DTYPE` (float64)
+before any reduction. This bites two axes specifically:
+
+- **Axis 1 (domain)** — exponentiating to linear runs in float64. The worst
+  stored log-power seen is ~-36.8, barely a decade above float32's smallest
+  normal, so `10**log_power` in float32 is a step away from underflowing to
+  exactly zero once anything divides it.
+- **Axis 4 (epoch aggregation)** — a float32 accumulator over ~300 windows holds
+  only ~6 sig figs, the largest precision loss in the whole chain. numpy does NOT
+  upcast for you: `arr.mean(axis=0)` on float32 input accumulates in float32.
+
+Axes 5 and 6 (frequency and region aggregation) are reductions too, so the same
+rule applies. See DECISIONS 2026-07-27.
+
 The view chain runs in this ORDER (order matters; some steps must precede others):
 
 ```

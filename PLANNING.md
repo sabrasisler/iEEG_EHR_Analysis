@@ -38,10 +38,10 @@ these.
 |---|---|---|
 | P0.1 | Pin the canonical QC mask (`_satmargin15_sw` vs `_sw_logz4`) in config | open |
 | P0.2 | Lock discovery subjects to a cohort file; add `--split` gate so hold-out is unreachable by default | open |
-| P0.3 | IO conventions + deps: pyarrow installed, every writer emits a provenance/staleness sidecar | partial — `io/` exists, `save_table` still CSV |
+| P0.3 | IO conventions + deps: pyarrow installed, every writer emits a provenance/staleness sidecar | **done 2026-07-27** |
 | P0.4 | Repo cleanup as its own commit (`outdated/`, `qc/` out of `analysis/`) | **done 2026-07-27** |
 | P0.5 | `CLAUDE.md` at repo root | **done 2026-07-27** |
-| P0.6 | dtype audit — validate float32 round-trip, standardize the cache on float32 | open |
+| P0.6 | dtype audit — validate float32 round-trip, standardize the cache on float32 | **done 2026-07-27** |
 
 Why this order: the mask and the cohort split are *baked in* downstream — the
 mask into every cache file, the split into what you are allowed to have looked
@@ -50,7 +50,11 @@ hold-out) later.
 
 ## PHASE 1 — Build the cache
 
-Depends on P0.1 (mask) + P0.2 (cohort) + P0.3 (IO) + P0.6 (dtype).
+Depends on P0.1 (mask) + P0.2 (cohort). Two prerequisites are now **settled**:
+P0.3 (IO) — pyarrow/joblib installed, `ieeg_ehr.io` writes every artifact with a
+provenance/staleness sidecar, cache + analysis paths built (`docs/io_conventions.md`).
+P0.6 (dtype) — cache stores float32, views compute in float64
+(`config/cache_params.py`). Both: DECISIONS 2026-07-27.
 
 | ID | Milestone |
 |---|---|

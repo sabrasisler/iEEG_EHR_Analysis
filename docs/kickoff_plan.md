@@ -191,6 +191,14 @@ Rules:
 
 ## IO CONVENTIONS
 
+> **SUPERSEDED 2026-07-27 by `docs/io_conventions.md`**, which is the live
+> contract (the `io` helper API, the sidecar envelope, staleness rules, path
+> builders). Two things below are now wrong and kept only as a record of the
+> plan: the install command (`--break-system-packages` is for a system Python;
+> this project uses the shared venv, and pyarrow needs `--only-binary=:all:` on
+> Sherlock's glibc 2.17), and "`df.to_parquet`" (new code calls
+> `io.write_table`, which cannot forget the sidecar).
+
 - **Parquet** for all tables (cache, epoch defs, feature tables, sweep results).
   `pip install pyarrow --break-system-packages`. `df.to_parquet` /
   `pd.read_parquet(path, columns=[...])` for partial reads.

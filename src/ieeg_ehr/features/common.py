@@ -5,7 +5,6 @@ duplicated so region grouping, subject weighting, and provenance conventions
 stay identical across plot types.
 """
 
-import json
 import logging
 from datetime import datetime
 
@@ -16,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import config
-from ieeg_ehr import config as qc_config
+from ieeg_ehr import io
 
 logger = logging.getLogger(__name__)
 
@@ -404,19 +403,21 @@ def plot_region_freq_heatmaps(pivots, col_titles, bin_labels, counts, title, out
 
 
 def _source_cache_provenance(cache_paths):
-    """Read each cache CSV's sidecar provenance.json (written by
-    build_pain_epoch_power.py), when present, so a plot run's own provenance
-    traces all the way back to the mask/epoch params used to build the
-    cache -- not just the cache file paths themselves."""
+    """Read each cache file's sidecar, when present, so a plot run's own
+    provenance traces all the way back to the mask/epoch params used to build
+    the cache -- not just the cache file paths themselves.
+
+    Goes through io.read_sidecar rather than reconstructing the sidecar filename
+    here: that helper knows BOTH naming forms (the current
+    `<file>.provenance.json` and the legacy suffix-replaced form these legacy
+    CSV caches actually use on disk), so there is one place that owns the
+    convention."""
     entries = []
     for csv_path in cache_paths:
-        prov_path = csv_path.with_suffix('').with_suffix('.provenance.json')
-        entry = {'cache_csv': str(csv_path)}
-        if prov_path.exists():
-            entry['cache_provenance'] = json.loads(prov_path.read_text())
-        else:
-            entry['cache_provenance'] = None
-        entries.append(entry)
+        entries.append({
+            'cache_csv': str(csv_path),
+            'cache_provenance': io.read_sidecar(csv_path),
+        })
     return entries
 
 
@@ -443,16 +444,29 @@ def make_run_dir(run_name, n_subjects, category=None):
 def write_run_provenance(run_dir, script_name, args, cache_paths, subjects=None, extra=None):
     """subjects: explicit list of subject IDs included in this run -- written
     into provenance.json so a run's cohort is traceable without having to
-    parse it back out of cache_paths' filenames."""
-    provenance = {
-        'script': script_name,
-        'git': qc_config.git_provenance(),
-        'args': vars(args),
-        'subjects': sorted(subjects) if subjects is not None else None,
-        'roi_regions': config.ROI_REGIONS,
-        'pain_bin_edges': config.PAIN_BIN_EDGES,
-        'source_cache_files': _source_cache_provenance(cache_paths),
-    }
-    if extra:
-        provenance.update(extra)
-    (run_dir / 'provenance.json').write_text(json.dumps(provenance, indent=2))
+    parse it back out of cache_paths' filenames.
+
+    Thin wrapper over io.write_run_provenance, which owns the envelope (schema
+    version, created, git, config_hash, parents[]) for every artifact in the
+    project. The plot-specific keys below are what this flavour of run adds:
+    the region set and pain bins actually in force, and each source cache file's
+    own provenance. `args` becomes `params`, so a run's config_hash reflects the
+    arguments it was invoked with."""
+    return io.write_run_provenance(
+        run_dir,
+        script=script_name,
+        params=vars(args),
+        # digest=False: a plot run can reference 65+ cache files, and hashing
+        # every one of them off Lustre on each run buys nothing here -- (bytes,
+        # mtime) already answers "did the cache change under me", and each file's
+        # own provenance is captured in source_cache_files below.
+        parents=[io.parent_ref(p, digest=False) for p in cache_paths],
+        subjects=subjects,
+        extra={
+            'args': vars(args),          # kept: pre-2026-07 readers look here
+            'roi_regions': config.ROI_REGIONS,
+            'pain_bin_edges': config.PAIN_BIN_EDGES,
+            'source_cache_files': _source_cache_provenance(cache_paths),
+            **(extra or {}),
+        },
+    )

@@ -134,3 +134,117 @@ version becomes annoying.
 
 **What would reverse it:** real usage. Nothing here is expensive to change — it is
 plain-text files and thin commands. Reshape before adding anything deferred.
+
+## 2026-07-27 — The cache stores float32; views COMPUTE in float64 (P0.6)
+
+Two rules, settled together because the audit that produced one produced the
+other:
+
+1. **Storage is float32.** The per-window cache stores log-power as float32.
+2. **Views upcast to float64** before any epoch average/reduction, and before
+   exponentiating log-power back to linear.
+
+**Why (1) — measured, not assumed.** A full float64 recompute of one run's PSD,
+compared against the production float32 path's epoch averages, agreed to **8.1
+significant figures**: worst-case relative error 8.3e-09, which is a fractional
+error of **2.5e-07 in linear power**, or 0.14 float32 half-ulps. float32 halves
+the cache against float64 for an error four orders of magnitude below anything an
+effect size could resolve. float32 also round-trips **bit-exactly** through both
+Parquet and HDF5 (both carry IEEE-754 binary32 natively) — verified rather than
+inferred.
+
+The end-to-end error is *better* than float32's own ~7.2 digits because
+per-window rounding is independent and **averages down** over ~300 windows. That
+is the same fact that forces rule (2): accumulator error **grows** with the
+number of terms instead.
+
+**Why (2).** A float32 accumulator over a ~5-minute epoch holds only **6.0
+significant figures** — at/just below the 6-sig-fig bar this task set, and the
+largest precision loss anywhere in the chain. It is not an argument for storing
+float64; it is an argument for upcasting at the point of the reduction, which is
+free. **numpy does not do this for you**: for float32 input it accumulates in
+float32, so the naive `arr.mean(axis=0)` is the lossy version. Separately, the
+worst stored log-power observed was **-36.8** (a near-dead channel), leaving only
+~1.1 decades above float32's smallest normal — so `10**log_power` in float32 sits
+close to underflow, and a later baseline division could silently produce an exact
+zero.
+
+**The trap this avoids:** reading the 6.0-sig-fig accumulator result as "float32
+is too narrow for the cache." Storage precision and accumulator precision are
+different questions with opposite scaling in the number of windows, and
+conflating them would have bought a 2x larger cache and still left the real
+error — the accumulator — in place.
+
+**Where it lives:** `config/cache_params.py` (`CACHE_FLOAT_DTYPE`,
+`CACHE_ACCUMULATE_DTYPE`, `CACHE_LINEAR_DOMAIN_DTYPE`), `CLAUDE.md` (cache +
+view rules). The audit is `ieeg_ehr/features/dtype_audit.py`, re-runnable;
+output at `$DERIV/qc/feature_level/validation/dtype_audit/p0.6_2026-07-27T160009`.
+
+**What would reverse it:** a feature family whose stored values are NOT
+log-scaled and span a much wider dynamic range (float32's exponent range is what
+makes log-power comfortable), or a downstream method that genuinely needs more
+than ~7 digits of a *stored* value — neither of which is in view. Note the
+audit's own scope: leg D compared 8 bipolar pairs of one run of one subject.
+It is a precision claim about the arithmetic, which does not vary across
+subjects, not a survey.
+
+## 2026-07-27 — Every artifact write goes through `ieeg_ehr.io` and carries a sidecar (P0.3)
+
+`io.write_table` / `io.save_model` / `io.write_manifest` / `io.write_run_provenance`
+write the artifact and its provenance JSON in the same call; `io.read_table` /
+`io.load_model` / `io.assert_fresh` check staleness on the way back in. One
+envelope shape (`schema_version, kind, created, script, git, params, config_hash,
+parents[], subjects[]`) in three homes: `<file>.provenance.json`,
+`<dir>/manifest.json`, `<run_dir>/provenance.json`.
+
+**Why one writer instead of a documented convention:** the rule "never a bare
+`to_parquet`" was already written down and already being broken — nine existing
+writers emit a table with nothing beside it. A rule that requires remembering an
+extra call gets skipped under time pressure; making the sidecar impossible to
+omit (it is in the same function call) is the version that survives.
+
+**Why parents are fingerprinted, not content-hashed:** a per-window cache file is
+hundreds of MB to GB. sha256-ing it on every write, and again on every staleness
+check, would cost more than recomputing the view the check exists to guard. So a
+parent reference is `(path, bytes, mtime)` plus a real digest only for small
+files — and view staleness is defined against the **cache manifest's** digest,
+which is cheap by construction. `io.file_digest` refuses files over 64 MB so that
+guarantee cannot quietly erode.
+
+**Why staleness warns rather than refuses by default:** the safe fallback is
+always "recompute," and a recomputed view cannot be stale — which is why views
+default to not saving at all. A hard failure on every commit-drift would make an
+exploratory session unusable; `on_stale='refuse'` is there for anything a
+reported number comes out of, and models/views default to comparing the commit
+because for those the code *is* the numbers.
+
+**Sidecar naming:** the suffix is APPENDED (`x.parquet.provenance.json`), not
+replaced. Replacing collapses `x.parquet` and `x.csv` onto one sidecar name —
+exactly the collision this repo's "convert one CSV when you next touch it" policy
+walks into. Readers still resolve the pre-P0.3 replaced form, which is what the
+legacy pain caches have on disk.
+
+**The QC tree stays CSV.** ~85 subject-sessions of per-window metrics,
+exclusions, and masks with a working metric/threshold split; converting them
+would invalidate on-disk artifacts for no analytical benefit. `save_table` now
+dispatches on the file extension, so existing `.csv` call sites are untouched
+while new code gets Parquet. `append_table` stays CSV by nature — Parquet has no
+append-a-few-rows mode, and the streaming metrics writers need one. This narrows
+the original P0.3 task ("switch `save_table` to Parquet") on purpose.
+
+**Deps:** pyarrow 20.0.0 + joblib 1.5.3 into the shared venv, `--no-deps
+--only-binary=:all:` so numpy 2.4.2 / pandas 2.3.3 / pynwb are untouched. Sherlock
+is CentOS 7 (**glibc 2.17**) and modern pyarrow wheels are `manylinux_2_28`, so a
+plain `pip install pyarrow` tries a source build and dies on a missing Rust
+toolchain; `--only-binary=:all:` makes pip back off to the newest version that
+still ships a `manylinux2014` wheel. `io.tables`/`io.models` raise that exact
+recipe if the import fails.
+
+**Where it lives:** `docs/io_conventions.md` (the contract + API),
+`src/ieeg_ehr/io/{sidecar,tables,models}.py`, `CLAUDE.md` (IO / naming),
+`config/paths.py` (`pain_epoch_*` cache paths, `analysis_run_dir` /
+`sweep_run_dir` for the 5-level scheme). Tests: `tests/test_io_conventions.py`.
+
+**What would reverse it:** the P1.2 storage check choosing HDF5/Zarr over Parquet
+for the cache — that changes `write_table`'s backend for the cache only, not the
+sidecar contract, which is format-agnostic on purpose.

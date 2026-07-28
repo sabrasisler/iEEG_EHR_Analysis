@@ -2,9 +2,9 @@
 The single config namespace: `from ieeg_ehr import config`.
 
 Split by concern across paths.py / qc_params.py / psd_params.py /
-pain_params.py and re-exported here, so callers see one flat namespace
-(`config.RAW_DIR`, `config.GROSS_STD_THRESH`, `config.PAIN_BIN_EDGES`, ...)
-regardless of which file a name lives in.
+pain_params.py / cache_params.py and re-exported here, so callers see one flat
+namespace (`config.RAW_DIR`, `config.GROSS_STD_THRESH`, `config.PAIN_BIN_EDGES`,
+`config.CACHE_FLOAT_DTYPE`, ...) regardless of which file a name lives in.
 
 Two things are defined HERE rather than re-exported, deliberately:
 
@@ -31,6 +31,7 @@ from ieeg_ehr.config.paths import (          # explicit: used below
 from ieeg_ehr.config.qc_params import *      # noqa: F401,F403
 from ieeg_ehr.config.psd_params import *     # noqa: F401,F403
 from ieeg_ehr.config.pain_params import *    # noqa: F401,F403
+from ieeg_ehr.config.cache_params import *   # noqa: F401,F403
 
 # Re-exported for backwards compatibility with `config.<name>` call sites.
 from ieeg_ehr.io.provenance import (         # noqa: F401

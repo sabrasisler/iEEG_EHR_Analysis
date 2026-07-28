@@ -10,9 +10,13 @@ area:
   features, or directory structure.
 - `PLANNING.md` — the phases, milestones, and sequencing rationale. Read before
   starting a new phase or task.
-- `docs/kickoff_plan.md` — repo org, IO conventions, background jobs, git
-  workflow. Read before writing sbatch. (The forward-looking half of this doc
-  now lives in `PLANNING.md` / `TASKS.md`; what remains is reference material.)
+- `docs/io_conventions.md` — the artifact contract: the `io` helper API, the
+  sidecar envelope, staleness rules, where outputs go, what stays CSV, and the
+  pyarrow install recipe. Read before writing ANY script that produces output.
+- `docs/kickoff_plan.md` — repo org, background jobs, git workflow. Read before
+  writing sbatch. (The forward-looking half of this doc now lives in
+  `PLANNING.md` / `TASKS.md`; its IO section is superseded by
+  `docs/io_conventions.md`; what remains is reference material.)
 - `docs/WORKFLOW.md` — where every kind of record goes, and the commands that
   write them. Read before logging anything.
 - `docs/view_registry.md` — the seven view axes and their order. Read before
@@ -114,7 +118,9 @@ logs, and results live on Oak, NOT in the repo.**
   per-freq-bin, **log-power**, QC-masked, **PRE-normalization, PRE-averaging**.
   Format: **Parquet, ONE file per subject/session** (subject/session in the
   FILENAME; epochs stacked inside via an `epoch_id` column). NOT NWB. NOT
-  one-file-per-epoch. Immutable. float32 (after round-trip validation).
+  one-file-per-epoch. Immutable. **float32** — validated by the P0.6 audit
+  (bit-exact round-trip through Parquet and HDF5; epoch averages agree with a
+  float64 pipeline to 8.1 sig figs). `config.CACHE_FLOAT_DTYPE`.
 - **Epoch definitions**: tiny Parquet index (run + window indices + pain label +
   mask ref) beside the cache.
 - **Views**: the chain domain → baseline → normalize → epoch-average → freq-agg →
@@ -143,6 +149,14 @@ eye or a model. A view is a step; an analysis is a stop.
 
 ## View functions
 
+- **Store narrow, compute wide (P0.6).** The cache is float32; views must UPCAST
+  before they reduce. Any epoch average/sum over windows goes through
+  `config.CACHE_ACCUMULATE_DTYPE` (float64) — numpy does NOT do this for you, so
+  a bare `arr.mean(axis=0)` on float32 input accumulates in float32 and holds
+  only ~6 sig figs. Exponentiating log-power to linear (axis 1, `domain`) uses
+  `config.CACHE_LINEAR_DOMAIN_DTYPE` (float64): the worst stored log-power is
+  ~-36.8, barely a decade above float32's smallest normal, so a later baseline
+  division can underflow to exactly zero.
 - Every view function takes optional `save_path=None`. Default = recompute (don't save).
 - If `save_path` is set, ALSO write a provenance+staleness sidecar (cache manifest
   hash, view git commit, view config, date). On load, if current cache hash or git
@@ -196,11 +210,28 @@ eye or a model. A view is a step; an analysis is a stop.
 
 ## IO / naming
 
+Full contract + API: `docs/io_conventions.md`. Read it before writing any script
+that produces output. The rules:
+
 - Parquet for tables; joblib (NOT raw pickle) for fitted models / FOOOF objects;
   JSON for manifests and sidecars. Never pickle tabular data.
-- New artifacts only — do NOT bulk-convert existing CSVs; convert one when next touched.
+- **Go through `ieeg_ehr.io`, never a bare writer.** `io.write_table` /
+  `io.save_model` / `io.write_manifest` / `io.write_run_provenance` emit the
+  provenance sidecar in the same call; `io.read_table` / `io.load_model` /
+  `io.assert_fresh` check staleness on the way back in (`on_stale='refuse'` for
+  anything a reported number comes out of). A bare `df.to_parquet` / `to_csv` /
+  `joblib.dump` in new code is a bug.
+- **Output paths come from `config/paths.py` builders**, never hand-assembled:
+  `pain_epoch_{unit_dir,cache_path,defs_path,manifest_path,views_dir}` for the
+  Phase-1 cache, `analysis_run_dir` / `sweep_run_dir` for the 5-level analysis
+  scheme. All resolve to Oak.
+- The **QC tree stays CSV** (existing artifacts, working metric/threshold split);
+  `io.save_table` and `io.append_table` remain for it. Everything new is Parquet.
+- New artifacts only — do NOT bulk-convert existing CSVs; convert one when next
+  touched, and give it a sidecar when you do.
 - Do NOT fingerprint runs or plots (use human label + timestamp). Fingerprint ONLY
-  materialized-view folders, and only if recompute is measured slow.
+  materialized-view folders, and only if recompute is measured slow —
+  `io.config_hash` is the one sanctioned fingerprint.
 
 ## Compute
 

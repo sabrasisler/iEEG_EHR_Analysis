@@ -19,9 +19,16 @@ dependencies = [
     "scipy",
     "matplotlib",
     "pynwb",
-    "pyarrow",   # P0.3 — not yet installed; save_table still writes CSV
-    "joblib",    # P0.3 — for fitted models / FOOOF objects, never for tables
+    "pyarrow",   # 20.0.0 installed 2026-07-27 (P0.3). MUST be installed with
+                 #   --only-binary=:all: — Sherlock is glibc 2.17 and modern
+                 #   pyarrow wheels are manylinux_2_28, so a plain install falls
+                 #   through to a source build. See docs/io_conventions.md.
+    "joblib",    # 1.5.3 — fitted models / FOOOF objects, never tables
 ]
+
+[project.optional-dependencies]
+# Test-only; not needed by any job. `pytest tests/` from the repo root.
+dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
