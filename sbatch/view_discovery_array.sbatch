@@ -68,7 +68,6 @@ for NORM in zscore_vs_baseline baseline_subtract; do
       --split "$SPLIT" \
       --mask-label "$MASK_LABEL" \
       --normalization "$NORM" \
-      --drop-line-noise-bins \
       --out-dir "$OUT_ROOT/$NORM"
 done
 

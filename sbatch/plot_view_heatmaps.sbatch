@@ -13,9 +13,10 @@
 # them provably come from the same values, and re-plotting is seconds instead of
 # minutes. Intended to run with --dependency on the view array.
 #
-# The region row order is clustered ONCE from each normalization's own group table.
-# That means the z-score and delta figures may order rows differently; pass
-# --region-order explicitly to force a shared order if you want them side by side.
+# Region row order is the FIXED anatomical config.ROI_REGIONS order by default, so
+# every figure -- across normalizations, runs and subjects -- shares one ordering and
+# can be compared directly. Pass --row-order cluster/effect_size only when you
+# deliberately want this run's own data to reorder rows.
 
 set -euo pipefail
 

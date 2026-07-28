@@ -127,6 +127,19 @@ date, or figure that prompted it.
       36216669) to land first. Note sub-138 has only 1 PSD run on disk.
       (→ DECISIONS.md 2026-07-28 cohort lock)
 
+- [ ] **Make the cache builder emit `channel_meta`, so no view ever reads an NWB.**
+      `build_pain_epoch_power.py` already loads the electrodes table per run
+      (`_load_run_arrays` reads `Desikan_Killiany_anode` and throws it away), so this
+      is writing a table it already has in hand, not new I/O. Today
+      `views/channel_meta.py` rebuilds it lazily on first view — one NWB metadata pass
+      per subject, cached thereafter — purely because the 34 GB cache predates that
+      module. Emitting it at cache-build time makes the view layer pure
+      table-reads-only and removes pynwb from its import path.
+      Also backfill the existing 83 subject-sessions (cheap, metadata-only, same shape
+      as `backfill_epoch_defs_timing`) so the lazy path can then be deleted rather
+      than left as a permanent fallback.
+      (→ views/channel_meta.py, features/build_pain_epoch_power.py:_load_run_arrays)
+
 ## Next
 
 - [ ] **P1.1 Refactor `build_pain_epoch_power.py`** into the epoch-definitions +

@@ -104,7 +104,13 @@ def main():
                     help=f'Default: {config.PLOTS_ROOT} (analysis/scratch on Oak)')
     ap.add_argument('--pain-bin-scheme', choices=list(PANELS), default='subject_relative')
     ap.add_argument('--row-order', choices=['default', 'cluster', 'effect_size'],
-                    default='cluster')
+                    default='default',
+                    help='Region row order. DEFAULT is the fixed anatomical '
+                         'config.ROI_REGIONS order, so EVERY figure from every run '
+                         'shares one ordering and can be compared directly. '
+                         '"cluster"/"effect_size" reorder rows from THIS run\'s own '
+                         'data, which makes two figures incomparable unless you also '
+                         'pass --region-order; ask for them deliberately.')
     ap.add_argument('--region-order', nargs='+', default=None,
                     help='Explicit region row order, overriding --row-order. Use to force '
                          'the SAME rows across two runs for side-by-side comparison.')
