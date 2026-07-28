@@ -45,8 +45,6 @@ import logging
 import os
 import re
 
-import pandas as pd
-
 from ieeg_ehr import config, io
 
 logger = logging.getLogger(__name__)
