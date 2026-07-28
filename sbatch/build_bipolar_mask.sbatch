@@ -43,8 +43,20 @@ python -c "import ieeg_ehr; print('ieeg_ehr:', ieeg_ehr.__file__)"
 
 BIPOLAR_LABEL="${BIPOLAR_LABEL:-std10}"
 
-echo "=== build_bipolar_mask: bipolar_variance/${BIPOLAR_LABEL} + pinned raw-voltage mask ($(date)) ==="
+# Optional subject restriction, space-separated:
+#   sbatch --export=ALL,SUBJECTS="236" sbatch/build_bipolar_mask.sbatch
+# Default (unset) sweeps EVERY subject with both inputs, which is usually what you
+# want: the rollup is idempotent and takes ~5 min for the whole cohort, so a full
+# sweep also picks up any subject that gained std10 since the last run. Restrict
+# when you want a fast targeted rebuild, or to keep one subject's provenance
+# separable from a cohort-wide pass.
+SUBJECTS="${SUBJECTS:-}"
 
-python -m ieeg_ehr.qc.build_bipolar_mask --bipolar-variance-label "$BIPOLAR_LABEL"
+echo "=== build_bipolar_mask: bipolar_variance/${BIPOLAR_LABEL} + pinned raw-voltage mask ($(date)) ==="
+echo "=== subjects: ${SUBJECTS:-<all with both inputs>} ==="
+
+python -m ieeg_ehr.qc.build_bipolar_mask \
+    --bipolar-variance-label "$BIPOLAR_LABEL" \
+    ${SUBJECTS:+--subjects $SUBJECTS}
 
 echo "=== done ($(date)) ==="
