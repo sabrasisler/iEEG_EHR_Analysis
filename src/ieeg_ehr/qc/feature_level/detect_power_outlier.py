@@ -120,6 +120,25 @@ def expected_psd_rate():
     return 1.0 / hop_sec
 
 
+def _defer(subject, session, reason, detail=None):
+    """Record that a subject/session was NOT processed, and why.
+
+    Written as an artifact rather than only logged, because "which subjects still
+    need adding?" has to be answerable weeks later from the tree itself. Deleting
+    the marker is how you un-defer: the next run overwrites it with real metrics.
+    """
+    path = config.feature_metrics_deferred_path(subject, session)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        'subject': subject, 'session': session,
+        'deferred': True, 'reason': reason, 'detail': detail,
+        'run_timestamp': config.run_timestamp(),
+        'git': config.git_provenance(),
+    }, indent=2, default=str))
+    logger.warning('sub-%s ses-%s: DEFERRED (%s) -> %s', subject, session, reason, path.name)
+    return None
+
+
 def resolve_mask_path(subject, session, mask_level, mask_label):
     """Where this level's mask for one subject/session lives.
 
@@ -236,10 +255,17 @@ def _order_stats(z, idx_by_frac):
 
 
 def process_subject_session(subject, session, mask_label, mask_level=None, overwrite=False,
-                            allow_unmasked=False):
+                            allow_unmasked=False, deferred_subjects=frozenset()):
     z_thresh = config.FEATURE_Z_THRESH
     bin_frac = config.FEATURE_BIN_FRAC
     frac_grid = tuple(config.FEATURE_BIN_FRAC_GRID)
+
+    if subject in deferred_subjects:
+        # Feature metrics read psd_log_bins, which is being rewritten for these
+        # subjects (rerun_psd_nonstandard.sbatch). Computing a baseline now would
+        # either read a half-rewritten file or bake in the superseded 60s-hop PSD.
+        return _defer(subject, session, 'psd_rerun_pending',
+                      f'listed in {config.PSD_RERUN_SUBJECTS_TXT}')
 
     baseline_path = config.feature_metrics_path('baseline', subject, session,
                                                 mask_label, mask_level)
@@ -266,11 +292,9 @@ def process_subject_session(subject, session, mask_label, mask_level=None, overw
         # subjects, so the cohort would silently mix two baseline definitions.
         # --allow-unmasked opts into it deliberately.
         if not allow_unmasked:
-            logger.warning('sub-%s ses-%s: SKIPPING -- no %s mask at %s. Pass --allow-unmasked '
-                           'to compute an unmasked baseline instead (it will be weaker, and '
-                           'flagged as mask_applied=false in the sidecar).',
-                           subject, session, mask_level, mask_path)
-            return None
+            return _defer(subject, session, 'no_upstream_mask',
+                          f'no {mask_level} mask at {mask_path}; pass --allow-unmasked to '
+                          'compute a weaker unmasked baseline instead')
         logger.warning('sub-%s ses-%s: no %s mask at %s -- baseline will be UNMASKED for this '
                        'subject/session, which INFLATES its std and makes the detector LESS '
                        'sensitive here than elsewhere', subject, session, mask_level, mask_path)
@@ -573,6 +597,10 @@ def main():
                          f'{config.bipolar_mask_label(config.FEATURE_BASELINE_BIPOLAR_VARIANCE_LABEL)}. '
                          'Pass "none" to compute an UNMASKED baseline.')
     ap.add_argument('--overwrite', action='store_true')
+    ap.add_argument('--include-deferred', action='store_true',
+                    help='Process subjects listed in the PSD-rerun audit anyway. Use this '
+                         'to BACKFILL them once their PSD re-extraction has landed: '
+                         '--subjects 247,257,259 --include-deferred --overwrite')
     ap.add_argument('--allow-unmasked', action='store_true',
                     help='Compute a baseline even when the requested mask is missing for a '
                          'subject/session. OFF by default: an unmasked baseline is weaker '
@@ -593,6 +621,11 @@ def main():
         mask_label = None
 
     subjects = [s for s in args.subjects.replace(',', ' ').split() if s]
+    deferred_subjects = frozenset() if args.include_deferred else frozenset(config.psd_rerun_subjects())
+    if deferred_subjects:
+        logger.info('deferring %d subject(s) whose PSD is being re-extracted: %s '
+                    '(--include-deferred to backfill once it lands)',
+                    len(deferred_subjects), sorted(deferred_subjects))
     io.warn_if_dirty()
     logger.info('feature-level power-outlier metrics: %d subjects, mask=%s/%s, K=%g, B=%g',
                 len(subjects), mask_level, mask_label,
@@ -611,7 +644,8 @@ def main():
             try:
                 process_subject_session(subject, session, mask_label, mask_level,
                                         overwrite=args.overwrite,
-                                        allow_unmasked=args.allow_unmasked)
+                                        allow_unmasked=args.allow_unmasked,
+                                        deferred_subjects=deferred_subjects)
             except Exception:
                 # One malformed subject must not take down the array task's whole
                 # batch -- log the traceback, keep going, summarize at the end.

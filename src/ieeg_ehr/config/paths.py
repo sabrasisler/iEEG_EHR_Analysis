@@ -207,6 +207,38 @@ def feature_metrics_path(kind, subject, session, mask_label=None, level='raw_vol
             / f'sub-{subject}_ses-{session}.parquet')
 
 
+# Subjects whose stored PSD is being re-extracted (the superseded 60s-hop design).
+# Feature-level metrics read psd_log_bins, so they are invalid for these subjects
+# until the re-run lands -- rerun_psd_nonstandard.sbatch says so itself.
+#
+# READ FROM THE AUDIT, never hardcoded, so this cannot drift from what the timing
+# audit actually found. Same principle rerun_psd_nonstandard.sbatch applies to its
+# own subject list, and it is the file that script consumes.
+PSD_TIMING_ROOT = QC_ROOT / 'psd_timing'
+PSD_RERUN_SUBJECTS_TXT = PSD_TIMING_ROOT / 'psd_rerun_subjects.txt'
+
+
+def psd_rerun_subjects():
+    """Subject IDs whose PSD is being re-extracted; empty set if the audit file is
+    absent (i.e. no audit has run, so nothing is known to be stale)."""
+    if not PSD_RERUN_SUBJECTS_TXT.exists():
+        return set()
+    return {line.strip() for line in PSD_RERUN_SUBJECTS_TXT.read_text().splitlines()
+            if line.strip()}
+
+
+def feature_metrics_deferred_path(subject, session):
+    """Marker recording that a subject/session was DEFERRED rather than processed.
+
+    A durable, greppable record so "which subjects still need adding?" is answerable
+    from the artifact tree rather than from a scrollback of log lines. One file per
+    subject/session, so parallel array tasks cannot race on it -- same reason
+    metrics_run_info_dir is per-subject.
+    """
+    return (metrics_run_info_dir(FEATURE_LEVEL_ROOT)
+            / f'sub-{subject}_ses-{session}_DEFERRED.json')
+
+
 def feature_metrics_run_info_path(subject, session):
     """Per-subject/session record of how the metrics were produced (thresholds,
     parent mask, git provenance). One file per subject/session so parallel array
