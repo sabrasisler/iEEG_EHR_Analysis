@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8GB
 #SBATCH --output=logs/view_discovery_%A_%a.out
-#SBATCH --array=0-58%16
+#SBATCH --array=0-59%16
 #
 # Build the P1.3 view for every DISCOVERY subject that can actually produce one,
 # in BOTH normalizations (z-score and baseline-subtract / "delta power").
@@ -19,17 +19,28 @@
 # The subject list is COMPUTED, never a checked-in file:
 #     python -m ieeg_ehr.config.cohorts --runnable discovery
 # = discovery INTERSECT (has epoch cache) INTERSECT (has bipolar mask) INTERSECT
-#   (PSD written by the current windowing design). 59 as of 2026-07-28: 65 discovery,
-#   minus 5 with no epoch cache (122 138 212 235 259), minus sub-247 whose PSD is
-#   being re-extracted. Every exclusion is logged with its reason by that command.
+#   (PSD written by the current windowing design). 60 as of 2026-07-29: 65 discovery,
+#   minus 5 with no epoch cache (122 138 212 235 259). Every exclusion is logged with
+#   its reason by that command.
 #
-# Four of the 59 (093 154 159 240) have NO Desikan_Killiany_anode labels, so they
+#   It was 59 on 2026-07-28, the 60th being sub-247, held out because its PSD was
+#   being re-extracted off the superseded 60 s design. The timing audit was re-run
+#   2026-07-29 09:44 and now finds ZERO stale runs (qc/psd_timing/psd_rerun_runs.csv
+#   is header-only), so that re-extraction has landed and sub-247 rejoins.
+#
+# Four of the 60 (093 154 159 240) have NO Desikan_Killiany_anode labels, so they
 # emit an EMPTY region table and a loud error. That is expected, not a failure --
-# region-level n is 55, and the plot step simply has no rows from them.
+# region-level n is 55 (60 - 4 unlabeled - 1 with no region rows), and the plot step
+# simply has no rows from them.
 #
 # ONE SUBJECT PER TASK so a single bad subject cannot take down the batch; the view
 # builder refuses a stale-PSD subject by design, and that must fail one task rather
-# than 59.
+# than 60.
+#
+# CHECK THE BOUND, do not trust this comment: the count moves as PSD re-extractions
+# and mask rollouts land, and an array that is too SHORT drops subjects silently --
+# the in-script guard only catches a task id ABOVE the count, never a count above
+# the array.
 #
 # RESOURCES, against a MEASURED MaxRSS -- not inferred from cache size.
 # Job 36201027 ran 5 subjects x 2 normalizations sequentially and peaked at 4.19 GB
