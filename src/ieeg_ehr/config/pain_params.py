@@ -57,46 +57,46 @@ def pain_bin_order(scheme):
 # One colour per pain level, for every figure that draws pain bins as lines or
 # marks rather than as a value on a colour scale.
 #
-# A SEQUENTIAL RAMP, one hue, light -> dark, because pain level is ORDERED. The
-# reader should be able to rank two lines without consulting the legend, which a
-# categorical palette (distinct hues, matched lightness) actively prevents.
+# DISTINCT HUES on a cool -> warm progression, so the palette does two jobs at
+# once: the hues are far enough apart to tell apart at a glance (which a
+# light-to-dark ramp in ONE hue is bad at, and which was the reason this replaced
+# such a ramp on 2026-07-29), while cool->warm still reads as ORDERED, which pain
+# level is. Lines are drawn SOLID -- colour and the legend carry identity.
 #
-# The hue is deliberately NOT red or blue. The region x frequency heatmaps use
-# RdBu_r, where red and blue encode the SIGN of the change; if 'high' pain were
-# red, two figures on the same page would use one colour for two unrelated
-# things. Purple is unused elsewhere in this project.
-#
-# MEASURED, not eyeballed (dataviz validator, light surface #fcfcfb):
+# MEASURED, not eyeballed (dataviz validate_palette.js, light surface #fcfcfb).
+# All three slots, i.e. the `absolute` scheme:
 #   chroma floor        PASS  all >= 0.1
-#   CVD separation      PASS  worst adjacent dE 17.6 protan / 18.1 tritan (>= 8)
-#   normal-vision floor PASS  worst adjacent dE 18.6 (>= 15)
-#   contrast vs surface PASS  all >= 3:1
-#   lightness band      FAIL by design -- that check enforces MATCHED lightness
-#     across slots, which is right for a categorical palette and wrong for an
-#     ordered one. The spread IS the encoding here. Lightness is monotonic,
-#     which is the sequential-ramp check.
-# Re-run before changing a value:
-#   node scripts/validate_palette.js "#a97fc9,#7b3b9e,#421257" --mode light
+#   CVD separation      PASS  worst adjacent dE 12.7 protan / 22.1 tritan (>= 8)
+#   normal-vision floor PASS  worst adjacent dE 24.9 (>= 15)
+#   lightness band      PASS  all inside L 0.43-0.77
+#   contrast vs surface WARN  orange 2.77:1, below 3:1
+# The two slots `subject_relative` actually draws (teal vs crimson) pass every
+# check including contrast. Re-run before changing any value:
+#   node scripts/validate_palette.js "#0d9488,#e08214,#a11d33" --mode light
+#
+# THE ORANGE CONTRAST WARN IS ACCEPTED, NOT IGNORED. That check obligates relief
+# -- a visible label or a table view -- and both exist: every figure carries a
+# legend, and the spectra runs write spectra_table.parquet beside the PNG. It also
+# only applies to `absolute`, which is not the default scheme.
+#
+# WHY NOT BLUE -> RED, which validates better (2-slot CVD dE 21.1 vs 12.7): those
+# are exactly RdBu_r's two poles, and the companion region x frequency heatmaps
+# use RdBu_r for the SIGN of the change. On one page the same two colours would
+# mean two unrelated things. Teal is not RdBu_r's blue; crimson does sit near its
+# red, so the collision is reduced rather than eliminated.
+#
+# WHY NOT GREEN -> RED, which was tested rather than assumed away: it fails
+# deuteranopia outright, adjacent dE 2.5 against a >= 8 target -- and the pair it
+# fails on is exactly the two-line subject_relative view, the default.
 #
 # 'none' is grey: under any baseline normalization it IS the reference and sits
 # at 0 by construction, so it is drawn as a reference line if at all, never as a
 # peer of the other levels.
 PAIN_BIN_COLORS = {
-    'none': '#9e9e9e',
-    'low': '#a97fc9',
-    'medium': '#7b3b9e',
-    'high': '#421257',
-}
-
-# Secondary encoding, so pain level is never carried by colour ALONE -- survives
-# greyscale printing, a projector, and the CVD cases the ramp is weakest in.
-# Solid = high deliberately: the darkest, heaviest line is the one the eye should
-# land on first.
-PAIN_BIN_LINESTYLES = {
-    'none': (0, (1, 2)),
-    'low': (0, (4, 2)),
-    'medium': (0, (6, 2, 1, 2)),
-    'high': 'solid',
+    'none': '#9e9e9e',      # grey
+    'low': '#0d9488',       # teal
+    'medium': '#e08214',    # orange
+    'high': '#a11d33',      # crimson
 }
 
 

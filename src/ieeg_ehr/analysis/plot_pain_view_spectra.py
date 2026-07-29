@@ -145,15 +145,15 @@ def plot_grid(stats, regions, region_n, panels, bin_labels, line_noise_bins,
             if spread:
                 ax.fill_between(x_hz, lo, hi, color=color, alpha=0.22,
                                 linewidth=0, zorder=2)
-            ax.plot(x_hz, mean, color=color, linewidth=1.8,
-                    linestyle=config.PAIN_BIN_LINESTYLES[pain_bin],
-                    label=pain_bin, zorder=3)
+            # Solid, all levels: colour carries pain level (the cool->warm ramp in
+            # config.PAIN_BIN_COLORS) and the figure legend is its only fallback,
+            # so the legend is LOAD-BEARING -- do not drop it to save space.
+            ax.plot(x_hz, mean, color=color, linewidth=1.8, label=pain_bin, zorder=3)
             # Above ~50 Hz a surviving bin is often ISOLATED between two masked
             # ones, and matplotlib draws NOTHING for a single non-NaN point with
             # NaN on both sides -- the high-gamma end of every panel would
-            # silently go blank. Marked only where that actually happens: a
-            # marker on every point would break up the dash pattern, which is the
-            # secondary encoding that carries pain level without colour.
+            # silently go blank. Marked only where that actually happens, so the
+            # dense low-frequency part stays a clean line rather than a dotted one.
             isolated = _isolated_points(mean)
             if isolated.any():
                 ax.plot(x_hz[isolated], mean[isolated], linestyle='none',

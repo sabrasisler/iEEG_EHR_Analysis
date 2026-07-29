@@ -37,10 +37,16 @@ MASK_LEVELS = ('bipolar', 'raw_voltage', 'none')
 # Only these two: everything else about a view lives in the hashed sidecar, and a
 # folder name that tried to spell out all seven axes would be unreadable and would
 # still not be a complete description.
+#
+# WORDS, NOT INITIALS. These were 'blsub'/'rel'/'abs' for one day (2026-07-29) and
+# were unreadable to the person who has to browse the tree -- which defeats the
+# whole point of naming the view in the path. 'delta' because baseline_subtract in
+# the log domain IS delta log power, which is already what the sbatch prose calls
+# it; 'relpain'/'abspain' because 'rel' alone does not say relative to WHAT.
 NORMALIZATION_CODES = {'zscore_vs_baseline': 'zscore',
-                       'baseline_subtract': 'blsub',
+                       'baseline_subtract': 'delta',
                        'none': 'raw'}
-PAIN_BIN_CODES = {'subject_relative': 'rel', 'absolute': 'abs'}
+PAIN_BIN_CODES = {'subject_relative': 'relpain', 'absolute': 'abspain'}
 
 
 @dataclass(frozen=True)

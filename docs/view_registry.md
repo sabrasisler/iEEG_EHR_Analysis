@@ -129,6 +129,36 @@ view:
 Two runs differing in one line are two runs on the SAME cache -- not two caches,
 not two feature folders.
 
+## scheme_code — the two axes that appear in a FOLDER NAME
+
+`ViewConfig.scheme_code` (`views/view_config.py`) composes a short human label
+from AXIS 3 and AXIS 7 only, e.g. `delta-relpain`. It is the level-4
+`<view_scheme>` folder in the analysis tree AND the human half of a materialized
+view's directory name, from ONE definition, so the two cannot drift:
+
+```
+features/pain/psd_epochs/epoch-5min-pre/views/delta-relpain_2735c1062131/
+analysis/pain/psd_physiology/region_spectrum/delta-relpain/<run>_<timestamp>/
+```
+
+| Code | Axis | Means |
+|---|---|---|
+| `delta` | AXIS 3 | `baseline_subtract` -- per-window minus the channel's 0-pain mean. In the log domain this IS delta log power |
+| `zscore` | AXIS 3 | `zscore_vs_baseline` -- as above, then divided by the 0-pain SD |
+| `raw` | AXIS 3 | `normalization: none` -- no baseline applied |
+| `relpain` | AXIS 7 | `subject_relative` -- low/high split at the subject's own mean of nonzero events |
+| `abspain` | AXIS 7 | `absolute` -- fixed 0 / 1-3 / 4-6 / 7-10 across subjects |
+
+**Only these two axes**, because a folder name spelling out all seven would be
+unreadable and *still* not a complete description. The complete description is
+the sidecar's `config_hash` -- the trailing hex above -- which covers every axis
+plus the mask, the ROI scheme and the cohort split. Read `provenance.json` for
+the full view, never the folder name.
+
+AXIS 3 is in the name and AXIS 7 is not enough on its own: the level-4 folder was
+briefly `subject_relative` alone, which left the normalization -- the axis that
+most changes the numbers -- invisible in the path.
+
 ## Sensitivity-analysis axes (planned; each a view unless it changes rows)
 - epoch length 1/2/5/10 min -> NEW CACHE (changes windows), not a view
 - everything else above -> view (free recompute)
