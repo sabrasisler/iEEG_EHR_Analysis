@@ -63,9 +63,17 @@ OAK=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler
 SUBJECT=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$SUBJECTS_FILE")
 [ -n "$SUBJECT" ] || { echo "No subject at array index $SLURM_ARRAY_TASK_ID in $SUBJECTS_FILE"; exit 1; }
 
+# Set INCLUDE_DEFERRED=1 to BACKFILL subjects that were deferred because their PSD
+# was being re-extracted. Only correct once that re-run has landed AND the new PSD
+# is verified on the expected hop -- otherwise it bakes in the superseded design,
+# which is the whole reason they were deferred. Check
+# metrics/run_info/*_DEFERRED.json for who is outstanding.
+: "${INCLUDE_DEFERRED:=}"
+
 MASK_FLAG=""
 [ -n "$MASK_LEVEL" ] && MASK_FLAG="$MASK_FLAG --mask-level $MASK_LEVEL"
 [ -n "$MASK_LABEL" ] && MASK_FLAG="$MASK_FLAG --mask-label $MASK_LABEL"
+[ -n "$INCLUDE_DEFERRED" ] && MASK_FLAG="$MASK_FLAG --include-deferred"
 echo "Array task $SLURM_ARRAY_TASK_ID -> subject $SUBJECT" \
      "(mask=${MASK_LEVEL:-<config default>}/${MASK_LABEL:-<config default>})"
 
