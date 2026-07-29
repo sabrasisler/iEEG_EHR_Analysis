@@ -366,6 +366,15 @@ def plot_region_freq_heatmaps(pivots, col_titles, bin_labels, counts, title, out
     abs_maxes = [np.nanmax(np.abs(p.to_numpy())) for p in pivots if not np.all(np.isnan(p.to_numpy()))]
     vmax = max(abs_maxes) if abs_maxes else 1.0
 
+    # A MISSING cell must not look like a ZERO one. On RdBu_r the midpoint is
+    # near-white, and matplotlib's default for NaN is fully transparent -- so a
+    # region/bin with no coverage, or a deliberately excluded line-noise bin, was
+    # rendering as "no change vs baseline", which is a completely different claim.
+    # Grey says "nothing here" and matches the shaded spans the spectra figures use
+    # for the same bins.
+    cmap = plt.get_cmap(cmap).copy()
+    cmap.set_bad('0.85')
+
     freq_tick_labels = [f'{bin_labels.loc[b, "bin_low_hz"]:.0f}' for b in freq_bins]
     count_labels = epoch_count_labels(counts, regions, bin_order=count_bin_order) if counts is not None else None
 

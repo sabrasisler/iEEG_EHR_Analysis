@@ -69,6 +69,16 @@ def main():
                          'the SAME rows across two runs for side-by-side comparison.')
     ap.add_argument('--cbar-label', default=None,
                     help='Default: read from the view sidecar so units cannot be mislabeled')
+    ap.add_argument('--exclude-line-noise-bins', action='store_true',
+                    help='Blank the line-noise-flagged frequency bins, which also '
+                         'RESCALES the shared colour bar -- those bins hold the '
+                         'largest-magnitude cells in this data, so leaving them in '
+                         'compresses everything else toward white. A DISPLAY-time '
+                         'exclusion of an unchanged view, distinct from the view axis '
+                         'of the same idea (ViewConfig.drop_line_noise_bins), which '
+                         'bakes it into the tables. For freq=log_bins_50 the two give '
+                         'identical values for every surviving bin: bins do not mix in '
+                         'region-averaging or in the group mean.')
     view_tables.add_output_arguments(ap)
     args = ap.parse_args()
 
@@ -91,8 +101,22 @@ def main():
 
     panels = PANELS[args.pain_bin_scheme]
     count_order = config.pain_bin_order(args.pain_bin_scheme)
-    bin_labels = (cache_reader.bin_edges(view_params.get('epoch_minutes'))
-                  .set_index('freq_bin_index'))
+    epoch_minutes = view_params.get('epoch_minutes')
+    bin_labels = cache_reader.bin_edges(epoch_minutes).set_index('freq_bin_index')
+
+    # Dropped from the SUBJECT tables, once, before any aggregation, so the group
+    # mean, the per-subject panels and the colour scale all agree about which bins
+    # exist. Epoch counts are unaffected: they de-duplicate to one row per
+    # (subject, epoch, region) and never involve a frequency bin.
+    line_noise_bins = cache_reader.line_noise_bins(epoch_minutes)
+    if args.exclude_line_noise_bins and len(line_noise_bins):
+        keep = ~subject_tables['freq_bin_index'].isin(line_noise_bins)
+        logger.info('excluding %d line-noise bin(s) from display (%s Hz): %d of %d '
+                    'rows dropped', len(line_noise_bins),
+                    ', '.join(f'{bin_labels.loc[b, "bin_low_hz"]:.0f}'
+                              for b in line_noise_bins if b in bin_labels.index),
+                    int((~keep).sum()), len(subject_tables))
+        subject_tables = subject_tables[keep].copy()
 
     view_tables.log_baseline_check(subject_tables)
 
@@ -125,7 +149,9 @@ def main():
         parents=[io.parent_ref(p, digest=False) for p in subject_paths + epoch_paths],
         subjects=subjects,
         extra={'panels': panels, 'region_row_order': regions_order,
-               'roi_regions': config.ROI_REGIONS, 'n_subjects': len(subjects)},
+               'roi_regions': config.ROI_REGIONS, 'n_subjects': len(subjects),
+               'line_noise_bins_excluded': ([int(b) for b in line_noise_bins]
+                                            if args.exclude_line_noise_bins else [])},
     )
 
     plot_one(group, panels, bin_labels, epoch_counts(epoch_tables), count_order,
