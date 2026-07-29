@@ -72,7 +72,7 @@ import pandas as pd
 from pynwb import NWBHDF5IO
 
 from ieeg_ehr import config, io
-from ieeg_ehr.qc import mask_projection
+from ieeg_ehr.qc import mask_projection, psd_timing
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +268,14 @@ def _order_stats(z, idx_by_frac):
 
 
 def process_subject_session(subject, session, mask_label, mask_level=None, overwrite=False,
-                            allow_unmasked=False, deferred_subjects=frozenset()):
+                            allow_unmasked=False, deferred_subjects=frozenset(),
+                            nonstandard_hop='drop'):
+    # Two independent stale-PSD guards, and they are NOT redundant.
+    # `deferred_subjects` defers the WHOLE subject while its PSD is being
+    # rewritten (the file on disk is about to change); `nonstandard_hop` drops
+    # individual RUNS that were written by the superseded 60 s design and are
+    # not being re-run. The first fires first, so a deferred subject never
+    # reaches the second.
     z_thresh = config.FEATURE_Z_THRESH
     bin_frac = config.FEATURE_BIN_FRAC
     frac_grid = tuple(config.FEATURE_BIN_FRAC_GRID)
@@ -291,6 +298,23 @@ def process_subject_session(subject, session, mask_label, mask_level=None, overw
     run_ids = [str(r).replace('run-', '') for r in rows.run_id.unique()]
     runs = [(rid, config.bipolar_psd_nwb_path(subject, session, rid)) for rid in run_ids]
     runs = [(rid, p) for rid, p in runs if p.exists()]
+
+    # Drop runs whose PSD came from the superseded 60 s outer-window design. This
+    # level's baseline is RECORDING-WIDE per channel, so a single 60 s run would
+    # pool Welch-averaged minute spectra with single-segment 2 s spectra into one
+    # mean/MAD -- a mixture distribution feeding one threshold. One cached-table
+    # lookup, no NWB reads (qc/psd_timing/; DECISIONS.md 2026-07-28).
+    excluded_runs = set(psd_timing.assert_subject_ok(subject, policy=nonstandard_hop))
+    if excluded_runs:
+        before = len(runs)
+        runs = [(rid, p) for rid, p in runs if f'run-{rid}' not in excluded_runs]
+        logger.warning('sub-%s ses-%s: dropped %d/%d run(s) written by the superseded '
+                       'PSD design; the baseline uses the remaining %d',
+                       subject, session, before - len(runs), before, len(runs))
+        if not runs:
+            logger.error('sub-%s ses-%s: every run is nonstandard; no metrics written',
+                         subject, session)
+            return None
     if not runs:
         logger.warning('sub-%s ses-%s: no bipolar_fft runs on disk, skipping', subject, session)
         return None

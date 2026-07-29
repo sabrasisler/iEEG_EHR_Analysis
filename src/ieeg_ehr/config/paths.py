@@ -56,6 +56,19 @@ OUTDATED_ROOT     = DERIVATIVES_BASE / 'outdated'
 DEFAULT_LEVEL_ROOT   = QC_ROOT / 'raw_voltage'
 BIPOLAR_LEVEL_ROOT   = QC_ROOT / 'bipolar'
 FEATURE_LEVEL_ROOT   = QC_ROOT / 'feature_level'
+PSD_TIMING_ROOT      = QC_ROOT / 'psd_timing'
+
+
+def psd_timing_dir():
+    """Which PSD runs were written by the CURRENT windowing design.
+
+    Under qc/ rather than preprocessed/ because it is a data-QUALITY fact about the
+    stored PSD that every downstream consumer inherits, which is what this tree is
+    for — not a feature. It deliberately does NOT follow the
+    metrics/exclusions/masks layout of the other levels: there is no threshold to
+    sweep here. A run either was or was not written by the current algorithm, so
+    there is one table and no metric/threshold split to make."""
+    return PSD_TIMING_ROOT
 
 
 def metrics_root(level_root):
@@ -214,7 +227,10 @@ def feature_metrics_path(kind, subject, session, mask_label=None, level='raw_vol
 # READ FROM THE AUDIT, never hardcoded, so this cannot drift from what the timing
 # audit actually found. Same principle rerun_psd_nonstandard.sbatch applies to its
 # own subject list, and it is the file that script consumes.
-PSD_TIMING_ROOT = QC_ROOT / 'psd_timing'
+#
+# PSD_TIMING_ROOT itself is declared with the other QC level roots above, beside
+# psd_timing_dir() -- the two arrived from different branches and must not be
+# redeclared here, or the two spellings could drift apart silently.
 PSD_RERUN_SUBJECTS_TXT = PSD_TIMING_ROOT / 'psd_rerun_subjects.txt'
 
 
@@ -525,10 +541,19 @@ def sweep_run_dir(run_name, event='pain', timestamp=None):
 
 EXPLORATORY_SUBJECTS_TXT = COHORTS_ROOT / 'subjects_qc_raw_voltage_normal.txt'
 
-# sub-236's raw_voltage exclusion rollups are incomplete at the newer sweep
-# labels (docs/qc_context.md, "sub-236 gap"), so it can't safely be combined
-# into the pinned mask yet.
-_EXCLUDE_FROM_EXPLORATORY = {'236'}
+# EMPTY as of 2026-07-28. sub-236 was the only entry: its raw_voltage exclusion
+# rollups were incomplete at the newer sweep labels (docs/qc_context.md, "sub-236
+# gap"), so it could not be combined into the pinned mask. That is fixed — its one
+# real gap was `square_wave/frac0.9`, its metrics were complete all along (107 of
+# 107 readable runs), and it now has a pinned raw-voltage mask. Its PSD is also
+# clean: 107/107 runs on the current single-level design at a 1 s hop
+# (qc/psd_timing/, 2026-07-28), so it is not among the subjects awaiting a PSD
+# re-run.
+#
+# Kept as an empty set rather than deleted: it is the sanctioned place to park a
+# subject that must not enter exploratory work, and re-adding one should be a
+# one-line change rather than re-plumbing exploratory_subjects().
+_EXCLUDE_FROM_EXPLORATORY = set()
 
 
 def exploratory_subjects():

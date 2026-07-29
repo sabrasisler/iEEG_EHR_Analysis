@@ -34,18 +34,28 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import config, io
-from ieeg_ehr.config import roi_schemes
+from ieeg_ehr.config import cohorts, roi_schemes
+from ieeg_ehr.qc import psd_timing
 from ieeg_ehr.views import axes, cache_reader, channel_meta, view_config as vc
 
 logger = logging.getLogger(__name__)
 
 
 def build_subject_view(subject, session, view_config, epoch_minutes=None,
-                       collect_epochs=True):
+                       collect_epochs=True, nonstandard_hop='refuse'):
     """Returns (epoch_table, subject_table, stats) for one subject/session."""
     t0 = time.time()
     epoch_minutes = epoch_minutes or view_config.epoch_minutes
     n_bins = config.PSD_N_LOG_BINS
+
+    # Was this subject's PSD written by the CURRENT windowing design? ONE lookup in
+    # the cached qc/psd_timing/ table -- no NWB reads, nothing per epoch. Runs from
+    # the superseded 60 s outer-window design store log(Welch-mean of ~59 segments)
+    # instead of log(single 2 s segment), which freezes the log-vs-linear averaging
+    # choice into the file where no view can undo it (DECISIONS.md 2026-07-28 +
+    # correction). Default refuses; an UNAUDITED subject also refuses, because
+    # silence must not read as approval.
+    psd_timing.assert_subject_ok(subject, policy=nonstandard_hop)
 
     defs = cache_reader.load_defs(subject, session, epoch_minutes)
     parquet_file, cache_path = cache_reader.open_cache(subject, session, epoch_minutes)
@@ -228,7 +238,15 @@ def build_subject_view(subject, session, view_config, epoch_minutes=None,
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--subjects', nargs='+', required=True)
+    ap.add_argument('--subjects', nargs='+', default=None,
+                    help='Explicit subject IDs. Still CHECKED against --split, so '
+                         'naming a non-discovery subject is refused rather than '
+                         'quietly allowed. Omit to use the whole split.')
+    ap.add_argument('--split', default='discovery',
+                    choices=list(cohorts.SPLITS) + ['heldout'],
+                    help='Cohort gate (P0.2). Default discovery -- the LOCKED, '
+                         'permanent exploratory set. "heldout" raises: the matched '
+                         'hold-out is built offline on the PHI side (P4).')
     ap.add_argument('--session', default='01')
     ap.add_argument('--out-dir', required=True,
                     help='Directory for the view tables (must resolve to Oak/scratch, '
@@ -236,6 +254,9 @@ def main():
     ap.add_argument('--no-save', action='store_true',
                     help='Compute and report only. Default SAVES, so the numbers can be '
                          'inspected before a figure is trusted.')
+    ap.add_argument('--nonstandard-hop', choices=['refuse', 'drop', 'allow'], default='refuse',
+                    help='What to do when a subject was not written by the current PSD '
+                         'windowing design. Default refuses (DECISIONS.md 2026-07-28).')
     vc.add_view_arguments(ap)
     args = ap.parse_args()
 
@@ -244,11 +265,25 @@ def main():
     view = vc.from_args(args)
     logger.info('view config: %s', view.to_dict())
 
+    # Resolve the cohort gate BEFORE touching any data. An explicit --subjects list
+    # is still validated against the split: without that check, --split would be
+    # advisory and hand-naming a hold-out-eligible subject would work, which cannot
+    # be undone once its data has been seen.
+    if args.subjects:
+        subjects = cohorts.assert_split_allowed(args.subjects, args.split)
+    else:
+        subjects = cohorts.subjects_for_split(
+            args.split, available=cohorts.subjects_with_epoch_cache(view.epoch_minutes))
+        if not subjects:
+            raise SystemExit(f'no subjects in split={args.split!r} have an epoch cache')
+    logger.info('split=%s -> %d subject(s): %s', args.split, len(subjects), subjects)
+
     out_dir = Path(args.out_dir)
     all_stats = []
-    for s in args.subjects:
+    for s in subjects:
         subject = s.replace('sub-', '')
-        epoch_table, subject_table, stats = build_subject_view(subject, args.session, view)
+        epoch_table, subject_table, stats = build_subject_view(
+            subject, args.session, view, nonstandard_hop=args.nonstandard_hop)
         all_stats.append(stats)
         if args.no_save:
             continue
@@ -257,7 +292,8 @@ def main():
             io.write_table(
                 table, out_dir / f'view_{name}_sub-{subject}_ses-{args.session}.parquet',
                 kind='view', script='ieeg_ehr/views/build_pain_epoch_view.py',
-                params=view.provenance(), parents=[io.manifest_ref(unit)],
+                params=dict(view.provenance(), split=args.split),
+                parents=[io.manifest_ref(unit)],
                 subjects=[f'sub-{subject}'], extra={'stats': stats})
 
     stats_df = pd.DataFrame(all_stats)
@@ -265,8 +301,9 @@ def main():
     if not args.no_save:
         io.write_table(stats_df, out_dir / 'view_stats.parquet', kind='table',
                        script='ieeg_ehr/views/build_pain_epoch_view.py',
-                       params=view.provenance(),
-                       subjects=[f'sub-{s.replace("sub-", "")}' for s in args.subjects])
+                       params=dict(view.provenance(), split=args.split),
+                       subjects=[f'sub-{s}' for s in subjects],
+                       extra={'cohort': cohorts.cohort_provenance()})
         logger.info('view tables + stats -> %s', out_dir)
 
 
