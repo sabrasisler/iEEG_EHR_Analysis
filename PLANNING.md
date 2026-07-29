@@ -82,6 +82,16 @@ view-config grid.
 | P2.3 | Robustness reading — which nominations survive across methodological variations. |
 | P2.4 | Subject-level clustering on per-subject effect vectors → candidate phenotypes (Aim 2 groundwork). |
 | P2.5 | Maintain the exploration log throughout (now: `docs/labnotebook/` + `docs/analyses_run.md`). |
+
+### Named questions (the level-2 folders under `analysis/pain/`)
+
+A level-2 folder is opened DELIBERATELY and only for a question named here
+(`architecture.md` PART 5). Everything else goes to `sweeps/` or `scratch/`.
+
+| Question | Folder | What it asks |
+|---|---|---|
+| PSD physiology | `psd_physiology` | Descriptive, pre-model: across the discovery cohort, what does the pain-related change in the power spectrum LOOK like per region — where is it (heatmaps) and what shape does it have (spectra)? Opened 2026-07-29. Deliberately not a hypothesis test: its output feeds P2.2's sweep axes and P2.6's frozen feature set, and nothing from it is a finding. |
+
 | P2.6 | **FREEZE** — dated freeze doc: ranked directional hypotheses, frozen feature set + view config, model spec, correction plan + n_tests, predicted directions. Ends exploration. |
 
 P2.6 is the hinge where accumulated notebook narrative becomes `DECISIONS.md`

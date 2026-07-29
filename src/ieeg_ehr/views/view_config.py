@@ -33,6 +33,15 @@ REGION_AGGS = ('none', 'individual_dk')
 PAIN_BINS = ('absolute', 'subject_relative')
 MASK_LEVELS = ('bipolar', 'raw_voltage', 'none')
 
+# Short codes for the two axes that go into a DIRECTORY NAME (see `scheme_code`).
+# Only these two: everything else about a view lives in the hashed sidecar, and a
+# folder name that tried to spell out all seven axes would be unreadable and would
+# still not be a complete description.
+NORMALIZATION_CODES = {'zscore_vs_baseline': 'zscore',
+                       'baseline_subtract': 'blsub',
+                       'none': 'raw'}
+PAIN_BIN_CODES = {'subject_relative': 'rel', 'absolute': 'abs'}
+
 
 @dataclass(frozen=True)
 class ViewConfig:
@@ -105,6 +114,24 @@ class ViewConfig:
         silent, so it is one property rather than a repeated inline test.
         """
         return self.normalization in ('baseline_subtract', 'zscore_vs_baseline')
+
+    @property
+    def scheme_code(self):
+        """Compact human label for a directory name, e.g. 'blsub-rel'.
+
+        ONE definition, used for BOTH the materialized view's directory
+        (`config.pain_epoch_views_dir`) and the analysis tree's level-4
+        view_scheme folder. If those were built separately they could drift, and
+        then two folder names would claim to describe the same view.
+
+        Normalization and pain binning specifically, out of the seven axes: the
+        first is what most changes the numbers (and used to be invisible in the
+        path -- the old level 4 was `subject_relative` alone), the second is what
+        changes how many lines a figure has. The exact, complete view identity is
+        the sidecar's `config_hash`; this is the part a human reads.
+        """
+        return (f'{NORMALIZATION_CODES[self.normalization]}'
+                f'-{PAIN_BIN_CODES[self.pain_bins]}')
 
     @property
     def value_label(self):

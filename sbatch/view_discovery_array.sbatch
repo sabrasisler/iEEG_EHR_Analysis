@@ -58,8 +58,6 @@ source "$GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate"
 # against the main checkout, whose state is not guaranteed.
 export PYTHONPATH="${SLURM_SUBMIT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
-DERIV=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler
-OUT_ROOT=${OUT_ROOT:-$DERIV/analysis/scratch/p13_discovery}
 MASK_LABEL=${MASK_LABEL:-std10_rv-gross-std3_satmargin15_sw_logz4}
 SPLIT=${SPLIT:-discovery}
 
@@ -76,12 +74,15 @@ echo "=== task ${SLURM_ARRAY_TASK_ID}: sub-${SUBJECT} | split=${SPLIT} | mask=${
 
 for NORM in zscore_vs_baseline baseline_subtract; do
   echo "--- $NORM"
+  # No --out-dir: the builder resolves
+  #   features/pain/psd_epochs/epoch-5min-pre/views/<scheme_code>_<config_hash>/
+  # itself. Naming it here would mean spelling the config_hash in bash, where it
+  # could drift from the one the sidecar records.
   python -m ieeg_ehr.views.build_pain_epoch_view \
       --subjects "$SUBJECT" \
       --split "$SPLIT" \
       --mask-label "$MASK_LABEL" \
-      --normalization "$NORM" \
-      --out-dir "$OUT_ROOT/$NORM"
+      --normalization "$NORM"
 done
 
 echo "=== done ($(date)) ==="

@@ -20,9 +20,17 @@ the second read is not an option at 409M rows for the largest subject.
 they are the 'none' level, and they normalize to ~0 by construction -- which makes
 them a free correctness check (a 'none' row far from 0 means the baseline leaked).
 
+Output lands in the base unit's views/ directory by default --
+`features/pain/psd_epochs/epoch-5min-pre/views/<scheme_code>_<config_hash>/` --
+which is a DISPOSABLE performance cache, deletable at any time (architecture.md
+PART 2). Materializing it is justified here and not by default elsewhere: the
+build is measured at ~34 s/GB, a full-cohort run is a 59-task array, and two plot
+scripts now read the tables instead of recomputing. A figure a human reads is NOT
+this; that is an analysis output under config.analysis_run_dir().
+
 Run on Slurm, never the login node:
     python -m ieeg_ehr.views.build_pain_epoch_view --subjects 090 \\
-        --mask-label std10_rv-gross-std3_satmargin15_sw_logz4 --out-dir <run dir>
+        --mask-label std10_rv-gross-std3_satmargin15_sw_logz4
 """
 
 import argparse
@@ -248,21 +256,56 @@ def main():
                          'permanent exploratory set. "heldout" raises: the matched '
                          'hold-out is built offline on the PHI side (P4).')
     ap.add_argument('--session', default='01')
-    ap.add_argument('--out-dir', required=True,
-                    help='Directory for the view tables (must resolve to Oak/scratch, '
-                         'never the repo)')
+    ap.add_argument('--out-dir', default=None,
+                    help='Override the destination. Default is the base unit\'s '
+                         'views/ directory, config.pain_epoch_views_dir(scheme_code, '
+                         'config_hash) -- a disposable performance cache, deletable. '
+                         'Pass this only for a one-off; must resolve to Oak/scratch, '
+                         'never the repo.')
+    ap.add_argument('--view-label', default=None,
+                    help='Override the human half of the views directory name '
+                         "(default: the view's scheme_code, e.g. 'blsub-rel'). The "
+                         'config_hash half is never overridable.')
     ap.add_argument('--no-save', action='store_true',
                     help='Compute and report only. Default SAVES, so the numbers can be '
                          'inspected before a figure is trusted.')
+    ap.add_argument('--print-out-dir', action='store_true',
+                    help='Print the resolved views directory and exit, without '
+                         'reading or writing anything. How a downstream plot job '
+                         'finds a view without hard-coding its config_hash.')
     ap.add_argument('--nonstandard-hop', choices=['refuse', 'drop', 'allow'], default='refuse',
                     help='What to do when a subject was not written by the current PSD '
                          'windowing design. Default refuses (DECISIONS.md 2026-07-28).')
     vc.add_view_arguments(ap)
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    io.warn_if_dirty()
+    logging.basicConfig(level=(logging.WARNING if args.print_out_dir else logging.INFO),
+                        format='%(asctime)s %(levelname)s %(message)s')
     view = vc.from_args(args)
+
+    # The split is IN the hashed params, not just in the provenance text: a
+    # discovery view and an all-subjects view of the same axes are different
+    # artifacts holding different subject sets, and they must not share a
+    # directory. Hashing the same dict the tables are stamped with also keeps the
+    # directory's config_hash equal to its contents' -- if the two could differ,
+    # the folder name would be a claim nothing verifies.
+    unit = config.pain_epoch_unit_dir(view.epoch_minutes)
+    view_params = dict(view.provenance(), split=args.split)
+    out_dir = (Path(args.out_dir) if args.out_dir else
+               config.pain_epoch_views_dir(args.view_label or view.scheme_code,
+                                           io.config_hash(view_params),
+                                           view.epoch_minutes))
+
+    # Resolved BEFORE the cohort gate and before any data is touched, so a plotting
+    # job can ask where a view lives without building it. This is the reason the
+    # sbatch scripts do not spell the config_hash themselves: ONE code path
+    # computes it, so the builder and the plotter cannot disagree about the
+    # directory. Prints the path and nothing else -- it is consumed by $(...).
+    if args.print_out_dir:
+        print(out_dir)
+        return
+
+    io.warn_if_dirty()
     logger.info('view config: %s', view.to_dict())
 
     # Resolve the cohort gate BEFORE touching any data. An explicit --subjects list
@@ -277,8 +320,8 @@ def main():
         if not subjects:
             raise SystemExit(f'no subjects in split={args.split!r} have an epoch cache')
     logger.info('split=%s -> %d subject(s): %s', args.split, len(subjects), subjects)
+    logger.info('view tables -> %s', out_dir)
 
-    out_dir = Path(args.out_dir)
     all_stats = []
     for s in subjects:
         subject = s.replace('sub-', '')
@@ -287,23 +330,40 @@ def main():
         all_stats.append(stats)
         if args.no_save:
             continue
-        unit = config.pain_epoch_unit_dir(view.epoch_minutes)
         for name, table in (('epochs', epoch_table), ('subject', subject_table)):
             io.write_table(
                 table, out_dir / f'view_{name}_sub-{subject}_ses-{args.session}.parquet',
                 kind='view', script='ieeg_ehr/views/build_pain_epoch_view.py',
-                params=dict(view.provenance(), split=args.split),
-                parents=[io.manifest_ref(unit)],
+                params=view_params, parents=[io.manifest_ref(unit)],
                 subjects=[f'sub-{subject}'], extra={'stats': stats})
 
     stats_df = pd.DataFrame(all_stats)
     logger.info('\n%s', stats_df.to_string(index=False))
     if not args.no_save:
-        io.write_table(stats_df, out_dir / 'view_stats.parquet', kind='table',
+        # ONE STATS FILE PER SUBJECT/SESSION, not one per run. This script is
+        # invoked as a Slurm array of one subject per task, all writing into the
+        # same views/ directory; a shared `view_stats.parquet` would be rewritten
+        # by every task and end up describing only whichever finished last. Same
+        # reason metrics_run_info_dir() is per-subject (config/paths.py).
+        suffix = (f'sub-{subjects[0].replace("sub-", "")}_ses-{args.session}'
+                  if len(subjects) == 1 else f'{len(subjects)}subj_ses-{args.session}')
+        io.write_table(stats_df, out_dir / f'view_stats_{suffix}.parquet', kind='table',
                        script='ieeg_ehr/views/build_pain_epoch_view.py',
-                       params=dict(view.provenance(), split=args.split),
+                       params=view_params,
                        subjects=[f'sub-{s}' for s in subjects],
                        extra={'cohort': cohorts.cohort_provenance()})
+
+        # The directory-level staleness sidecar (architecture.md PART 2): cache
+        # manifest digest + view config + view commit, so a later load can refuse
+        # a view built from a cache or a code version that has since moved.
+        #
+        # WRITE-ONCE, because every array task reaches this line. The content is
+        # identical from every task (it describes the view, not the subject), so a
+        # lost update costs nothing -- but write_sidecar is a plain write_text, and
+        # 16 concurrent writers could let a reader see a half-written file.
+        if not io.sidecar_path(out_dir).exists():
+            io.write_view_sidecar(out_dir, view_config=view_params, cache_manifest=unit,
+                                  script='ieeg_ehr/views/build_pain_epoch_view.py')
         logger.info('view tables + stats -> %s', out_dir)
 
 

@@ -54,6 +54,52 @@ def pain_bin_order(scheme):
     return PAIN_BIN_ORDER_SUBJECT_RELATIVE if scheme == 'subject_relative' else PAIN_BIN_ORDER
 
 
+# One colour per pain level, for every figure that draws pain bins as lines or
+# marks rather than as a value on a colour scale.
+#
+# A SEQUENTIAL RAMP, one hue, light -> dark, because pain level is ORDERED. The
+# reader should be able to rank two lines without consulting the legend, which a
+# categorical palette (distinct hues, matched lightness) actively prevents.
+#
+# The hue is deliberately NOT red or blue. The region x frequency heatmaps use
+# RdBu_r, where red and blue encode the SIGN of the change; if 'high' pain were
+# red, two figures on the same page would use one colour for two unrelated
+# things. Purple is unused elsewhere in this project.
+#
+# MEASURED, not eyeballed (dataviz validator, light surface #fcfcfb):
+#   chroma floor        PASS  all >= 0.1
+#   CVD separation      PASS  worst adjacent dE 17.6 protan / 18.1 tritan (>= 8)
+#   normal-vision floor PASS  worst adjacent dE 18.6 (>= 15)
+#   contrast vs surface PASS  all >= 3:1
+#   lightness band      FAIL by design -- that check enforces MATCHED lightness
+#     across slots, which is right for a categorical palette and wrong for an
+#     ordered one. The spread IS the encoding here. Lightness is monotonic,
+#     which is the sequential-ramp check.
+# Re-run before changing a value:
+#   node scripts/validate_palette.js "#a97fc9,#7b3b9e,#421257" --mode light
+#
+# 'none' is grey: under any baseline normalization it IS the reference and sits
+# at 0 by construction, so it is drawn as a reference line if at all, never as a
+# peer of the other levels.
+PAIN_BIN_COLORS = {
+    'none': '#9e9e9e',
+    'low': '#a97fc9',
+    'medium': '#7b3b9e',
+    'high': '#421257',
+}
+
+# Secondary encoding, so pain level is never carried by colour ALONE -- survives
+# greyscale printing, a projector, and the CVD cases the ramp is weakest in.
+# Solid = high deliberately: the darkest, heaviest line is the one the eye should
+# land on first.
+PAIN_BIN_LINESTYLES = {
+    'none': (0, (1, 2)),
+    'low': (0, (4, 2)),
+    'medium': (0, (6, 2, 1, 2)),
+    'high': 'solid',
+}
+
+
 # Drop a channel's epoch entirely if more than this fraction of its epoch time
 # (post-mask) is excluded; otherwise average over whatever time survives.
 # Proposed default, not yet validated against real exclusion rates for this

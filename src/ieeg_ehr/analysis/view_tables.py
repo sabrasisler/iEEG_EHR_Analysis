@@ -1,0 +1,257 @@
+"""
+Loading, group-level aggregation, and output placement for P1.3 view tables --
+shared by every figure built from them.
+
+Shared rather than duplicated per plot script for one reason: subject weighting.
+Every helper here treats the SUBJECT as the unit of replication -- not the
+electrode and not the epoch -- and if two scripts implemented that separately,
+two figures of the same data could disagree and nothing would say which was
+right. `plot_pain_view_heatmaps.py` and `plot_pain_view_spectra.py` both read
+through this module.
+
+The tables themselves come from `views/build_pain_epoch_view.py`, one pair per
+subject/session:
+
+    view_subject_sub-XXX_ses-YY.parquet   (subject_id, session_id, pain_bin,
+                                           region, freq_bin_index, value,
+                                           n_epochs, n_channels)
+    view_epochs_sub-XXX_ses-YY.parquet    same, one row per epoch (epoch_id,
+                                           pain_event_id, pain_score)
+
+Nothing here recomputes a view. Reading the tables rather than the cache is what
+makes a figure and the numbers behind it provably the same values.
+"""
+
+import logging
+
+import numpy as np
+import pandas as pd
+
+from ieeg_ehr import config, io
+
+logger = logging.getLogger(__name__)
+
+# Which pain bins are DRAWN, in order, per binarization scheme (view_registry
+# AXIS 7). 'none' is deliberately absent from both: under any baseline
+# normalization it is its own reference and sits at ~0 by construction, so it
+# carries no information as a panel or a line. It is still worth checking -- see
+# `log_baseline_check` -- because a 'none' far from 0 means the baseline leaked.
+PANELS = {
+    'subject_relative': ['low', 'high'],
+    'absolute': ['low', 'medium', 'high'],
+}
+
+
+def load_view_tables(view_dir, kind):
+    """Concatenate every subject's `view_<kind>_sub-*.parquet` in `view_dir`."""
+    paths = sorted(view_dir.glob(f'view_{kind}_sub-*.parquet'))
+    if not paths:
+        raise FileNotFoundError(f'no view_{kind}_*.parquet in {view_dir}')
+    frames = [io.read_table(p, on_stale='warn') for p in paths]
+    return pd.concat(frames, ignore_index=True), paths
+
+
+def view_params_from(subject_paths):
+    """(view_params, ViewConfig) read from a view table's own sidecar.
+
+    From the ARTIFACT, never from a CLI flag: units, normalization and the scheme
+    code all come from here, so a figure cannot claim a normalization it was not
+    built with. Returns view_config=None if the sidecar is unreadable or predates
+    a field, rather than raising -- the caller can still plot, it just has to be
+    told the units.
+    """
+    sidecar = io.read_sidecar(subject_paths[0]) or {}
+    params = sidecar.get('params', {})
+
+    from ieeg_ehr.views.view_config import ViewConfig
+    fields = {f.name for f in ViewConfig.__dataclass_fields__.values()}
+    try:
+        # Drop the non-axis keys the sidecar also carries (`split`,
+        # `roi_scheme_contents`) -- they are provenance, not view axes.
+        view = ViewConfig(**{k: v for k, v in params.items() if k in fields})
+    except (TypeError, ValueError) as exc:
+        logger.warning('could not reconstruct ViewConfig from %s: %s',
+                       io.sidecar_path(subject_paths[0]), exc)
+        view = None
+    return params, view
+
+
+def per_subject(subject_tables):
+    """One value per (subject, pain_bin, region, freq_bin_index).
+
+    Collapses sessions first. A subject with two sessions must count ONCE, and
+    the view tables carry one row per subject/session -- so aggregating the raw
+    rows would silently give that subject double weight. No-op today (the arrays
+    run `--session 01`), which is exactly why it is worth doing before it isn't.
+    """
+    return (subject_tables
+            .groupby(['subject_id', 'pain_bin', 'region', 'freq_bin_index'],
+                     dropna=False)['value']
+            .mean().reset_index())
+
+
+def subject_stats(subject_tables):
+    """(pain_bin, region, freq_bin_index) -> mean, sd, sem, n_subjects ACROSS
+    subjects, equal-weighted.
+
+    EQUAL-WEIGHTED because the subject is the unit of replication: a subject with
+    200 contacts must not outvote one with 30. `sd` is the sample SD (ddof=1), so
+    a cell backed by a single subject gets NaN rather than a fabricated 0 -- and
+    therefore no error ribbon, which is the honest rendering.
+    """
+    grouped = (per_subject(subject_tables)
+               .groupby(['pain_bin', 'region', 'freq_bin_index'], dropna=False)['value'])
+    stats = grouped.agg(mean='mean', sd=lambda s: s.std(ddof=1),
+                        n_subjects='count').reset_index()
+    stats['sem'] = stats['sd'] / np.sqrt(stats['n_subjects'])
+    return stats
+
+
+def group_table(subject_tables):
+    """The heatmaps' long (pain_bin, region, freq_bin_index) -> value table.
+
+    Defined as `subject_stats`' mean rather than as its own aggregation, so the
+    line a spectrum draws and the cell a heatmap shades are the same number by
+    construction and cannot drift apart.
+    """
+    return (subject_stats(subject_tables)
+            .rename(columns={'mean': 'value'})[['pain_bin', 'region',
+                                                'freq_bin_index', 'value']])
+
+
+def wide_by_bin(long_table, index_cols, panels):
+    """Long -> one column per plotted pain bin, in `panels` order.
+
+    Missing panels are materialized as all-NaN columns so downstream code can
+    index them unconditionally instead of branching on presence.
+    """
+    wide = long_table.pivot_table(index=index_cols, columns='pain_bin', values='value')
+    for panel in panels:
+        if panel not in wide.columns:
+            wide[panel] = np.nan
+    return wide[panels].reset_index()
+
+
+def epoch_counts(epoch_tables, by_subject=False):
+    """(region, pain_bin) -> distinct contributing epochs.
+
+    De-duplicated to one row per (subject, epoch, region) first: a freq-bin row is
+    not a distinct epoch, and counting rows would inflate n by 50x.
+    """
+    keys = ['subject_id', 'region', 'pain_bin'] if by_subject else ['region', 'pain_bin']
+    deduped = epoch_tables.drop_duplicates(['subject_id', 'epoch_id', 'region', 'pain_bin'])
+    counts = deduped.groupby(keys).size()
+    if by_subject:
+        counts.index = counts.index.set_names(['subject', 'region', 'pain_bin'])
+    return counts
+
+
+def subjects_per_region(stats, panels):
+    """region -> contributing subjects, as the MINIMUM across the plotted bins.
+
+    The minimum, not the union: both lines of a two-line panel have to be backed
+    by subjects for the comparison between them to mean anything, so the smaller
+    count is the one that governs the panel. The full per-(region, bin, freq bin)
+    breakdown is written to the run's table for anyone who needs it.
+    """
+    per_bin = (stats[stats['pain_bin'].isin(panels)]
+               .groupby(['region', 'pain_bin'])['n_subjects'].max()
+               .unstack('pain_bin').reindex(columns=panels))
+    return per_bin.min(axis=1, skipna=False).fillna(0).astype(int)
+
+
+def regions_with_min_subjects(stats, panels, min_subjects):
+    """Regions passing the coverage floor, in fixed anatomical order.
+
+    config.ROI_REGIONS order rather than this run's own data, so panels sit in the
+    same place in every figure and two runs can be compared side by side.
+    """
+    counts = subjects_per_region(stats, panels)
+    keep = set(counts[counts >= min_subjects].index)
+    dropped = {r: int(counts[r]) for r in counts.index if r not in keep}
+    if dropped:
+        logger.info('%d region(s) below the %d-subject floor, not plotted: %s',
+                    len(dropped), min_subjects, dropped)
+    return [r for r in config.ROI_REGIONS if r in keep], counts
+
+
+# ============================================================================
+# WHERE THE FIGURES GO
+# ============================================================================
+# The 5-level analysis scheme (architecture.md PART 5), applied identically by
+# every view figure so two plot types of the same view land as siblings:
+#
+#   analysis/ pain / <question> / <output_type> / <view_scheme> / <run>_<ts>/
+#             ^event  ^level 2     ^level 3        ^level 4        ^level 5
+#
+# Levels 1-2 are opened DELIBERATELY -- a named question. Levels 3-5 are created
+# freely per run. Level 4 is the view's own scheme_code ('blsub-rel'), NOT the
+# pain-bin scheme alone: binarization is one of seven axes and not the one that
+# most changes the numbers, so naming a folder after it buried the normalization.
+
+DEFAULT_QUESTION = 'psd_physiology'
+
+
+def add_output_arguments(parser, question=DEFAULT_QUESTION):
+    """--question / --view-scheme / --scratch / --out-root, shared by both figure
+    scripts so they cannot offer different placement vocabularies."""
+    g = parser.add_argument_group('output location (architecture.md PART 5)')
+    g.add_argument('--question', default=question,
+                   help=f'Level-2 question folder (default: {question}). Opening a '
+                        'NEW one is deliberate -- it must be a question named in the '
+                        'exploration log, else use --scratch.')
+    g.add_argument('--view-scheme', default=None,
+                   help="Level-4 folder. Default: the view's own scheme_code, e.g. "
+                        "'blsub-rel'.")
+    g.add_argument('--scratch', action='store_true',
+                   help=f'Throwaway run: write under {config.PLOTS_ROOT} instead of '
+                        'the analysis tree. For iterating on a figure before it is '
+                        'worth keeping.')
+    g.add_argument('--out-root', default=None,
+                   help='Explicit destination root, overriding both of the above.')
+    return parser
+
+
+def resolve_run_dir(args, output_type, view, run_name=None):
+    """Build and create the run directory for one figure run.
+
+    A timestamp is always appended, so two runs can never overwrite each other's
+    provenance.json -- that has bitten this project once. The timestamp is taken
+    ONCE here and reused across the three destinations, so the same run cannot end
+    up with two different names depending on which flag was passed.
+    """
+    from datetime import datetime
+    from pathlib import Path
+
+    run_name = run_name if run_name is not None else args.run_name
+    scheme = args.view_scheme or (view.scheme_code if view is not None else 'unknown')
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    leaf = f'{run_name}_{stamp}' if run_name else stamp
+
+    if args.out_root:
+        run_dir = Path(args.out_root) / output_type / scheme / leaf
+    elif args.scratch:
+        run_dir = config.PLOTS_ROOT / output_type / scheme / leaf
+    else:
+        run_dir = config.analysis_run_dir(question=args.question,
+                                          output_type=output_type,
+                                          run_name=run_name, view_scheme=scheme,
+                                          timestamp=stamp)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def log_baseline_check(subject_tables):
+    """Log how far the 'none' bin sits from 0 -- free correctness check.
+
+    Under any baseline normalization the 0-pain epochs are their own reference,
+    so they must come back at ~0. A 'none' mean far from 0 means the baseline
+    leaked. Logged rather than plotted: as a panel it would be a band of white
+    that crushes a shared colour scale, and as a line it would be a flat 0.
+    """
+    none_rows = subject_tables.loc[subject_tables['pain_bin'] == 'none', 'value']
+    if none_rows.empty:
+        return
+    logger.info("baseline check -- 'none' bin mean %.2e, max |value| %.2e "
+                '(should be ~0: it is its own reference)',
+                float(none_rows.mean()), float(none_rows.abs().max()))
