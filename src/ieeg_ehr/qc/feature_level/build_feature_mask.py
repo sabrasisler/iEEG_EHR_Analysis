@@ -1,12 +1,31 @@
 #!/usr/bin/env python3
 """
-Feature-level QC, mask stage (Step B): OR one chosen exclusion label per
-feature-level artifact type into a single per-window MASK -- the artifact the view
-layer joins onto the epoch cache.
+Feature-level QC, mask stage (Step B): the COMPLETE per-window exclusion mask --
+every feature-level artifact type OR'd with the upstream (bipolar) mask. This is
+the one artifact the view layer joins onto the epoch cache.
 
-Cheap: it only reads already-thresholded exclusion tables, so a threshold sweep on
-one type = re-run that type's build_feature_exclusions plus this, never the metric
-pass and never the other types.
+THE UNION IS THE POINT
+----------------------
+`excluded` is the FULL union: feature-level types OR the upstream mask named in
+params.mask_label. A consumer needs that one column and nothing else, and must NOT
+have to remember to also join qc/bipolar/masks/ itself.
+
+An earlier version of this script emitted only feature-flagged rows and carried the
+upstream verdict as a passenger column. That was a trap: for sub-039 the file held
+7,124 rows while the upstream mask excluded 127,740 channel-windows, so 95% of the
+upstream exclusions were simply ABSENT -- and because a window absent from a sparse
+mask reads as "not excluded", anything joining it would have kept them while
+looking authoritative. Cohort-wide the upstream mask excludes 2.505% of
+channel-windows against the feature detector's 0.666%, so the omitted part was the
+larger part.
+
+Expanding the upstream mask from its 60s bins out to windows uses each run's exact
+PSD rate/starting_time, never an assumption that they are 1.0/0.0 -- see
+upstream_excluded_rows.
+
+Cheap: it reads already-thresholded exclusion tables plus HDF5 metadata (never PSD
+data), so a threshold sweep on one type = re-run that type's
+build_feature_exclusions plus this, never the metric pass and never the other types.
 
 Directly parallel to qc/build_mask.py at the raw-voltage level, with two
 differences, both consequences of what this level's exclusions ARE:
@@ -30,9 +49,11 @@ detector -- ORs in without any consumer changing. The view layer should depend o
 masks/<label>/, never on exclusions/<type>/<label>/, for exactly that reason.
 
 Output per subject/session: masks/<label>/sub-XXX_ses-YY.parquet with the join key
-(run_id, channel, window_idx), window_start_time, one boolean per type
-(excluded_<type>) for transparency, `mask_excluded` carried through, and `excluded`
-= OR across types. A params.json records which <type>/<label> fed each + git.
+(run_id, channel, window_idx), window_start_time, one boolean per feature type
+(excluded_<type>), `excluded_upstream` for the bipolar mask's contribution, and
+`excluded` = the full OR of all of them. The per-source columns are there so a
+window's exclusion can be attributed; `excluded` is what to filter on. A
+params.json records which <type>/<label> and which upstream mask fed it, + git.
 
 Usage:
   python -m ieeg_ehr.qc.feature_level.build_feature_mask --label featqc-z5binfrac20
@@ -45,7 +66,11 @@ import logging
 import os
 import re
 
+import numpy as np
+import pandas as pd
+
 from ieeg_ehr import config, io
+from ieeg_ehr.qc import mask_projection
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +103,65 @@ def _default_label(chosen):
     return 'featqc-' + '+'.join(lbl for _t, lbl in sorted(chosen.items()))
 
 
+def upstream_excluded_rows(subject, session, mask_level, mask_label):
+    """Every (run, channel, window) the UPSTREAM mask excludes, at window granularity.
+
+    The upstream mask is stored per 60s bin, but this artifact is per window, so the
+    60s verdicts are expanded out. The window grid comes from each run's PSD
+    metadata (exact rate/starting_time), NOT from assuming `starting_time == 0` and
+    `rate == 1` -- that assumption is what let the 60s-hop runs go unnoticed, and it
+    is cheap to avoid since only HDF5 metadata is read, never the data.
+
+    Returns an empty frame (right columns, no rows) when there is no upstream mask,
+    so the caller's union degrades to feature-only rather than crashing -- but the
+    caller MUST log that, because a missing upstream mask silently keeps artifact
+    windows.
+    """
+    from ieeg_ehr.qc.feature_level.detect_power_outlier import psd_run_meta
+
+    empty = pd.DataFrame({'run_id': pd.Series(dtype=object),
+                          'channel': pd.Series(dtype=object),
+                          'window_idx': pd.Series(dtype='int32'),
+                          'window_start_time': pd.Series(dtype='float64'),
+                          'excluded_upstream': pd.Series(dtype=bool)})
+    mask_path = (config.bipolar_mask_path(subject, session, mask_label)
+                 if mask_level == 'bipolar' else config.mask_csv(subject, session, mask_label))
+    mask_df = mask_projection.load_mask(mask_path)
+    if mask_df is None:
+        return empty, mask_path
+
+    project = (mask_projection.project_pair_mask_to_windows if mask_level == 'bipolar'
+               else mask_projection.project_to_pairs)
+
+    registry = pd.read_csv(config.FILE_REGISTRY_CSV)
+    rows = registry[(registry.sub_id == f'sub-{subject}') & (registry.ses_id == f'ses-{session}')]
+    frames = []
+    for r in rows.run_id.unique():
+        rid = str(r).replace('run-', '')
+        path = config.bipolar_psd_nwb_path(subject, session, rid)
+        if not path.exists():
+            continue
+        meta = psd_run_meta(path)
+        excl = project(mask_df, f'run-{rid}', meta['channels'], meta['run_seconds'])
+        if not excl.any():
+            continue
+        wi, pi = np.nonzero(excl)
+        frames.append(pd.DataFrame({
+            'run_id': f'run-{rid}',
+            'channel': np.asarray(meta['channels'], dtype=object)[pi],
+            'window_idx': wi.astype(np.int32),
+            'window_start_time': meta['run_seconds'][wi],
+            'excluded_upstream': True,
+        }))
+    return (pd.concat(frames, ignore_index=True) if frames else empty), mask_path
+
+
 def build_one(subject, session, chosen, out_path, mask_label_rv, mask_level):
     merged = None
     per_type_counts = {}
     for artifact_type, label in sorted(chosen.items()):
         path = config.feature_exclusion_path(subject, session, artifact_type, label)
-        cols = ['run_id', 'channel', 'window_idx', 'window_start_time', 'mask_excluded']
+        cols = ['run_id', 'channel', 'window_idx', 'window_start_time']
         df = io.read_table(path, columns=cols + ['excluded'])
         df = df.rename(columns={'excluded': f'excluded_{artifact_type}'})
         per_type_counts[artifact_type] = int(df[f'excluded_{artifact_type}'].sum())
@@ -93,15 +171,34 @@ def build_one(subject, session, chosen, out_path, mask_label_rv, mask_level):
             # Outer join: each type's sparse table covers a different set of
             # windows, and a window missing from one type is simply not excluded
             # by that type (-> False), not absent from the mask.
-            merged = merged.merge(df.drop(columns=['window_start_time', 'mask_excluded']),
+            merged = merged.merge(df.drop(columns=['window_start_time']),
                                   on=KEY, how='outer')
 
-    excl_cols = [f'excluded_{t}' for t in sorted(chosen)]
-    merged[excl_cols] = merged[excl_cols].fillna(False).astype(bool)
-    merged['mask_excluded'] = merged['mask_excluded'].fillna(False).astype(bool)
+    # THE UNION. Without this the mask would contain only feature-flagged windows,
+    # and anything joining it would silently KEEP every window the upstream mask
+    # excluded -- measured at 95% of sub-039's upstream exclusions missing, i.e. the
+    # mask would have been worse than useless: it would look authoritative.
+    upstream, upstream_path = upstream_excluded_rows(subject, session, mask_level, mask_label_rv)
+    n_upstream = len(upstream)
+    if n_upstream == 0:
+        logger.warning('  sub-%s ses-%s: NO upstream mask rows from %s -- this mask is '
+                       'feature-only and does NOT exclude upstream artifacts',
+                       subject, session, upstream_path)
+    merged = merged.merge(upstream, on=KEY, how='outer', suffixes=('', '_up'))
+    # window_start_time comes from whichever side had the row.
+    if 'window_start_time_up' in merged.columns:
+        merged['window_start_time'] = merged['window_start_time'].fillna(
+            merged['window_start_time_up'])
+        merged = merged.drop(columns=['window_start_time_up'])
+
+    excl_cols = [f'excluded_{t}' for t in sorted(chosen)] + ['excluded_upstream']
+    for c in excl_cols:
+        merged[c] = merged[c].fillna(False).astype(bool) if c in merged.columns else False
+    # `excluded` is the FULL union: feature-level types OR the upstream mask. A
+    # consumer should need this column and nothing else.
     merged['excluded'] = merged[excl_cols].any(axis=1)
     merged = merged.sort_values(KEY).reset_index(drop=True)
-    out_cols = KEY + ['window_start_time'] + excl_cols + ['mask_excluded', 'excluded']
+    out_cols = KEY + ['window_start_time'] + excl_cols + ['excluded']
 
     summary_path = config.feature_metrics_path('summary', subject, session,
                                                mask_label_rv, mask_level)
@@ -110,7 +207,7 @@ def build_one(subject, session, chosen, out_path, mask_label_rv, mask_level):
         n_windows_total = int(io.read_table(summary_path, columns=['n_windows'])['n_windows'].sum())
 
     n_excl = int(merged['excluded'].sum())
-    n_inc = int((merged['excluded'] & ~merged['mask_excluded']).sum())
+    n_inc = int((merged['excluded'] & ~merged['excluded_upstream']).sum())
     io.write_table(merged[out_cols], out_path,
                    params={'types': sorted(chosen), 'per_type_labels': chosen,
                            'level': 'window', 'mask_level': mask_level,
@@ -119,20 +216,26 @@ def build_one(subject, session, chosen, out_path, mask_label_rv, mask_level):
                             for t, l in sorted(chosen.items())],
                    subjects=[f'sub-{subject}'],
                    extra={'counts': {'n_excluded': n_excl,
-                                     'n_excluded_not_mask_excluded': n_inc,
+                                     'n_excluded_not_upstream': n_inc,
+                                     'n_upstream_excluded': n_upstream,
                                      'n_windows_total': n_windows_total,
                                      'per_type': per_type_counts},
-                          'note': 'SPARSE: a window absent from this file is not excluded '
-                                  'by any feature-level type. Join key '
-                                  '(run_id, channel, window_idx); window_idx is the index '
-                                  "into that RUN's PSD rows, not epoch-relative."})
+                          'note': 'SPARSE UNION: contains every window excluded by a '
+                                  'feature-level type OR by the upstream mask named in '
+                                  "params.mask_label. `excluded` is the full union -- a "
+                                  'consumer needs that column and nothing else. A window '
+                                  'absent from this file is not excluded by anything. Join '
+                                  'key (run_id, channel, window_idx); window_idx indexes '
+                                  "that RUN's PSD rows, not epoch-relative."})
 
     rate = (100.0 * n_excl / n_windows_total) if n_windows_total else float('nan')
-    logger.info('  sub-%s ses-%s: %d rows, %d excluded (%.3f%% of %s) [%s]',
+    logger.info('  sub-%s ses-%s: %d rows, %d excluded (%.3f%% of %s) '
+                '[upstream=%d, %s, feature-only=%d]',
                 subject, session, len(merged), n_excl, rate, n_windows_total,
-                ', '.join(f'{t}={n}' for t, n in per_type_counts.items()))
+                n_upstream, ', '.join(f'{t}={n}' for t, n in per_type_counts.items()), n_inc)
     return {'subject': subject, 'session': session, 'n_excluded': n_excl,
-            'n_excluded_not_mask_excluded': n_inc, 'n_windows_total': n_windows_total}
+            'n_excluded_not_upstream': n_inc, 'n_upstream': n_upstream,
+            'n_windows_total': n_windows_total}
 
 
 def main():
@@ -222,7 +325,8 @@ def main():
             logger.exception('  sub-%s ses-%s: failed, skipping', subject, session)
 
     total_excl = sum(r['n_excluded'] for r in rows)
-    total_inc = sum(r['n_excluded_not_mask_excluded'] for r in rows)
+    total_inc = sum(r['n_excluded_not_upstream'] for r in rows)
+    total_up = sum(r['n_upstream'] for r in rows)
     total_win = sum(r['n_windows_total'] or 0 for r in rows)
     params_out = {
         'mask_label': label,
@@ -238,7 +342,8 @@ def main():
                                                               mask_level)),
         'n_subject_sessions': len(rows),
         'totals': {'n_excluded': total_excl,
-                   'n_excluded_not_mask_excluded': total_inc,
+                   'n_excluded_not_upstream': total_inc,
+                   'n_upstream_excluded': total_up,
                    'n_windows_total': total_win,
                    'pct_excluded': (100.0 * total_excl / total_win) if total_win else None},
         'sparse': True,

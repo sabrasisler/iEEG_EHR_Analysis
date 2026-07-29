@@ -108,6 +108,19 @@ def _open_psd(nwb_path):
     return handle, decomp, meta
 
 
+def psd_run_meta(nwb_path):
+    """One run's PSD metadata (channels, window grid, rate) WITHOUT reading the data.
+
+    Public because build_feature_mask needs the exact per-run window grid to expand
+    a 60s-binned mask out to windows, and deriving it from assumptions
+    (`starting_time == 0`, `rate == 1`) is precisely the shortcut that made the
+    60s-hop runs invisible for as long as they were. Cheap: HDF5 metadata only.
+    """
+    handle, _decomp, meta = _open_psd(nwb_path)
+    handle.close()
+    return meta
+
+
 def _chunks(n_time, size=CHUNK_WINDOWS):
     for t0 in range(0, n_time, size):
         yield t0, min(t0 + size, n_time)
