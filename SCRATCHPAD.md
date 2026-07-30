@@ -146,6 +146,43 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       be present even where the DK column is not — worth checking before writing them
       off. (→ docs/labnotebook/2026-07-28.md 12:45)
 
+- [ ] **Is equal-weighting EPOCHS right, given that it makes the 0-pain bin
+      unable to be zero?** The z-score baseline pools 0-pain WINDOWS; the reported
+      value averages EPOCHS. When epochs have unequal surviving-window counts —
+      which is exactly what QC masking produces — those two differ, so the `none`
+      bin cannot come back at 0. Measured 2026-07-29: max |group mean| 0.0201 z,
+      median 0.0037, and it tracks masking
+      (`corr(none dev, n_channel_epochs_dropped_coverage) = +0.651`).
+      The tension: equal-weighting epochs is the same principle CLAUDE.md applies to
+      subjects (the unit of replication is equal-weighted so a 200-contact subject
+      cannot outvote a 30-contact one), and window-weighting would let a subject's
+      longest cleanest epoch dominate their own mean. So the current behaviour may be
+      correct and the offset simply the price of it. Open question is whether the
+      epoch or the window is the unit here. NOT the same question as the epoch-drop
+      threshold, which is a task. (→ docs/labnotebook/2026-07-29.md)
+- [ ] **What should the epoch-retention threshold X be, on structural grounds?**
+      Same constraint as the other P2.1 thresholds: set before looking at pain
+      relationships. Candidate criteria — a break in the distribution of surviving-
+      window fraction, a target for how much the epoch-weight inequality shrinks
+      (measurable directly against the `none` offset above), or simple
+      fraction-of-data-retained. Note it trades against n: the most-masked epochs
+      are presumably concentrated in a few subjects. (→ TASKS.md, PLANNING P2.1)
+- [ ] **Why is the `none` offset POSITIVE (+0.0038 overall)?** The unequal-weighting
+      mechanism explains that an offset exists and why it scales with masking, but
+      not its SIGN. Hunch is that heavily-masked epochs retain somewhat higher
+      residual power, so up-weighting them pushes positive — untested, and it should
+      not be asserted anywhere until it is. Cheap to check: regress a subject's
+      per-epoch mean z on that epoch's surviving-window count.
+      (→ docs/labnotebook/2026-07-29.md)
+- [ ] **Does a cluster-forming threshold on t alone let scientifically empty
+      effects through?** Demonstrated yes on 2026-07-29: the circular `none` bin
+      produced 6 significant two-stage clusters at a mean of ~0.004 z, because a
+      tiny mean over a tinier SE is overwhelmingly significant. Currently handled by
+      REPORTING effect size (`mean_abs_z`, `floor_ratio`) rather than by gating on
+      it, since any multiplier of the floor would be arbitrary. Open question is
+      whether a gate should eventually be adopted and what would justify its value.
+      (→ analysis/cluster_permutation.py, docs/cluster_permutation.md)
+
 ## Next steps (session-end dump — `/standup` reads this tomorrow)
 
 - [ ] Lab-notebook system is built but unexercised. The real test is whether

@@ -21,6 +21,11 @@ area:
   write them. Read before logging anything.
 - `docs/view_registry.md` — the seven view axes and their order. Read before
   writing or changing any view/normalization/averaging/binning code.
+- `docs/cluster_permutation.md` — the cluster-based permutation test on the
+  region × frequency map: what is tested, the two correction scopes, why the
+  `none` bin is a noise FLOOR and not a pass/fail control, and why a p-value never
+  travels without an effect size. Read before interpreting an outline on a heatmap
+  or changing any parameter of the test.
 
 Background / historical detail (descriptive, not normative — the three docs
 above win on any conflict):

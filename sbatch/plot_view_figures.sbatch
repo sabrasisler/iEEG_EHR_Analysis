@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=view_figures
 #SBATCH --partition=normal
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=16GB
+#SBATCH --mem=24GB
 #SBATCH --output=logs/view_figures_%j.out
 #
 # Every figure built from the already-built P1.3 view tables, for each
@@ -42,6 +42,7 @@ SPLIT=${SPLIT:-discovery}
 RUN_PREFIX=${RUN_PREFIX:-discovery_std10}
 QUESTION=${QUESTION:-psd_physiology}
 MIN_SUBJECTS=${MIN_SUBJECTS:-8}
+N_PERM=${N_PERM:-10000}
 DEST=${SCRATCH_RUN:+--scratch}
 
 for NORM in ${NORMALIZATIONS:-zscore_vs_baseline baseline_subtract}; do
@@ -59,9 +60,13 @@ for NORM in ${NORMALIZATIONS:-zscore_vs_baseline baseline_subtract}; do
     exit 1
   fi
 
+  # Line-noise bins are dropped from the DISPLAY here; the cluster test drops them
+  # from the statistics unconditionally (docs/cluster_permutation.md section 7).
   python -m ieeg_ehr.analysis.plot_pain_view_heatmaps \
       --view-dir "$VIEW_DIR" \
       --question "$QUESTION" \
+      --exclude-line-noise-bins \
+      --cluster-test --n-perm "$N_PERM" --min-subjects "$MIN_SUBJECTS" \
       --run-name "${RUN_PREFIX}_${NORM}" ${DEST}
 
   python -m ieeg_ehr.analysis.plot_pain_view_spectra \

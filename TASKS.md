@@ -140,6 +140,27 @@ date, or figure that prompted it.
       than left as a permanent fallback.
       (→ views/channel_meta.py, features/build_pain_epoch_power.py:_load_run_arrays)
 
+- [ ] **Build a NON-CIRCULAR negative control for the cluster test: a held-out
+      baseline.** Split each subject's 0-pain epochs in half, form the baseline from
+      one half, and test the other half against it. The current `none` control is
+      circular — the same windows define the baseline and are tested against it — so
+      it can only ever reveal bookkeeping asymmetries, never real leakage. A
+      split-half control would actually test for leakage, and its floor would be the
+      honest one to report. View-layer change (`views/build_pain_epoch_view.py` pass
+      1), needs a full rebuild before any figure using it is valid.
+      (→ docs/labnotebook/2026-07-29.md, plan `sparkling-coalescing-teacup`)
+- [ ] **Feature-QC: drop an epoch that retains too little of itself.** Add an epoch
+      exclusion on the fraction of an epoch's windows (and/or bins) surviving the
+      mask, tightening or replacing `EPOCH_MAX_EXCLUDED_FRAC = 0.5`. This is not
+      only hygiene: epochs with very unequal surviving-window counts are the
+      mechanical cause of the `none`-bin offset measured on 2026-07-29
+      (`corr(none deviation, n_channel_epochs_dropped_coverage) = +0.651`), because
+      the baseline pools WINDOWS while the reported value equal-weights EPOCHS.
+      Dropping the most-depleted epochs shrinks that inequality directly. Threshold
+      X is an open question — see SCRATCHPAD. Belongs in the P2.1 cascade
+      (`architecture.md` PART 7), whose epoch-flag step this is.
+      (→ docs/labnotebook/2026-07-29.md, PLANNING P2.1)
+
 ## Next
 
 - [ ] **P1.1 Refactor `build_pain_epoch_power.py`** into the epoch-definitions +

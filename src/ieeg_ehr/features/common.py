@@ -346,8 +346,55 @@ def epoch_count_labels(counts, regions, bin_order=None):
     return labels
 
 
+def draw_mask_outline(ax, mask, color='black', linewidth=1.6, zorder=5,
+                      connect_rows=False):
+    """Outline the True region of `mask` with EXPLICIT CELL-EDGE SEGMENTS.
+
+    mask is (n_row, n_col), aligned with the pivot an imshow was drawn from, where
+    cell (i, j) occupies [j-0.5, j+0.5] x [i-0.5, i+0.5] in data coordinates. An
+    edge is drawn wherever a True cell's neighbour is False or off the array.
+
+    NOT `ax.contour()`, which is the obvious way to do this and is wrong here:
+    contour interpolates between cell CENTRES, so the boundary lands half a bin
+    inside the cluster. On a log-spaced frequency axis half a bin is a visibly
+    different frequency, and the outline would be making a claim about which
+    frequencies were tested that the test does not support.
+
+    `connect_rows=False` (the default) ALWAYS draws the top and bottom edge of a
+    True cell, even when the cell above or below is also True. That is not a
+    cosmetic choice. Rows here are ROIs, and the cluster test's adjacency is along
+    frequency only WITHIN a region -- so every cluster is exactly one row tall.
+    Suppressing the horizontal edges between two vertically-adjacent regions merges
+    them into one staircase shape, which reads as a single cluster spanning regions:
+    an entity the test never formed and could not have. Each cluster must be drawn
+    as its own one-row box. Set connect_rows=True only for a mask whose rows really
+    are a connected dimension.
+    """
+    from matplotlib.collections import LineCollection
+
+    mask = np.asarray(mask, dtype=bool)
+    n_row, n_col = mask.shape
+    segments = []
+    for i, j in zip(*np.nonzero(mask)):
+        left, right, top, bottom = j - 0.5, j + 0.5, i - 0.5, i + 0.5
+        if not connect_rows or i == 0 or not mask[i - 1, j]:
+            segments.append([(left, top), (right, top)])
+        if not connect_rows or i == n_row - 1 or not mask[i + 1, j]:
+            segments.append([(left, bottom), (right, bottom)])
+        if j == 0 or not mask[i, j - 1]:
+            segments.append([(left, top), (left, bottom)])
+        if j == n_col - 1 or not mask[i, j + 1]:
+            segments.append([(right, top), (right, bottom)])
+
+    if segments:
+        ax.add_collection(LineCollection(segments, colors=color,
+                                         linewidths=linewidth, zorder=zorder))
+    return len(segments)
+
+
 def plot_region_freq_heatmaps(pivots, col_titles, bin_labels, counts, title, out_path, cbar_label,
-                               cmap='RdBu_r', regions=None, count_bin_order=None):
+                               cmap='RdBu_r', regions=None, count_bin_order=None,
+                               outline_masks=None, footnote=None, vmax=None):
     """One imshow panel per (col_title, pivot) pair, region rows x freq_bin_index
     columns, shared symmetric-around-zero color scale, EEG-band reference
     lines, and per-region epoch-count annotations on the rightmost panel.
@@ -358,13 +405,22 @@ def plot_region_freq_heatmaps(pivots, col_titles, bin_labels, counts, title, out
     (via pivot_for_plot(..., regions, ...)) -- it's only used here for the
     y-axis tick labels, defaults to config.ROI_REGIONS. `count_bin_order`
     controls the pain-bin order in the epoch-count annotation text (see
-    epoch_count_labels)."""
+    epoch_count_labels).
+
+    `outline_masks`: one boolean array per pivot, same shape and row order, whose
+    True cells get a cell-edge outline (see draw_mask_outline) -- significant
+    permutation clusters. `footnote`: small print under the panels, for the caveat
+    that has to travel with those outlines. `vmax`: force the symmetric colour
+    limit instead of deriving it from these pivots, so two figures can be put on
+    one scale deliberately."""
     regions = regions or config.ROI_REGIONS
     count_bin_order = count_bin_order or config.PAIN_BIN_ORDER
     freq_bins = bin_labels.index.tolist()
 
-    abs_maxes = [np.nanmax(np.abs(p.to_numpy())) for p in pivots if not np.all(np.isnan(p.to_numpy()))]
-    vmax = max(abs_maxes) if abs_maxes else 1.0
+    if vmax is None:
+        abs_maxes = [np.nanmax(np.abs(p.to_numpy())) for p in pivots
+                     if not np.all(np.isnan(p.to_numpy()))]
+        vmax = max(abs_maxes) if abs_maxes else 1.0
 
     # A MISSING cell must not look like a ZERO one. On RdBu_r the midpoint is
     # near-white, and matplotlib's default for NaN is fully transparent -- so a
@@ -382,13 +438,16 @@ def plot_region_freq_heatmaps(pivots, col_titles, bin_labels, counts, title, out
     fig, axes = plt.subplots(1, len(pivots), figsize=(6.3 * len(pivots) + 1, fig_height), sharey=True)
     axes = np.atleast_1d(axes)
     im = None
-    for ax, col, pivot in zip(axes, col_titles, pivots):
+    for k, (ax, col, pivot) in enumerate(zip(axes, col_titles, pivots)):
         im = ax.imshow(pivot.to_numpy(), aspect='auto', cmap=cmap, vmin=-vmax, vmax=vmax)
         ax.set_title(col)
         ax.set_xticks(range(len(freq_bins)))
         ax.set_xticklabels(freq_tick_labels, rotation=90, fontsize=6)
         ax.set_xlabel('Freq bin low edge (Hz)')
         add_band_boundary_lines(ax, bin_labels)
+        if outline_masks is not None and outline_masks[k] is not None:
+            n_seg = draw_mask_outline(ax, outline_masks[k])
+            logger.info('%s: outlined %d cell edge(s)', col, n_seg)
     axes[0].set_yticks(range(len(regions)))
     axes[0].set_yticklabels(regions)
     axes[0].set_ylabel('Region')
@@ -404,6 +463,13 @@ def plot_region_freq_heatmaps(pivots, col_titles, bin_labels, counts, title, out
 
     fig.suptitle(title)
     fig.colorbar(im, ax=list(axes), shrink=0.8, label=cbar_label)
+
+    if footnote:
+        # Attached to the figure rather than left in a README: the caveat about what
+        # a cluster's p-value does and does not cover has to be readable by whoever
+        # is looking at the outlines, months from now, in a slide deck.
+        fig.text(0.01, -0.02, footnote, ha='left', va='top', fontsize=6,
+                 color='0.25', wrap=True)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
