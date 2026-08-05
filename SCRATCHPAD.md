@@ -146,6 +146,25 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       be present even where the DK column is not — worth checking before writing them
       off. (→ docs/labnotebook/2026-07-28.md 12:45)
 
+- [ ] **sub-071's MNI coordinates are physically impossible — so can its DK
+      labels be trusted, given the analysis uses them?** Found 2026-08-05 by the
+      electrode glass brain, which plotted 55 of the 56 analysis subjects.
+      sub-071 has 35 channels, all with coordinates AND DK labels, but the ranges
+      are x -382..371, y -784..836, z -216..89 against an MNI152 extent of roughly
+      +-90 / -130..90 / -80..110 — off by a factor of ~4-9, i.e. a units or
+      registration failure, not noise. It is the ONLY affected subject: the entire
+      "15 contacts out of bounds" drop was sub-071's ROI-mapped remainder.
+      The question that matters is not the figure (which correctly excluded it) but
+      the ANALYSIS: sub-071 currently contributes region rows to all the roi_v2
+      heatmaps and spectra, and its DK labels come from the same localization that
+      produced these coordinates. If the registration failed, the parcel
+      assignments may be wrong too — in which case its channels are attributed to
+      the wrong ROIs and it should be excluded from region-level work, taking the
+      region-level n from 56 to 55.
+      Note sub-071 ALREADY has an independent problem: two of its runs store a
+      100% -inf/NaN psd_log_bins (see the non-finite-PSD item below). Two unrelated
+      defects in one subject is itself a reason to look at it as a whole.
+      (→ docs/labnotebook/2026-08-05.md, analysis/plot_electrode_locations.py)
 - [ ] **Is equal-weighting EPOCHS right, given that it makes the 0-pain bin
       unable to be zero?** The z-score baseline pools 0-pain WINDOWS; the reported
       value averages EPOCHS. When epochs have unequal surviving-window counts —

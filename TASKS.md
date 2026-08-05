@@ -140,6 +140,25 @@ date, or figure that prompted it.
       than left as a permanent fallback.
       (→ views/channel_meta.py, features/build_pain_epoch_power.py:_load_run_arrays)
 
+- [ ] **Decide whether sub-071 can stay in region-level analyses.** Its MNI
+      coordinates are impossible (x -382..371 vs an MNI extent of ~+-90; found
+      2026-08-05 by the glass brain, which excluded it), and its DK labels come from
+      the same localization. Check whether the registration failed outright — if so
+      its parcel assignments are wrong and it must leave region-level work, taking
+      the region-level n from 56 to 55 and requiring a re-run of the roi_v2 figures.
+      Cheap first check: does its `LEPTO_coord_*` / `fsaverageINF_coord_*` look
+      sane, or is every coordinate space broken for this subject? It also has two
+      all-`-inf` PSD runs, so consider it as a whole rather than defect by defect.
+      (→ SCRATCHPAD "sub-071", docs/labnotebook/2026-08-05.md)
+- [ ] **Add a coordinate sanity check upstream, where it belongs.** The glass
+      brain caught this only because it plots coordinates; nothing in the QC tree
+      looks at them. A per-subject check that MNI coordinates fall inside the
+      MNI152 extent is trivial and would have flagged sub-071 before it entered any
+      analysis. Natural home is the feature-level QC tree
+      (`qc/feature_level/`) or a small standalone audit beside
+      `qc/audit_psd_timing.py`, which is the same shape of problem: a
+      choice-independent fact about a subject that every downstream view inherits.
+      (→ docs/labnotebook/2026-08-05.md)
 - [ ] **Build a NON-CIRCULAR negative control for the cluster test: a held-out
       baseline.** Split each subject's 0-pain epochs in half, form the baseline from
       one half, and test the other half against it. The current `none` control is

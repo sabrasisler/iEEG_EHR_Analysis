@@ -107,6 +107,81 @@ Structural choices behind the pipeline:
   to 6, and exponentiating log-power near −36.8 in float32 can underflow a quiet
   channel to exactly zero.*
 
+## Baseline correction
+
+- **Reference = the subject's own 0-pain epochs** (AXIS 2 `zero_pain_epochs`).
+  *Why: every subject is their own control, so cross-subject differences in
+  electrode coverage, gain, and reporting range cannot masquerade as an effect.*
+- **The baseline statistic is per channel × per frequency bin** — a mean (for
+  `baseline_subtract`) plus an SD (for `zscore_vs_baseline`), computed over the
+  0-pain *windows*, sample SD with ddof=1.
+  *Why: power scale differs by orders of magnitude across channels and across
+  frequency, so a single scalar baseline would be meaningless.*
+- **Baseline is pooled session-wide and keyed on channel NAME, not per run.**
+  *Why: montages can differ between runs, and a per-run baseline would strand
+  every epoch in a run that happens to contain no 0-pain event.*
+- **Correction is applied PER 2 s WINDOW, before any averaging.**
+  *Why: this is the whole reason the cache stores per-window values. Normalizing
+  after averaging is a different operation.*
+- **Cells with too few baseline windows (< 2) become NaN, not a number.**
+  *Why: NaN propagates as "unknown"; a fabricated zero would propagate as
+  "no effect".*
+- **In the log domain, `baseline_subtract` IS delta log power** (a log ratio to
+  the 0-pain state); `zscore_vs_baseline` divides that by the 0-pain SD.
+- **The 0-pain bin is carried through the whole chain as a `none` level** and
+  checked, not plotted.
+  *Why: it must return ~0 by construction, so it is a free check that the
+  baseline did not leak — and its residual departure from 0 is the pipeline's
+  measured noise floor. It is CIRCULAR (the same windows define the baseline and
+  are tested against it), so it is a floor on reportable effect size, not a
+  pass/fail control.*
+
+## Averaging order for the region × frequency heatmap
+
+Order matters and is fixed (`docs/view_registry.md`; enforced in
+`views/build_pain_epoch_view.py`). Nothing is averaged until the step before it
+has happened:
+
+1. **Domain** — log by default (the stored domain; no exponentiation).
+2. **Baseline estimate** — per channel × bin, over the subject's 0-pain windows.
+3. **Normalize** — per 2 s window, against that baseline.
+4. **Average over windows within an epoch** — ~300 windows → one value per
+   channel per frequency bin per epoch.
+5. **Average over frequency** — either keep the 50 log bins (the heatmap's
+   x-axis) or collapse to canonical bands.
+6. **Average over channels within an ROI** — one value per region per epoch.
+7. **Average over epochs within a pain level** — one value per subject per
+   region per bin per pain level.
+8. **Average across subjects, equal-weighted** — the heatmap cell.
+
+The rules that fix that order:
+
+- **Normalize before averaging (step 3 before step 4) — the one rule that never
+  moves.** *Why: averaging then normalizing is not the same operation
+  (Jensen's inequality); per-window cache granularity exists precisely so this
+  order is available.*
+- **Windows → channels → epochs → subjects, in that order.** *Why: each level
+  is nested inside the next, so averaging out of order would let a subject with
+  many electrodes or many epochs dominate a level it shouldn't.*
+- **Every reduction runs in float64** even though the cache is float32.
+  *Why: measured — a float32 accumulator over ~300 windows retains only ~6
+  significant figures.*
+- **A difference of logs averages arithmetically; raw log-power does not** — raw
+  log power is aggregated linear-then-log across frequency and across channels.
+  *Why: the mean of logs is a geometric mean. Once values are baseline-subtracted
+  or z-scored they are already ratios/dimensionless, so arithmetic averaging is
+  correct; before that it is not.*
+- **The subject is the unit of replication at the group level, equal-weighted.**
+  *Why: a subject with 200 contacts must not outvote one with 30. This is also
+  the exchangeability unit the cluster permutation test requires — if channels
+  entered as independent rows the test would run anticonservative.*
+- **NaN-aware at every level** (masked windows, unmapped channels, and
+  uncovered regions drop out rather than contributing zeros), and the
+  **contributing channel / epoch / subject n is reported alongside every
+  figure**.
+  *Why: electrode coverage is the main confound in this dataset, so a shrinking
+  denominator has to stay visible.*
+
 ## Caveats before any of this is presented as settled
 
 - The gross-artifact and flatline thresholds are **pending formal pinning**
