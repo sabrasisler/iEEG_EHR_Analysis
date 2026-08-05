@@ -7,14 +7,21 @@
 #SBATCH --output=logs/view_discovery_%A_%a.out
 #SBATCH --array=0-59%16
 #
-# Build the P1.3 view for every DISCOVERY subject that can actually produce one,
-# in BOTH normalizations (z-score and baseline-subtract / "delta power").
+# Build the P1.3 view for every DISCOVERY subject that can actually produce one.
 #
-# Both normalizations in the SAME task, on purpose: they share the expensive part.
-# The first pass builds this subject's channel_meta from NWB metadata (~0.3 s x
-# n_runs, and some subjects have 100+ runs); the second normalization then reuses
-# that cached table and only re-streams the cache. Two separate arrays would pay
-# the NWB cost twice.
+# $NORMALIZATIONS controls which; $ROI_SCHEME controls the region set. ONE ARRAY PER
+# NORMALIZATION is fine and is the recommended way to run this now:
+#
+#   NORMALIZATIONS=zscore_vs_baseline ROI_SCHEME=roi_v2 sbatch <this>
+#
+# CORRECTION (2026-07-29) to the rationale this header used to give. It claimed both
+# normalizations had to share a task because the first pass builds channel_meta from
+# NWB metadata (~0.3 s x n_runs, 100+ runs for some subjects) and separate arrays
+# would pay that twice. That is wrong: views/channel_meta.build PERSISTS the table
+# to features/.../channel_meta/ keyed by subject/session only -- not by
+# normalization, not by ROI scheme -- so any later job READS it. All 62
+# subject-sessions are already built, so the NWB cost is paid and gone, and
+# splitting into separate jobs is free.
 #
 # The subject list is COMPUTED, never a checked-in file:
 #     python -m ieeg_ehr.config.cohorts --runnable discovery
