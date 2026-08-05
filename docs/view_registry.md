@@ -90,6 +90,39 @@ Notes: bands use linear-then-log aggregation (existing convention, avoids Jensen
 Notes: region-average uses linear-then-log if in log domain (Jensen again).
 Report contributing channel/subject n (coverage confound).
 
+### The region SET is a second, separate choice: `roi_scheme`
+
+`region: individual_dk` says "aggregate channels into DK-derived regions". It does
+NOT say WHICH regions. That is `ViewConfig.roi_scheme`, resolved by
+`config/roi_schemes.py`, and it is a full axis in its own right: it decides how many
+rows a heatmap has and therefore how large the multiple-comparison family is.
+
+| Scheme | Regions | What it is |
+|---|---|---|
+| `default` | 15 | The original set. `ACC` and `OFC` each one row; `Frontal (other)` and `Temporal` are catch-alls; Occipital and Cerebellum are NON-ROI |
+| `roi_v2` | 21 | Splits `ACC` -> rACC/dACC and `OFC` -> mOFC/lOFC, and breaks the catch-alls into M1, dmPFC/SMA, IFG/vlPFC, MTL (other), Lateral Temporal, Auditory, Parietal (other). Occipital becomes a REAL ROI, useful as a quasi-control. Frontopolar and Cerebellum are absent -- measured at 2 and 0 subjects of 60 (2026-07-29) |
+| a `.json` path | — | A scheme file on Oak, so a region set can be changed without a commit. Its CONTENTS (not just its name) go into provenance, because the file can be edited afterwards |
+
+**Insertion order IS precedence** (substring match, case-insensitive). Three
+collisions in the current schemes are real and pinned by tests: `precuneus`
+contains `cuneus` (so Parietal must precede Occipital), `hippocampus` does not
+match `parahippocampal`, and `temporalpole` does not match the lateral-temporal
+patterns. The tissue/exclusion categories come first so a non-neural label never
+reaches anatomy.
+
+**A finer scheme is not automatically a stricter test.** Going 15 -> 21 grows the
+BH-FDR family across regions, which costs power — but on the 2026-08-05 discovery
+run MORE clusters survived (`high` 11 -> 17), because splitting the catch-alls
+stopped a real effect being diluted across heterogeneous regions. Both effects are
+present; which dominates is empirical.
+
+**Reading the region list off `config.ROI_REGIONS` is a bug.** That constant is the
+`default` scheme's 15 regions, resolved at import. A figure that filters a view's
+regions against it silently keeps only those whose NAMES appear in the default set —
+8 of 21 for `roi_v2`, with no error. Use
+`analysis/view_tables.roi_regions_for(view_params)`, which reads the scheme the view
+recorded in its own sidecar.
+
 "Anode-based for now" is a deliberate TEMPORARY stand-in: a bipolar pair is
 assigned the DK parcel of its anode (`Desikan_Killiany_anode`), which is wrong
 whenever the two contacts of a pair straddle a boundary. The intended

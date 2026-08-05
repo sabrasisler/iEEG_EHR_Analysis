@@ -206,9 +206,22 @@ moment to convert it *and* give it a sidecar.
 
 ## 8. Dependencies
 
-pyarrow and joblib are in the shared venv (`$GROUP_HOME/venvs/ieeg_ehr_analysis`)
-as of 2026-07-27: **pyarrow 20.0.0, joblib 1.5.3**, with numpy 2.4.2 / pandas
-2.3.3 untouched.
+Everything lives in the shared venv `$GROUP_HOME/venvs/ieeg_ehr_analysis`:
+
+| Added | Packages |
+|---|---|
+| 2026-07-27 | **pyarrow 20.0.0, joblib 1.5.3** — the IO layer |
+| 2026-08-05 | **nilearn 0.14.0, nibabel 5.4.2, scikit-learn 1.7.2, threadpoolctl 3.6.0, colorcet 3.2.1** — the electrode glass brain (`analysis/plot_electrode_locations.py`) |
+
+**numpy 2.4.2 / scipy 1.16.3 / pandas 2.3.3 have never been touched**, and each
+install verifies that explicitly before and after rather than assuming it.
+
+Two things learned on the 2026-08-05 install, both worth knowing before the next
+one. `nilearn` needs `scikit-learn`, which `--no-deps` correctly does not pull, so
+it imports fine and then fails at `nilearn.plotting` — install it in the same pass.
+And the glass-brain outlines ship inside nilearn as vector data, so `plot_markers`
+renders with **no network**; that was verified deliberately, because a compute node
+cannot fetch a template and a figure job that needs one fails only at the end.
 
 Reinstalling elsewhere has one trap worth writing down. Sherlock is CentOS 7
 (**glibc 2.17**) and modern pyarrow wheels are `manylinux_2_28`, so a plain
