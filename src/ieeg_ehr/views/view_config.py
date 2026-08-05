@@ -48,6 +48,11 @@ NORMALIZATION_CODES = {'zscore_vs_baseline': 'zscore',
                        'none': 'raw'}
 PAIN_BIN_CODES = {'subject_relative': 'relpain', 'absolute': 'abspain'}
 
+# The ROI scheme is in the folder name too, because two schemes are two different
+# REGION SETS and a figure of one must not land in the other's directory. The
+# default is spelled as '' so existing paths are unchanged and remain valid.
+ROI_SCHEME_CODES = {'default': '', 'roi_v2': 'roiv2'}
+
 
 @dataclass(frozen=True)
 class ViewConfig:
@@ -130,14 +135,27 @@ class ViewConfig:
         view_scheme folder. If those were built separately they could drift, and
         then two folder names would claim to describe the same view.
 
-        Normalization and pain binning specifically, out of the seven axes: the
-        first is what most changes the numbers (and used to be invisible in the
+        Normalization, pain binning, and the ROI scheme when it is not the default:
+        the first is what most changes the numbers (and used to be invisible in the
         path -- the old level 4 was `subject_relative` alone), the second is what
-        changes how many lines a figure has. The exact, complete view identity is
-        the sidecar's `config_hash`; this is the part a human reads.
+        changes how many lines a figure has, and the third is what changes which
+        ROWS exist at all. The exact, complete view identity is the sidecar's
+        `config_hash`; this is the part a human reads.
+
+        The ROI code is a VERSION label ('roiv2'), not a description, so it is not
+        self-decoding the way 'delta' is -- the table in docs/view_registry.md is
+        what decodes it, and provenance.json carries the scheme's full contents.
         """
-        return (f'{NORMALIZATION_CODES[self.normalization]}'
+        roi = ROI_SCHEME_CODES.get(self.roi_scheme)
+        if roi is None:
+            # A JSON scheme path: use its filename stem, so a scheme that lives on
+            # Oak still gets a stable folder name rather than colliding with the
+            # default's.
+            from pathlib import Path
+            roi = Path(self.roi_scheme).stem.replace('_', '').replace('-', '')
+        code = (f'{NORMALIZATION_CODES[self.normalization]}'
                 f'-{PAIN_BIN_CODES[self.pain_bins]}')
+        return f'{code}-{roi}' if roi else code
 
     @property
     def value_label(self):

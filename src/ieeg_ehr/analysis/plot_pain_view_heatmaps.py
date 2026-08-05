@@ -318,7 +318,17 @@ def main():
     view_tables.log_baseline_check(subject_tables)
 
     group = wide_by_bin(group_table(subject_tables), ['region', 'freq_bin_index'], panels)
-    regions_present = [r for r in config.ROI_REGIONS if r in set(group['region'])]
+    # From the VIEW's own scheme, never config.ROI_REGIONS (the default 15). See
+    # view_tables.roi_regions_for: filtering against the module default silently
+    # drops every region whose name is not in the default list.
+    roi_regions = view_tables.roi_regions_for(view_params)
+    logger.info('roi_scheme %r -> %d region(s): %s',
+                view_params.get('roi_scheme'), len(roi_regions), roi_regions)
+    regions_present = [r for r in roi_regions if r in set(group['region'])]
+    missing = sorted(set(group['region']) - set(roi_regions))
+    if missing:
+        logger.warning('%d region(s) in the data are absent from the scheme display '
+                       'order and will NOT be plotted: %s', len(missing), missing)
     freq_bins = bin_labels.index.tolist()
 
     # Row order computed ONCE from the group table and reused for every figure --
@@ -341,6 +351,18 @@ def main():
 
     # ---------------- cluster permutation test ----------------
     outline_masks, cluster_extra, footnote = None, {}, None
+    if args.cluster_test and view is not None and not view.is_difference:
+        # A HARD STOP, not a warning. The test is one-sample against ZERO, which is
+        # meaningful only because a baseline-normalized view is already referenced to
+        # the 0-pain state. Raw log power sits near -10, so "differs from zero" would
+        # be true of every cell in the map and the figure would come back uniformly
+        # outlined -- an impressive-looking result that means nothing at all.
+        raise SystemExit(
+            f'--cluster-test with normalization={view.normalization!r} is not a '
+            'meaningful test: the one-sample null is "equal to zero", and raw log '
+            'power is nowhere near zero, so every cell would be significant. Run the '
+            'test on a baseline_subtract or zscore_vs_baseline view, or drop '
+            '--cluster-test for this one.')
     if args.cluster_test:
         # Cells eligible to enter a cluster. An invalid cell TERMINATES a run, so
         # nothing bridges the 60 Hz notch.
@@ -448,7 +470,7 @@ def main():
         parents=[io.parent_ref(p, digest=False) for p in subject_paths + epoch_paths],
         subjects=subjects,
         extra={'panels': panels, 'region_row_order': regions_order,
-               'roi_regions': config.ROI_REGIONS, 'n_subjects': len(subjects),
+               'roi_regions': roi_regions, 'n_subjects': len(subjects),
                'line_noise_bins_excluded': ([int(b) for b in line_noise_bins]
                                             if args.exclude_line_noise_bins else []),
                **cluster_extra},

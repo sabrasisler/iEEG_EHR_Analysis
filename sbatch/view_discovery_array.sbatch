@@ -71,6 +71,10 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 MASK_LABEL=${MASK_LABEL:-std10_rv-gross-std3_satmargin15_sw_logz4}
 SPLIT=${SPLIT:-discovery}
+ROI_SCHEME=${ROI_SCHEME:-default}
+# Both/all normalizations in the SAME task, for the reason in the header: they
+# share the expensive channel_meta build. Override to build a subset.
+NORMALIZATIONS=${NORMALIZATIONS:-zscore_vs_baseline baseline_subtract}
 
 mapfile -t SUBJECTS < <(python -m ieeg_ehr.config.cohorts --runnable "$SPLIT" 2>/dev/null)
 
@@ -83,7 +87,7 @@ fi
 SUBJECT="${SUBJECTS[$SLURM_ARRAY_TASK_ID]}"
 echo "=== task ${SLURM_ARRAY_TASK_ID}: sub-${SUBJECT} | split=${SPLIT} | mask=${MASK_LABEL} ($(date)) ==="
 
-for NORM in zscore_vs_baseline baseline_subtract; do
+for NORM in $NORMALIZATIONS; do
   echo "--- $NORM"
   # No --out-dir: the builder resolves
   #   features/pain/psd_epochs/epoch-5min-pre/views/<scheme_code>_<config_hash>/
@@ -93,6 +97,7 @@ for NORM in zscore_vs_baseline baseline_subtract; do
       --subjects "$SUBJECT" \
       --split "$SPLIT" \
       --mask-label "$MASK_LABEL" \
+      --roi-scheme "$ROI_SCHEME" \
       --normalization "$NORM"
 done
 

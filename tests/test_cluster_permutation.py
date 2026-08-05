@@ -420,3 +420,38 @@ def test_boundary_caveat_is_present_and_says_the_key_thing():
     so a rewrite that drops the point should fail a test."""
     assert 'AS A WHOLE' in cp.BOUNDARY_CAVEAT
     assert 'boundaries' in cp.BOUNDARY_CAVEAT
+
+
+# ============================================================================
+# BH FAMILY MEMBERSHIP
+# ============================================================================
+
+def test_untested_regions_are_not_counted_in_the_bh_family():
+    """A region with data but no cluster IS a test that came back negative and
+    stays in the family. A region with NO VALID CELL was never tested, and counting
+    it inflates m -- which weakens every region that did fire. Both look like
+    p = 1.0, so the distinction has to come from the validity map."""
+    rng = np.random.default_rng(1234)
+    x = rng.normal(0, 1, size=(24, 6, 14))
+    x[:, 0, 4:10] += 2.0
+    x[:, 4:, :] = np.nan                       # regions 4 and 5 have no data at all
+
+    res = cp.cluster_test(x, n_perm=200, seed=0, min_extent=3)
+    assert res['n_regions_in_bh_family'] == 4
+    assert res['region_tested'].tolist() == [True, True, True, True, False, False]
+    # An untested region can never be rejected, whatever its nominal p.
+    assert not res['region_rejected'][4] and not res['region_rejected'][5]
+
+
+def test_shrinking_the_bh_family_cannot_weaken_a_real_region():
+    """Same data, but padded with empty regions. Under the fix the adjusted p of the
+    real region must not get worse, because the empty rows are not tests."""
+    rng = np.random.default_rng(4321)
+    core = rng.normal(0, 1, size=(26, 3, 14))
+    core[:, 1, 3:9] += 1.8
+    padded = np.concatenate([core, np.full((26, 5, 14), np.nan)], axis=1)
+
+    a = cp.cluster_test(core, n_perm=200, seed=0, min_extent=3)
+    b = cp.cluster_test(padded, n_perm=200, seed=0, min_extent=3)
+    assert b['n_regions_in_bh_family'] == 3
+    assert np.isclose(a['region_p_adj'][1], b['region_p_adj'][1])

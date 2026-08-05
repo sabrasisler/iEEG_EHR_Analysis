@@ -127,8 +127,77 @@ _DEFAULT_DISPLAY = [
     'Temporal', 'Parietal',
 ]
 
+# ---------------------------------------------------------------------------
+# roi_v2 -- the finer scheme (2026-07-29)
+# ---------------------------------------------------------------------------
+# 21 regions. Splits three things `default` merged, because they are functionally
+# distinct in the pain literature and DK can separate them:
+#   ACC  -> rACC / dACC          OFC -> mOFC / lOFC
+#   the `Frontal (other)` and `Temporal` CATCH-ALLS -> M1, dmPFC/SMA, IFG/vlPFC,
+#   MTL (other), Lateral Temporal, Auditory, Parietal (other)
+#
+# Two departures from `default` worth knowing:
+#   - Occipital is a REAL ROI here, not a NON_ROI category. It is a useful
+#     quasi-control: an occipital pain effect argues for a global or artifactual
+#     driver rather than nociception.
+#   - There are NO catch-alls. Anything unmatched lands in FALLBACK ('Other') and
+#     is dropped WITH A LOGGED COUNT, which is how `frontalpole` (2 subjects) and
+#     `cerebellum` (0) leave: both were measured below the 8-subject floor on
+#     2026-07-29 and would only ever have been a blank or untestable row.
+#
+# ORDER IS PRECEDENCE (substring, case-insensitive). Three constraints hold here;
+# all three are pinned by tests because breaking one is silent:
+#   - the tissue/exclusion categories come FIRST, so a malformed or non-neural
+#     label never reaches anatomy;
+#   - `Parietal (other)` MUST precede `Occipital`, because 'precuneus' contains
+#     'cuneus';
+#   - 'hippocampus' does not match 'parahippocampal', and 'temporalpole' does not
+#     match any Lateral Temporal pattern, so MTL (other) can claim both.
+_ROI_V2_PATTERNS = {
+    'Exclude': ['empty', 'unknown', 'undefined'],
+    'White Matter': ['white-matter', 'ventraldc', 'cc_', 'wm-'],
+    'CSF/Ventricles': ['ventricle', 'csf', 'choroid-plexus', 'hypointensities'],
+
+    'Hippocampus': ['hippocampus'],
+    'Amygdala': ['amygdala'],
+    'Thalamus': ['thalamus'],
+    'Basal Ganglia': ['caudate', 'putamen', 'pallidum', 'accumbens'],
+    'Insula': ['insula'],
+    'rACC': ['rostralanteriorcingulate'],
+    'dACC': ['caudalanteriorcingulate'],
+    'PCC': ['posteriorcingulate', 'isthmuscingulate'],
+    'mOFC': ['medialorbitofrontal'],
+    'lOFC': ['lateralorbitofrontal'],
+    'dlPFC': ['rostralmiddlefrontal', 'caudalmiddlefrontal'],
+    'dmPFC/SMA': ['superiorfrontal'],
+    'IFG/vlPFC': ['parsopercularis', 'parstriangularis', 'parsorbitalis'],
+    'M1': ['precentral'],
+    'S1': ['postcentral', 'paracentral'],
+    'S2/PO': ['supramarginal'],
+    # Before Occipital: 'precuneus' contains 'cuneus'.
+    'Parietal (other)': ['superiorparietal', 'inferiorparietal', 'precuneus'],
+    'MTL (other)': ['entorhinal', 'parahippocampal', 'temporalpole', 'fusiform'],
+    'Lateral Temporal': ['superiortemporal', 'middletemporal', 'inferiortemporal',
+                         'bankssts'],
+    'Auditory': ['transversetemporal'],
+    'Occipital': ['lateraloccipital', 'cuneus', 'pericalcarine', 'lingual'],
+}
+
+# Display order is anatomical/functional, not the pattern order: subcortical,
+# limbic/cingulate, orbitofrontal, lateral+medial prefrontal, sensorimotor,
+# parietal, temporal, occipital. Fixed, so every figure puts a region in the same
+# row and two runs can be compared side by side.
+_ROI_V2_DISPLAY = [
+    'Hippocampus', 'Amygdala', 'Thalamus', 'Basal Ganglia', 'Insula',
+    'rACC', 'dACC', 'PCC',
+    'mOFC', 'lOFC', 'dlPFC', 'dmPFC/SMA', 'IFG/vlPFC',
+    'M1', 'S1', 'S2/PO',
+    'Parietal (other)', 'MTL (other)', 'Lateral Temporal', 'Auditory', 'Occipital',
+]
+
 ROI_SCHEMES = {
     'default': {'patterns': _DEFAULT_PATTERNS, 'display': _DEFAULT_DISPLAY},
+    'roi_v2': {'patterns': _ROI_V2_PATTERNS, 'display': _ROI_V2_DISPLAY},
 }
 
 DEFAULT_ROI_SCHEME = 'default'

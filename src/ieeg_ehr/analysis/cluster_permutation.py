@@ -321,11 +321,29 @@ def cluster_test(x, valid=None, alpha=0.05, min_extent=3, n_perm=10000, q=0.05,
         c['p_global'] = permutation_p(m, null_global)
 
     # Two-stage: family-wise within region across frequency, then BH across the
-    # regions. A region with no cluster still counts as a test.
+    # regions.
+    #
+    # A region with DATA but no cluster still counts as a test -- it is a test that
+    # came back negative, and dropping it would let the denominator be chosen after
+    # seeing which regions fired. But a region with NO VALID CELLS AT ALL was never
+    # tested, and including it inflates m and weakens every real region. That
+    # distinction is invisible in `region_p` alone (both look like 1.0), which is
+    # why `tested` is computed from the validity map instead.
     region_p = np.ones(n_region)
     for c in clusters:
         region_p[c['region_idx']] = min(region_p[c['region_idx']], c['p_within_region'])
-    region_rejected, region_p_adj = bh_fdr(region_p, q)
+
+    tested = valid_map.any(axis=1)
+    region_rejected = np.zeros(n_region, dtype=bool)
+    region_p_adj = np.ones(n_region)
+    if tested.any():
+        rej, adj = bh_fdr(region_p[tested], q)
+        region_rejected[tested] = rej
+        region_p_adj[tested] = adj
+    n_untested = int((~tested).sum())
+    if n_untested:
+        logger.info('BH family = %d region(s) with data; %d region(s) had no valid '
+                    'cell and were NOT counted as tests', int(tested.sum()), n_untested)
 
     for c in clusters:
         r = c['region_idx']
@@ -335,7 +353,9 @@ def cluster_test(x, valid=None, alpha=0.05, min_extent=3, n_perm=10000, q=0.05,
 
     return {
         'clusters': clusters, 'region_p': region_p, 'region_p_adj': region_p_adj,
-        'region_rejected': region_rejected, 't_map': t_obs, 'n_map': n_map,
+        'region_rejected': region_rejected, 'region_tested': tested,
+        'n_regions_in_bh_family': int(tested.sum()),
+        't_map': t_obs, 'n_map': n_map,
         # The group MEAN map, not just t. A permutation test answers "is this
         # bigger than chance", which is not the same question as "is this big" --
         # a tiny mean with a tinier SE is highly significant and scientifically

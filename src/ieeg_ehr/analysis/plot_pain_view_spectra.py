@@ -119,8 +119,14 @@ def _series(stats, region, pain_bin, freq_bins, line_noise_bins, spread):
 
 
 def plot_grid(stats, regions, region_n, panels, bin_labels, line_noise_bins,
-              title, out_path, value_label, spread='sem', ncols=4, share_y=True):
-    """One panel per region; one line per pain bin; optional +-spread ribbon."""
+              title, out_path, value_label, spread='sem', ncols=4, share_y=True,
+              zero_line=True):
+    """One panel per region; one line per pain bin; optional +-spread ribbon.
+
+    `zero_line` draws the 0-pain reference at y=0. It must be OFF for an
+    un-normalized view: raw log power sits near -10, so forcing 0 into the y-limits
+    would compress every curve into a flat line at the top of the panel.
+    """
     freq_bins = bin_labels.index.tolist()
     x_hz = bin_labels['bin_low_hz'].to_numpy(dtype=float)
 
@@ -135,7 +141,8 @@ def plot_grid(stats, regions, region_n, panels, bin_labels, line_noise_bins,
             if b in bin_labels.index:
                 ax.axvspan(bin_labels.loc[b, 'bin_low_hz'],
                            bin_labels.loc[b, 'bin_high_hz'], **NOISE_SPAN_KW)
-        ax.axhline(0, color='0.35', linewidth=0.8, zorder=1)
+        if zero_line:
+            ax.axhline(0, color='0.35', linewidth=0.8, zorder=1)
         common.add_band_boundary_lines(ax)
 
         for pain_bin in panels:
@@ -258,7 +265,22 @@ def main():
             f'was built with pain_bins={view.pain_bins!r}. Rebuild the view or plot '
             'the scheme it has.')
 
-    panels = PANELS[args.pain_bin_scheme]
+    # WHETHER 'none' IS A LINE depends on the normalization, not on taste.
+    #
+    # Under baseline_subtract or zscore_vs_baseline the 0-pain bin IS the reference:
+    # it is 0 by construction and carries no information, so PANELS omits it and it
+    # becomes the y=0 line instead. UN-NORMALIZED, it is a real 0-pain power
+    # spectrum -- and the most useful curve on the plot, since it is what the other
+    # two are to be read against.
+    is_difference = bool(view.is_difference) if view is not None else True
+    if is_difference:
+        panels = PANELS[args.pain_bin_scheme]
+    else:
+        panels = [b for b in config.pain_bin_order(args.pain_bin_scheme)
+                  if b in set(subject_tables['pain_bin'])]
+        logger.info('un-normalized view: drawing the 0-pain bin as a real spectrum, '
+                    'panels = %s', panels)
+
     epoch_minutes = view_params.get('epoch_minutes')
     bin_labels = cache_reader.bin_edges(epoch_minutes).set_index('freq_bin_index')
     line_noise_bins = (np.array([], dtype=int) if args.keep_line_noise_bins
@@ -267,11 +289,20 @@ def main():
                 [f'{bin_labels.loc[b, "bin_low_hz"]:.0f}' for b in line_noise_bins
                  if b in bin_labels.index])
 
-    view_tables.log_baseline_check(subject_tables)
+    # Only meaningful when there IS a baseline: un-normalized, the 'none' bin is a
+    # real spectrum rather than a quantity that should sit at 0.
+    if is_difference:
+        view_tables.log_baseline_check(subject_tables)
+
+    # From the VIEW's own scheme, never config.ROI_REGIONS (the default 15) --
+    # see view_tables.roi_regions_for.
+    roi_regions = view_tables.roi_regions_for(view_params)
+    logger.info('roi_scheme %r -> %d region(s): %s',
+                view_params.get('roi_scheme'), len(roi_regions), roi_regions)
 
     stats = view_tables.subject_stats(subject_tables)
     regions, region_n = view_tables.regions_with_min_subjects(
-        stats, panels, args.min_subjects)
+        stats, panels, args.min_subjects, regions=roi_regions)
     if not regions:
         raise SystemExit(f'no region has >= {args.min_subjects} subjects in every '
                          f'plotted bin {panels}; nothing to draw')
@@ -292,7 +323,7 @@ def main():
                'n_subjects_per_region': {r: int(n) for r, n in region_n.items()},
                'min_subjects': args.min_subjects,
                'line_noise_bins_masked': [int(b) for b in line_noise_bins],
-               'roi_regions': config.ROI_REGIONS},
+               'roi_regions': roi_regions},
     )
 
     table = spectra_table(stats, bin_labels, panels, line_noise_bins)
@@ -307,14 +338,15 @@ def main():
               f'Group region spectra (n={len(subjects)} subjects) — '
               f'{view_params.get("normalization")}, mask {view_params.get("mask_label")}',
               run_dir / 'group_region_spectra.png', value_label,
-              spread=spread, ncols=args.ncols, share_y=not args.free_y)
+              spread=spread, ncols=args.ncols, share_y=not args.free_y,
+              zero_line=is_difference)
 
     if args.per_subject:
         for subject_id, rows in subject_tables.groupby('subject_id'):
             # One subject: the "group mean" is that subject's own value and there
             # is no across-subject spread, so n=1 everywhere and no ribbon.
             one = view_tables.subject_stats(rows)
-            present = [r for r in config.ROI_REGIONS
+            present = [r for r in roi_regions
                        if r in set(one.loc[one['pain_bin'].isin(panels), 'region'])]
             if not present:
                 logger.warning('%s: no region rows, skipping', subject_id)
@@ -323,7 +355,7 @@ def main():
                       line_noise_bins, subject_id,
                       run_dir / 'by_subject' / f'{subject_id}_region_spectra.png',
                       value_label, spread=None, ncols=args.ncols,
-                      share_y=not args.free_y)
+                      share_y=not args.free_y, zero_line=is_difference)
 
     io.log_analysis(f'P1.3 region spectra ({view_params.get("normalization")}, '
                     f'mask {view_params.get("mask_label")}), {len(regions)} regions '

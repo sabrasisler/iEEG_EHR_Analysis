@@ -43,6 +43,7 @@ RUN_PREFIX=${RUN_PREFIX:-discovery_std10}
 QUESTION=${QUESTION:-psd_physiology}
 MIN_SUBJECTS=${MIN_SUBJECTS:-8}
 N_PERM=${N_PERM:-10000}
+ROI_SCHEME=${ROI_SCHEME:-default}
 DEST=${SCRATCH_RUN:+--scratch}
 
 for NORM in ${NORMALIZATIONS:-zscore_vs_baseline baseline_subtract}; do
@@ -50,7 +51,7 @@ for NORM in ${NORMALIZATIONS:-zscore_vs_baseline baseline_subtract}; do
 
   VIEW_DIR=$(python -m ieeg_ehr.views.build_pain_epoch_view \
       --print-out-dir --split "$SPLIT" --mask-label "$MASK_LABEL" \
-      --normalization "$NORM")
+      --roi-scheme "$ROI_SCHEME" --normalization "$NORM")
   echo "    view dir: $VIEW_DIR"
 
   n=$(ls "$VIEW_DIR"/view_subject_sub-*.parquet 2>/dev/null | wc -l)
@@ -60,14 +61,22 @@ for NORM in ${NORMALIZATIONS:-zscore_vs_baseline baseline_subtract}; do
     exit 1
   fi
 
-  # Line-noise bins are dropped from the DISPLAY here; the cluster test drops them
-  # from the statistics unconditionally (docs/cluster_permutation.md section 7).
-  python -m ieeg_ehr.analysis.plot_pain_view_heatmaps \
-      --view-dir "$VIEW_DIR" \
-      --question "$QUESTION" \
-      --exclude-line-noise-bins \
-      --cluster-test --n-perm "$N_PERM" --min-subjects "$MIN_SUBJECTS" \
-      --run-name "${RUN_PREFIX}_${NORM}" ${DEST}
+  # An UN-NORMALIZED view gets the spectra only. A raw-power heatmap is a 1/f
+  # gradient with no contrast to read, and the cluster test's one-sample null is
+  # "equal to zero", which raw log power (~ -10) is nowhere near -- the script
+  # refuses it outright rather than returning a uniformly outlined map.
+  if [ "$NORM" != "none" ]; then
+    # Line-noise bins are dropped from the DISPLAY here; the cluster test drops
+    # them from the statistics unconditionally (docs/cluster_permutation.md 7).
+    python -m ieeg_ehr.analysis.plot_pain_view_heatmaps \
+        --view-dir "$VIEW_DIR" \
+        --question "$QUESTION" \
+        --exclude-line-noise-bins \
+        --cluster-test --n-perm "$N_PERM" --min-subjects "$MIN_SUBJECTS" \
+        --run-name "${RUN_PREFIX}_${NORM}" ${DEST}
+  else
+    echo "    $NORM: skipping heatmap + cluster test (un-normalized)"
+  fi
 
   python -m ieeg_ehr.analysis.plot_pain_view_spectra \
       --view-dir "$VIEW_DIR" \

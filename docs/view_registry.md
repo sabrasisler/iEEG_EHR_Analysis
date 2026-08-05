@@ -148,6 +148,19 @@ analysis/pain/psd_physiology/region_spectrum/delta-relpain/<run>_<timestamp>/
 | `raw` | AXIS 3 | `normalization: none` -- no baseline applied |
 | `relpain` | AXIS 7 | `subject_relative` -- low/high split at the subject's own mean of nonzero events |
 | `abspain` | AXIS 7 | `absolute` -- fixed 0 / 1-3 / 4-6 / 7-10 across subjects |
+| *(no suffix)* | AXIS 6 | `roi_scheme: default` -- the original 15 regions |
+| `roiv2` | AXIS 6 | `roi_scheme: roi_v2` -- 21 regions (2026-07-29). Splits ACC into rACC/dACC, OFC into mOFC/lOFC, and the `Frontal (other)`/`Temporal` catch-alls into M1, dmPFC/SMA, IFG/vlPFC, MTL (other), Lateral Temporal, Auditory, Parietal (other). Occipital becomes a real ROI (a quasi-control). Frontopolar and Cerebellum are absent -- measured at 2 and 0 subjects of 60 |
+
+`roiv2` is a VERSION label, not a description, so unlike `delta` it does not
+decode itself -- this table is what decodes it. The ROI code is appended only for
+non-default schemes, so every pre-2026-07-29 path stays valid. A scheme given as a
+JSON path contributes its filename stem instead.
+
+**Which regions a run actually used comes from `provenance.json`**, which records
+the scheme's entire contents under `roi_scheme_contents` (patterns and display
+order), not just its name -- a JSON scheme on Oak can be edited after the run, so
+the name alone would not reconstruct it. Both plot scripts also log the ordered
+region list at run time.
 
 **Only these two axes**, because a folder name spelling out all seven would be
 unreadable and *still* not a complete description. The complete description is

@@ -160,19 +160,43 @@ def subjects_per_region(stats, panels):
     return per_bin.min(axis=1, skipna=False).fillna(0).astype(int)
 
 
-def regions_with_min_subjects(stats, panels, min_subjects):
-    """Regions passing the coverage floor, in fixed anatomical order.
+def roi_regions_for(view_params):
+    """The view's OWN ordered region list, from its recorded roi_scheme.
 
-    config.ROI_REGIONS order rather than this run's own data, so panels sit in the
-    same place in every figure and two runs can be compared side by side.
+    NOT `config.ROI_REGIONS`, which is resolved at import from the `default`
+    scheme. Filtering a view's regions against that constant silently keeps only
+    the regions whose NAMES happen to appear in the default 15 -- so a 21-region
+    view would render 8 rows and look entirely normal. The scheme is recorded in
+    every view table's sidecar precisely so the figure can ask the artifact instead
+    of a module-level default.
     """
+    from ieeg_ehr.config import roi_schemes
+    return roi_schemes.roi_regions(view_params.get('roi_scheme') or 'default')
+
+
+def regions_with_min_subjects(stats, panels, min_subjects, regions=None):
+    """Regions passing the coverage floor, in the scheme's fixed display order.
+
+    `regions` is the scheme's display order (see `roi_regions_for`) -- a fixed
+    anatomical order rather than this run's own data, so panels sit in the same
+    place in every figure and two runs can be compared side by side. It defaults
+    to config.ROI_REGIONS only for callers still on the default scheme.
+    """
+    regions = list(regions or config.ROI_REGIONS)
     counts = subjects_per_region(stats, panels)
     keep = set(counts[counts >= min_subjects].index)
     dropped = {r: int(counts[r]) for r in counts.index if r not in keep}
     if dropped:
         logger.info('%d region(s) below the %d-subject floor, not plotted: %s',
                     len(dropped), min_subjects, dropped)
-    return [r for r in config.ROI_REGIONS if r in keep], counts
+    # A region with data that the scheme does not display is a real mismatch, not a
+    # coverage fact -- loud, because this is exactly how the 15-vs-21 bug hid.
+    unknown = sorted(keep - set(regions))
+    if unknown:
+        logger.warning('%d region(s) present in the data but NOT in the scheme display '
+                       'order, so they will NOT be plotted: %s. Does the roi_scheme in '
+                       'the view sidecar match the data?', len(unknown), unknown)
+    return [r for r in regions if r in keep], counts
 
 
 # ============================================================================
