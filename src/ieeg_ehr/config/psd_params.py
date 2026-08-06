@@ -39,6 +39,40 @@ PSD_LINE_NOISE_GUARD_HZ = 2.0  # +/- band around each harmonic flagged contains_
 PSD_HDF5_CHUNK_MAX_HOURS = None   # e.g. 4.0
 
 # ============================================================================
+# APERIODIC (1/f) SLOPE  — BG.2, docs/view_registry.md "non-axis computations"
+# ============================================================================
+# A straight line through log10(power) vs log10(frequency), fit per channel per
+# epoch by views/aperiodic.py. Not a stored feature family: it is a cheap derived
+# quantity of the PSD cache (architecture.md PART 1 table).
+#
+# The DEFAULT RANGE IS THE WHOLE STORED SPECTRUM, 1–250 Hz, minus the six bins
+# flagged contains_line_noise. That is the maximum-leverage choice and it is a
+# deliberate one, not an oversight: it buys 44 of 50 bins spanning 2.4 decades,
+# at the cost of folding the low-frequency knee, the alpha/beta peaks and any
+# high-frequency amplifier noise floor into a single number. So the exponent
+# here is a BROADBAND TILT, not a knee-free aperiodic exponent in the
+# specparam sense — BG.3 (FOOOF) is what separates those. Both edges are CLI
+# flags precisely so a narrower range is one run away, and both are hashed into
+# the view's directory so two ranges cannot land in the same folder.
+SLOPE_FIT_LO_HZ = 1.0
+SLOPE_FIT_HI_HZ = 250.0
+
+# A fit needs enough surviving bins, spread over enough frequency, before its
+# slope means anything. Below either floor the channel-epoch gets NaN rather than
+# a number — a slope from one corner of the spectrum is not the spectrum's slope,
+# and it is the one that most easily reaches an absurd value.
+#
+# 30 of the 44 available bins (~68%) and 1.0 decade of the 2.37 available. Both
+# are STRUCTURAL choices made before looking at any pain relationship, which is
+# the same rule the feature-level QC thresholds are held to (CLAUDE.md).
+SLOPE_MIN_FIT_BINS = 30
+SLOPE_MIN_SPAN_DECADES = 1.0
+
+# r² is STORED PER FIT AND NOT THRESHOLDED here. Metric/threshold split: compute
+# the metric once in the expensive pass, apply a cutoff downstream where it costs
+# nothing and can be varied. `--min-r2` on the plot script is where a cutoff goes.
+
+# ============================================================================
 # CANONICAL BANDS
 # ============================================================================
 # NOT precomputed — ieeg_ehr/preprocessing/bipolar_bands.py aggregates the stored 50 log

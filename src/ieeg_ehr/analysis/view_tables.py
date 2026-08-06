@@ -160,6 +160,94 @@ def subjects_per_region(stats, panels):
     return per_bin.min(axis=1, skipna=False).fillna(0).astype(int)
 
 
+# ============================================================================
+# WITHIN-SUBJECT STANDARDIZATION  (for figures that DRAW the 0-pain level)
+# ============================================================================
+# Lives here, not in a plot script, for this module's founding reason: two
+# figures that standardize separately can disagree and nothing says which is
+# right.
+#
+# `plot_slope_violin.py` calls these. `plot_band_violin_view.py` STILL HAS ITS
+# OWN COPY -- it had uncommitted in-flight changes when this was factored out
+# (2026-08-05) and editing it would have clobbered them. That duplication is a
+# known and temporary wart, queued in TASKS.md; the two implementations agree
+# line-for-line today, which is exactly the state that quietly stops being true.
+#
+# THE POINT: a figure whose violins include 'none' cannot use the view-level
+# 0-pain baseline, because then the 0-pain violin is 0 by construction and the
+# other two are measured against it -- the same circularity that makes the
+# cluster test's `none` bin a noise floor rather than a control
+# (docs/cluster_permutation.md 6). So the reference is each subject's OWN OVERALL
+# level, pooled across all three pain levels, which privileges none of them.
+#
+# The honest cost: pooling all levels into the SD puts some of the between-level
+# variance the figure is looking for into the denominator, so effects are
+# slightly SHRUNK. It is the same shrinkage for every subject, so comparisons
+# between levels stay valid; the absolute z is not comparable to the heatmaps'.
+
+def within_subject_z(epoch_values, value_col, min_epochs=4, keys=('subject_id', 'region')):
+    """z-score each epoch against its (subject, region) mean/SD over ALL epochs.
+
+    Pooled over pain levels ON PURPOSE -- see above. A (subject, region) with
+    fewer than `min_epochs` epochs, or zero variance, yields NaN rather than a
+    fabricated z: an SD from two epochs is not a scale, and dividing by it would
+    manufacture enormous values out of nothing.
+    """
+    keys = list(keys)
+    grouped = epoch_values.groupby(keys, dropna=False)[value_col]
+    stats = grouped.agg(subject_mean='mean', subject_sd=lambda s: s.std(ddof=1),
+                        n_epochs='size').reset_index()
+    merged = epoch_values.merge(stats, on=keys, how='left')
+
+    usable = (merged['n_epochs'] >= min_epochs) & (merged['subject_sd'] > 0)
+    merged['z'] = np.where(usable,
+                           (merged[value_col] - merged['subject_mean'])
+                           / merged['subject_sd'].replace(0, np.nan), np.nan)
+    dropped = int((~usable).sum())
+    if dropped:
+        logger.info('%d/%d epoch rows have no usable within-subject scale '
+                    '(< %d epochs for that subject/region, or zero SD)',
+                    dropped, len(merged), min_epochs)
+    return merged
+
+
+def subject_level(epoch_z, panels, value_col='z'):
+    """One value per (subject, region, pain_bin): mean over that subject's epochs.
+
+    ONE DOT IS ONE SUBJECT, which is what makes the resulting violin honest.
+    Epochs are nested within subjects, and treating them as independent is the
+    pseudo-replication that would inflate any statistic computed off the figure --
+    the same reason the cluster test takes a 56-subject matrix and not a
+    ~700-epoch one.
+    """
+    out = (epoch_z[epoch_z['pain_bin'].isin(panels)]
+           .groupby(['subject_id', 'region', 'pain_bin'], dropna=False)
+           .agg(value=(value_col, 'mean'), n_epochs=('epoch_id', 'nunique'))
+           .reset_index()
+           .dropna(subset=['value']))
+    out['subject'] = out['subject_id']          # the violin helper's column name
+    return out
+
+
+def regions_by_min_subjects(subject_values, panels, roi_regions, min_subjects):
+    """(regions to plot, per-region subject count) using the MINIMUM across levels.
+
+    The minimum, not the union: every violin in a panel has to be backed by
+    subjects for the comparison between them to mean anything, so the smallest
+    count governs the panel.
+    """
+    counts = (subject_values.groupby(['region', 'pain_bin'])['subject'].nunique()
+              .unstack('pain_bin').reindex(columns=panels))
+    per_region = counts.min(axis=1, skipna=False).fillna(0).astype(int)
+    regions = [r for r in roi_regions if per_region.get(r, 0) >= min_subjects]
+    below = {r: int(per_region.get(r, 0)) for r in roi_regions
+             if 0 < per_region.get(r, 0) < min_subjects}
+    if below:
+        logger.info('%d region(s) below the %d-subject floor, not plotted: %s',
+                    len(below), min_subjects, below)
+    return regions, per_region, below
+
+
 def roi_regions_for(view_params):
     """The view's OWN ordered region list, from its recorded roi_scheme.
 

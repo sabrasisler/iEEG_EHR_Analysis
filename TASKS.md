@@ -45,8 +45,28 @@ date, or figure that prompted it.
       through subject resolution. Hold-out UNREACHABLE by default.
 - [ ] **BG.1 Submit the PSD array** for the remaining subjects (`normal`
       partition). Highest priority — it is the primary data.
-- [ ] **BG.2 Submit the 1/f-slope (polyfit) array** across all subjects — cheapest
-      new feature, reads the stored PSD bins.
+- [x] **BG.2 Submit the 1/f-slope (polyfit) array** across all subjects — cheapest
+      new feature, reads the stored PSD bins. Done 2026-08-05 for the DISCOVERY
+      split: `views/aperiodic.py` + `views/build_pain_epoch_slope.py` +
+      `sbatch/slope_discovery_array.sbatch`, figure by
+      `analysis/plot_slope_violin.py`. Fit is 1–250 Hz minus the six line-noise
+      bins, per channel, then averaged into ROIs. Delete this line at the next
+      commit. (→ docs/labnotebook/2026-08-05.md)
+- [ ] **Re-run the slope array for the remaining splits** once BG.1's PSD backlog
+      lands — the discovery build is 60 subjects, and the fit range is part of the
+      config hash so a second range is a separate directory, not a rebuild.
+- [ ] **Unify the within-subject standardization.** `plot_band_violin_view.py`
+      still carries its own copy of `within_subject_z` / `subject_level`; the
+      shared versions now live in `analysis/view_tables.py` and
+      `plot_slope_violin.py` uses those. The copy was left alone on 2026-08-05
+      only because that file had uncommitted in-flight changes. They agree
+      line-for-line today, which is exactly the state that quietly stops being
+      true — point the band violin at `view_tables` and delete the duplicate.
+- [ ] **Decide whether the broadband tilt needs a knee-free companion.** The
+      1–250 Hz fit folds the low-frequency knee and the alpha/beta peaks into one
+      number by design (config/psd_params.py says so). If the slope violins show
+      anything, re-run at a knee-free range and/or escalate to BG.3 (FOOOF)
+      before the result is described as an "aperiodic exponent" anywhere.
 - [x] **P0.6 dtype audit** — done 2026-07-27. Cache standardized on float32
       (`config/cache_params.py`); epoch averages agree with a float64 pipeline to
       8.1 sig figs, bit-exact round-trip through Parquet and HDF5. Also found:
