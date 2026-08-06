@@ -25,6 +25,32 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
 
 ## Open
 
+- [ ] **Is the 1/f flattening with pain just SLEEP?** The slope violins show a
+      monotonic flattening none → low → high (75.9% of subjects), but NREM
+      steepens the aperiodic slope, and if 0-pain reports cluster at night the
+      whole effect is circadian wearing a pain label. The wide `none` violin and
+      its long negative tail — 25 cells below z=−1.5 over 4 subjects, 14 of them
+      sub-230, i.e. one subject across 14 of 21 regions — is a subject-level
+      STATE signature, not anatomy, which is mildly suggestive that this is real.
+      Checkable with what already exists: `epoch_start_sec` in the epoch defs plus
+      `qc/build_run_start_times.py`. Until it is checked the slope figure is not
+      interpretable. (→ docs/labnotebook/2026-08-06.md)
+- [ ] **Is the 1/f flattening just EMG?** Muscle activity raises broadband
+      high-frequency power, which flattens a 1–250 Hz line — a patient tensing up
+      in pain reproduces the entire effect. Same alternative that shadows the
+      2026-08-05 sensorimotor high-gamma block, and the two should be looked at
+      together rather than separately. A knee-free low-frequency fit (1–40 Hz)
+      would be largely immune to it, and the fit range is part of the config hash
+      so it lands in its own directory. Does the effect survive there?
+      (→ docs/labnotebook/2026-08-06.md)
+- [ ] **Does the slope effect add anything the band results did not?** It is broad
+      rather than regional, which is what a broadband tilt looks like — and a
+      broadband tilt is also what would make every canonical band move together.
+      So: is the band story and the slope story ONE effect reported twice, or two?
+      Regressing the slope out of the band values would answer it, and would say
+      which of the two is the more parsimonious description.
+      (→ docs/labnotebook/2026-08-06.md)
+
 - [ ] **Why does sub-085 look off — and would feature-level artifact detection
       just make it go away?** Hunch is that whatever is wrong is an artifact the
       raw-voltage mask doesn't catch, in which case P2.1 (feature-level QC on
