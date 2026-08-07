@@ -3,18 +3,20 @@
 One band, every pain level, one dot per subject: violins of within-subject
 normalized band power, one panel per region.
 
-WHY THIS NEEDS A DIFFERENT NORMALIZATION FROM EVERY OTHER FIGURE HERE
----------------------------------------------------------------------
-The heatmaps and spectra reference each subject to their own 0-pain baseline, which
-is the right thing when you are plotting low and high. It CANNOT work here, because
-this figure draws 'none' as one of its violins: if the 0-pain epochs define the
-baseline, their normalized value is 0 by construction, and the first violin would
-be a spike at zero sitting beside two real distributions. That is the same
-circularity that makes the cluster test's `none` bin a noise floor rather than a
-control (docs/cluster_permutation.md 6).
+TWO NORMALIZATIONS, AND THE CHOICE IS THE WHOLE DESIGN (`--normalize`)
+----------------------------------------------------------------------
+**view_baseline** — plot the view's own values, already referenced to each
+subject's 0-pain baseline. The 0-pain violin then sits at ~0 BY CONSTRUCTION. That
+sounds like a defect and is in fact the reason to want it: it is not EXACTLY 0,
+because the baseline pools 2 s WINDOWS while a plotted value averages EPOCHS and QC
+masking leaves epochs with unequal window counts (docs/labnotebook 2026-08-05). The
+residual spread is therefore a VISIBLE NOISE FLOOR on the same axis as low and high
+-- you can see what "no effect" looks like in this pipeline and read the other two
+against it. Values are directly comparable to the heatmaps.
 
-So the reference has to be something that is NOT one of the three levels being
-drawn. This script standardizes each subject against THEIR OWN OVERALL LEVEL:
+**within_subject** — for reading the three levels as peers, where 0-pain pinned near
+zero is unhelpful. The reference must then be something that is NOT one of the three,
+so each subject is standardized against THEIR OWN OVERALL LEVEL:
 
     for each (subject, region):
         take the band power of EVERY epoch, all pain levels pooled
@@ -72,13 +74,20 @@ logger = logging.getLogger(__name__)
 OUTPUT_TYPE = 'band_violin'
 
 
-def epochs_to_band(epoch_tables, bin_labels, band, bands=None, drop_bins=()):
-    """Per-epoch band power, aggregated over the bins whose CENTRE falls in the band.
+def epochs_to_band(epoch_tables, bin_labels, band, bands=None, drop_bins=(),
+                   is_difference=False):
+    """Per-epoch band value, aggregated over the bins whose CENTRE falls in the band.
 
-    LINEAR-THEN-LOG. A mean of log values is a geometric mean, which is not the
-    band's average power -- so bins are exponentiated, averaged, and re-logged, the
-    same convention preprocessing/bipolar_bands.py and registry AXIS 5 use. Getting
-    this wrong is silent and biases every band downward.
+    THE AGGREGATION DEPENDS ON WHAT THE VALUES ARE, exactly as
+    views/axes.aggregate_bands branches:
+
+    - RAW log power (`is_difference=False`): LINEAR-THEN-LOG. A mean of logs is a
+      geometric mean, which is not the band's average power, so bins are
+      exponentiated, averaged, and re-logged (registry AXIS 5,
+      preprocessing/bipolar_bands.py). Getting this wrong is silent and biases every
+      band downward.
+    - A DIFFERENCE of logs or a z-score (`is_difference=True`): ARITHMETIC mean. It
+      is already dimensionless, and exponentiating a z-score would be meaningless.
 
     Uses the GEOMETRIC-mean bin centre for band membership because the bins are
     log-spaced; an arithmetic centre would drift toward the high edge of each bin.
@@ -95,54 +104,26 @@ def epochs_to_band(epoch_tables, bin_labels, band, bands=None, drop_bins=()):
                 [f'{bin_labels.loc[b, "bin_low_hz"]:.0f}' for b in in_band])
 
     rows = epoch_tables[epoch_tables['freq_bin_index'].isin(in_band)].copy()
-    # float64 before exponentiating: the cache is float32 and the worst stored
-    # log-power is ~-36.8, barely a decade above float32's smallest normal (P0.6).
-    rows['linear'] = np.power(10.0, rows['value'].to_numpy(dtype=np.float64))
-    out = (rows.groupby(['subject_id', 'epoch_id', 'pain_bin', 'region'],
-                        dropna=False)['linear'].mean().reset_index())
-    with np.errstate(divide='ignore'):
-        out['band_log_power'] = np.log10(out['linear'])
-    return out.drop(columns='linear'), in_band
+    keys = ['subject_id', 'epoch_id', 'pain_bin', 'region']
+
+    if is_difference:
+        out = (rows.groupby(keys, dropna=False)['value'].mean().reset_index()
+               .rename(columns={'value': 'band_value'}))
+    else:
+        # float64 before exponentiating: the cache is float32 and the worst stored
+        # log-power is ~-36.8, barely a decade above float32's smallest normal (P0.6).
+        rows['linear'] = np.power(10.0, rows['value'].to_numpy(dtype=np.float64))
+        out = rows.groupby(keys, dropna=False)['linear'].mean().reset_index()
+        with np.errstate(divide='ignore'):
+            out['band_value'] = np.log10(out['linear'])
+        out = out.drop(columns='linear')
+    return out, in_band
 
 
-def within_subject_z(band_epochs, min_epochs=4):
-    """z-score each epoch against its (subject, region) mean/SD over ALL epochs.
-
-    Pooled over pain levels ON PURPOSE -- see the module docstring. A
-    (subject, region) with fewer than `min_epochs` epochs, or zero variance, yields
-    NaN rather than a fabricated z: a standard deviation from two epochs is not a
-    scale, and dividing by it would manufacture enormous values from nothing.
-    """
-    grouped = band_epochs.groupby(['subject_id', 'region'], dropna=False)['band_log_power']
-    stats = grouped.agg(subject_mean='mean', subject_sd=lambda s: s.std(ddof=1),
-                        n_epochs='size').reset_index()
-    merged = band_epochs.merge(stats, on=['subject_id', 'region'], how='left')
-
-    usable = (merged['n_epochs'] >= min_epochs) & (merged['subject_sd'] > 0)
-    merged['z'] = np.where(usable,
-                           (merged['band_log_power'] - merged['subject_mean'])
-                           / merged['subject_sd'].replace(0, np.nan), np.nan)
-    dropped = int((~usable).sum())
-    if dropped:
-        logger.info('%d/%d epoch rows have no usable within-subject scale '
-                    '(< %d epochs for that subject/region, or zero SD)',
-                    dropped, len(merged), min_epochs)
-    return merged
-
-
-def subject_level(band_z, panels):
-    """One value per (subject, region, pain_bin): mean z over that subject's epochs."""
-    out = (band_z[band_z['pain_bin'].isin(panels)]
-           .groupby(['subject_id', 'region', 'pain_bin'], dropna=False)
-           .agg(value=('z', 'mean'), n_epochs=('epoch_id', 'nunique'))
-           .reset_index()
-           .dropna(subset=['value']))
-    out['subject'] = out['subject_id']          # the violin helper's column name
-    return out
 
 
 def plot_violin_grid(subject_values, regions, panels, title, out_path, value_label,
-                     ncols=4):
+                     ncols=4, footnote=None):
     """One panel per region; one violin per pain level; one dot per subject."""
     subjects = sorted(subject_values['subject'].unique())
     colour = common.subject_color_map(subjects)
@@ -171,14 +152,8 @@ def plot_violin_grid(subject_values, regions, panels, title, out_path, value_lab
 
     fig.supylabel(value_label, fontsize=9)
     fig.suptitle(title, fontsize=12)
-    fig.text(0.01, -0.01,
-             'One dot = one subject (mean over that subject\'s epochs), NOT one '
-             'epoch. z is within-subject: each epoch minus that subject/region mean '
-             'over ALL epochs, divided by its SD -- pooled across pain levels so no '
-             'level is its own reference, which is why 0-pain is drawable here. '
-             'Absolute z is therefore NOT comparable to the heatmaps\' z.\n'
-             'EXPLORATORY, discovery cohort -- NOMINATIONS, NOT FINDINGS.',
-             ha='left', va='top', fontsize=6, color='0.25')
+    if footnote:
+        fig.text(0.01, -0.01, footnote, ha='left', va='top', fontsize=6, color='0.25')
     fig.tight_layout(rect=(0, 0.02, 1, 0.97))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,10 +166,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--view-dir', required=True,
-                    help='A view directory. Use the UN-NORMALIZED (raw) view: this '
-                         'script does its own within-subject standardization, and '
-                         'starting from an already-baseline-referenced view would '
-                         'make the 0-pain violin 0 by construction.')
+                    help='A view directory. An un-normalized (raw) view pairs with '
+                         '--normalize within_subject; a baseline_subtract or '
+                         'zscore_vs_baseline view pairs with --normalize '
+                         'view_baseline. --normalize auto picks for you.')
     ap.add_argument('--band', default='beta',
                     choices=sorted(config.CANONICAL_BANDS_HZ),
                     help='Band edges from config.CANONICAL_BANDS_HZ. NOTE '
@@ -203,6 +178,16 @@ def main():
     ap.add_argument('--pain-bin-scheme', choices=list(view_tables.PANELS),
                     default='subject_relative')
     ap.add_argument('--min-subjects', type=int, default=8)
+    ap.add_argument('--normalize', choices=['auto', 'within_subject', 'view_baseline'],
+                    default='auto',
+                    help="How the values are normalized. 'view_baseline' uses the "
+                         "view's own 0-pain referencing, which puts the 0-pain violin "
+                         'at ~0 by construction -- deliberately, so it reads as a '
+                         'visible noise floor, and so values are comparable to the '
+                         "heatmaps. 'within_subject' standardizes against each "
+                         "subject's mean/SD over ALL epochs pooled, so no level is "
+                         'its own reference; that one needs the un-normalized view. '
+                         "'auto' picks by what the view is.")
     ap.add_argument('--min-epochs', type=int, default=4,
                     help='A (subject, region) needs this many epochs before its SD '
                          'is treated as a scale. Below it, the subject is dropped '
@@ -223,16 +208,39 @@ def main():
                              ('normalization', 'domain', 'mask_label', 'pain_bins',
                               'roi_scheme')})
 
-    # Refuse a view that is already baseline-referenced: 'none' would be 0 by
-    # construction and the whole point of this figure would be lost. A loud stop,
-    # because the resulting figure would look plausible.
-    if view is not None and view.is_difference:
+    # TWO NORMALIZATIONS, and which one is right depends on what you want to read.
+    #
+    # view_baseline: take the view's own values, already referenced to each
+    #   subject's 0-pain baseline. The 'none' violin then sits at ~0 BY
+    #   CONSTRUCTION -- but not exactly, and that is the point: the epoch-weighting
+    #   asymmetry (docs/labnotebook 2026-08-05) gives it a small real spread, so it
+    #   becomes a VISIBLE NOISE FLOOR on the same axis. low and high are read
+    #   against it, and the values are directly comparable to the heatmaps' z.
+    #
+    # within_subject: this script standardizes against each subject's own mean/SD
+    #   over ALL epochs, pooled across levels, so no level is its own reference.
+    #   Needs the un-normalized view. Absolute values are NOT comparable to the
+    #   heatmaps.
+    view_is_normalized = view is not None and view.is_difference
+    if args.normalize == 'auto':
+        mode = 'view_baseline' if view_is_normalized else 'within_subject'
+    else:
+        mode = args.normalize
+
+    if mode == 'view_baseline' and not view_is_normalized:
         raise SystemExit(
-            f'--view-dir is a {view.normalization!r} view, which is already '
-            'referenced to each subject\'s 0-pain baseline -- so the 0-pain violin '
-            'would be exactly 0 and the other two would be measured against it. '
-            'Use the un-normalized view (--normalization none) and let this script '
-            'do the within-subject standardization.')
+            '--normalize view_baseline needs a view that HAS a baseline, but '
+            f'{view_dir} was built with normalization='
+            f'{(view.normalization if view else None)!r}. Point at a '
+            'baseline_subtract or zscore_vs_baseline view, or use --normalize '
+            'within_subject.')
+    if mode == 'within_subject' and view_is_normalized:
+        raise SystemExit(
+            f'--normalize within_subject on a {view.normalization!r} view would '
+            'standardize an already-baselined quantity twice. Use the un-normalized '
+            'view for that mode, or --normalize view_baseline for this one.')
+    logger.info('normalization mode: %s (view normalization=%r)', mode,
+                view.normalization if view else None)
 
     # 'none' is drawn HERE, unlike in the spectra/heatmaps, because nothing in this
     # figure's normalization makes it the reference.
@@ -246,20 +254,24 @@ def main():
                  else list(cache_reader.line_noise_bins(epoch_minutes)))
 
     band_epochs, band_bins = epochs_to_band(epoch_tables, bin_labels, args.band,
-                                            drop_bins=drop_bins)
-    band_z = within_subject_z(band_epochs, min_epochs=args.min_epochs)
-    subject_values = subject_level(band_z, panels)
+                                            drop_bins=drop_bins,
+                                            is_difference=view_is_normalized)
+    # Both helpers live in view_tables so this figure and plot_slope_violin.py
+    # cannot standardize differently -- that shared-definition rule is the whole
+    # reason that module exists.
+    if mode == 'within_subject':
+        band_epochs = view_tables.within_subject_z(
+            band_epochs, 'band_value', min_epochs=args.min_epochs)
+        value_col = 'z'
+    else:
+        # The view already normalized it; averaging over epochs is all that is left.
+        value_col = 'band_value'
+    subject_values = view_tables.subject_level(band_epochs, panels,
+                                              value_col=value_col)
 
     roi_regions = view_tables.roi_regions_for(view_params)
-    counts = (subject_values.groupby(['region', 'pain_bin'])['subject'].nunique()
-              .unstack('pain_bin').reindex(columns=panels))
-    per_region = counts.min(axis=1, skipna=False).fillna(0).astype(int)
-    regions = [r for r in roi_regions if per_region.get(r, 0) >= args.min_subjects]
-    below = {r: int(per_region.get(r, 0)) for r in roi_regions
-             if 0 < per_region.get(r, 0) < args.min_subjects}
-    if below:
-        logger.info('%d region(s) below the %d-subject floor, not plotted: %s',
-                    len(below), args.min_subjects, below)
+    regions, per_region, below = view_tables.regions_by_min_subjects(
+        subject_values, panels, roi_regions, args.min_subjects)
     if not regions:
         raise SystemExit(f'no region has >= {args.min_subjects} subjects in every '
                          f'level {panels}')
@@ -278,12 +290,19 @@ def main():
         'band': args.band,
         'band_hz': list(config.CANONICAL_BANDS_HZ[args.band]),
         'freq_bins_in_band': [int(b) for b in band_bins],
-        'normalization_note':
-            'Within-subject z: each epoch minus that (subject, region) mean over ALL '
-            'epochs, divided by its SD, POOLED across pain levels so that no level '
-            'is its own reference. Deliberately NOT the view-level baseline, which '
-            'would make the 0-pain violin 0 by construction. Absolute z is not '
-            'comparable to the heatmaps.',
+        'normalize_mode': mode,
+        'normalization_note': (
+            'view_baseline: the values are the VIEW\'s own, referenced to each '
+            'subject\'s 0-pain baseline. The 0-pain violin therefore sits at ~0 by '
+            'construction -- but NOT exactly, because the baseline pools windows '
+            'while a reported value averages epochs (see docs/labnotebook '
+            '2026-08-05); that residual spread is a visible NOISE FLOOR and the '
+            'other levels are read against it. Values ARE comparable to the '
+            'heatmaps.'
+            if mode == 'view_baseline' else
+            'within_subject: each epoch minus that (subject, region) mean over ALL '
+            'epochs, divided by its SD, POOLED across pain levels so no level is its '
+            'own reference. Absolute values are NOT comparable to the heatmaps.'),
         'unit_of_observation': 'one subject (mean over that subject\'s epochs)',
         'min_epochs_for_scale': args.min_epochs,
         'line_noise_bins_dropped': [int(b) for b in drop_bins],
@@ -311,12 +330,34 @@ def main():
     )
 
     lo, hi = config.CANONICAL_BANDS_HZ[args.band]
+    if mode == 'view_baseline':
+        label = f'{args.band} — {view.value_label if view else "value"}'
+        subtitle = f'vs each subject\'s 0-pain baseline ({view_params.get("normalization")})'
+        footnote = (
+            'One dot = one subject (mean over that subject\'s epochs), NOT one epoch.\n'
+            'Values are the view\'s own, referenced to each subject\'s 0-pain baseline, '
+            'so the 0-pain violin is ~0 BY CONSTRUCTION -- read it as a visible NOISE '
+            'FLOOR, not as a result. It is not exactly 0 because the baseline pools '
+            '2s WINDOWS while a plotted value averages EPOCHS, and QC masking leaves '
+            'epochs with unequal window counts (docs/labnotebook 2026-08-05).\n'
+            'EXPLORATORY, discovery cohort -- NOMINATIONS, NOT FINDINGS.')
+    else:
+        label = f'{args.band} power (within-subject z)'
+        subtitle = 'within-subject z, all levels pooled in the reference'
+        footnote = (
+            'One dot = one subject (mean over that subject\'s epochs), NOT one epoch. '
+            'z is within-subject: each epoch minus that subject/region mean over ALL '
+            'epochs, divided by its SD -- pooled across pain levels so no level is '
+            'its own reference, which is why 0-pain is drawable here. Absolute z is '
+            'therefore NOT comparable to the heatmaps\' z.\n'
+            'EXPLORATORY, discovery cohort -- NOMINATIONS, NOT FINDINGS.')
+
     plot_violin_grid(
         subject_values, regions, panels,
         f'{args.band} ({lo:g}-{hi:g} Hz) by pain level — {len(subjects)} subjects, '
-        f'within-subject z',
+        f'{subtitle}',
         run_dir / f'{args.band}_violin_by_region.png',
-        f'{args.band} power (within-subject z)', ncols=args.ncols)
+        label, ncols=args.ncols, footnote=footnote)
 
     io.log_analysis(f'{args.band}-band violins by region, within-subject z, '
                     f'{len(regions)} regions, n={len(subjects)}', run_dir)

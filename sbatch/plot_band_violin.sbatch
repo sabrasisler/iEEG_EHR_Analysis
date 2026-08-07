@@ -16,6 +16,7 @@
 # rather than producing a plausible-looking figure with a degenerate first violin.
 #
 #   BAND=beta ROI_SCHEME=roi_v2 sbatch sbatch/plot_band_violin.sbatch
+#   BAND=beta NORMALIZE=within_subject sbatch sbatch/plot_band_violin.sbatch
 
 set -euo pipefail
 
@@ -27,6 +28,11 @@ source "$GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate"
 export PYTHONPATH="${SLURM_SUBMIT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 BAND=${BAND:-beta}
+# view_baseline -> use the 0-pain-referenced view (values comparable to the heatmaps,
+#   0-pain violin is ~0 by construction and reads as a noise floor)
+# within_subject -> use the raw view and standardize per subject over ALL epochs
+NORMALIZE=${NORMALIZE:-view_baseline}
+VIEW_NORM=${VIEW_NORM:-zscore_vs_baseline}
 ROI_SCHEME=${ROI_SCHEME:-roi_v2}
 MASK_LABEL=${MASK_LABEL:-std10_rv-gross-std3_satmargin15_sw_logz4}
 SPLIT=${SPLIT:-discovery}
@@ -34,11 +40,11 @@ QUESTION=${QUESTION:-psd_physiology}
 MIN_SUBJECTS=${MIN_SUBJECTS:-8}
 DEST=${SCRATCH_RUN:+--scratch}
 
-# normalization=none: the raw view. See the header.
+if [ "$NORMALIZE" = "within_subject" ]; then VIEW_NORM=none; fi
 VIEW_DIR=$(python -m ieeg_ehr.views.build_pain_epoch_view \
     --print-out-dir --split "$SPLIT" --mask-label "$MASK_LABEL" \
-    --roi-scheme "$ROI_SCHEME" --normalization none)
-echo "=== $BAND violins | roi=$ROI_SCHEME | view=$VIEW_DIR ($(date)) ==="
+    --roi-scheme "$ROI_SCHEME" --normalization "$VIEW_NORM")
+echo "=== $BAND violins | roi=$ROI_SCHEME | normalize=$NORMALIZE | view=$VIEW_DIR ($(date)) ==="
 
 n=$(ls "$VIEW_DIR"/view_epochs_sub-*.parquet 2>/dev/null | wc -l)
 echo "    epoch tables present: $n"
@@ -51,6 +57,7 @@ fi
 python -m ieeg_ehr.analysis.plot_band_violin_view \
     --view-dir "$VIEW_DIR" \
     --band "$BAND" \
+    --normalize "$NORMALIZE" \
     --question "$QUESTION" \
     --min-subjects "$MIN_SUBJECTS" ${DEST}
 
