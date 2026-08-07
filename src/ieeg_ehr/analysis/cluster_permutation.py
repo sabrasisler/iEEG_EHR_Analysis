@@ -416,3 +416,109 @@ def detrend_over_frequency(x, valid=None):
     # axis 0, so move the bin axis to the front and move the result back.
     mean = _nanmean_safe(np.moveaxis(x, 2, 0))           # -> (n_subject, n_region)
     return x - mean[:, :, None]
+
+
+# ============================================================================
+# COMPACTING THE FREQUENCY AXIS  (removing bins rather than invalidating them)
+# ============================================================================
+# Marking a line-noise bin invalid makes it TERMINATE a cluster, which is the
+# conservative reading -- nothing bridges the notch. Measured 2026-08-05 on the
+# 50-bin log axis, it is also a structural blind spot: with the six flagged bins
+# breaking the axis, the runs above 100 Hz are 2 bins (129-144 Hz) and 1 bin
+# (200 Hz), both shorter than min_extent=3, so THOSE BINS CAN NEVER REACH
+# SIGNIFICANCE AT ANY EFFECT SIZE.
+#
+# Deleting the columns instead makes the survivors adjacent and restores a
+# contiguous run of 9 above 48 Hz. The cost is real and must be reported, not
+# assumed away: it asserts that 48 Hz and 66 Hz are neighbours when 18 Hz between
+# them was never measured. Hence `spans_removed_gap` on every cluster, so one that
+# only bridges a notch is identifiable.
+#
+# This is not a free pass for the null: the permutation is rebuilt on the SAME
+# compacted axis, so the extra merging opportunity is priced into the null too.
+
+def compact_bins(x, drop_bins, n_bins):
+    """Delete `drop_bins` from the last axis. Returns (compacted, kept_indices).
+
+    `kept_indices[j]` is the ORIGINAL bin index of compacted column j -- everything
+    downstream (Hz edges, the table, the outline mask) must map back through it, or
+    a cluster will be reported at the wrong frequencies.
+    """
+    kept = np.array([b for b in range(n_bins) if b not in set(drop_bins)], dtype=int)
+    return np.asarray(x)[..., kept], kept
+
+
+def expand_mask(mask_compact, kept_indices, n_bins):
+    """Compacted (n_region, n_kept) bool -> full (n_region, n_bins).
+
+    Removed columns come back FALSE, so an outline is drawn only on cells that were
+    actually tested. A cluster spanning a removed notch therefore renders as two
+    boxes with the gap between them -- which is accurate, and why the table carries
+    `spans_removed_gap` to say the two boxes are one cluster.
+    """
+    full = np.zeros((mask_compact.shape[0], n_bins), dtype=bool)
+    full[:, kept_indices] = mask_compact
+    return full
+
+
+def spans_removed_gap(bin_lo, bin_hi, kept_indices):
+    """True when a cluster's ORIGINAL-index span contains a removed bin."""
+    span = set(range(int(bin_lo), int(bin_hi) + 1))
+    return bool(span - set(int(k) for k in kept_indices))
+
+
+# ============================================================================
+# PREDICTOR-SHUFFLE NULL  (for a regression coefficient, not a contrast)
+# ============================================================================
+
+def predictor_shuffle_null(per_subject, regions_shape, valid, alpha, min_extent,
+                           n_perm, seed=0, min_subjects=1, coef_fn=None):
+    """Null for a per-subject regression coefficient, by shuffling the PREDICTOR.
+
+    `per_subject`: {subject: (Y, x)} with Y (n_epochs, n_cells) and x the pain
+    scores. `coef_fn(x, Y) -> (n_cells,)` computes one subject's coefficient map;
+    `analysis.pain_coef.coef_from_predictor` is the intended one.
+
+    WHY THIS AND NOT ONLY SIGN-FLIPPING. They test different nulls and both belong
+    in a methods section. Sign-flipping asks whether the subject-level coefficient
+    distribution is symmetric about zero. This asks whether PAIRING A PAIN SCORE TO
+    AN EPOCH carries any information -- which is the scientific claim. It is also
+    only possible because a regression has no baseline: shuffling labels under the
+    0-pain-referenced design would change the baseline itself and require rebuilding
+    every view per permutation.
+
+    THE EXCHANGEABILITY RULE, matching contrast_stats.permutation_null: the shuffle
+    is WITHIN a subject, and it is ONE shuffle per subject per permutation applied
+    to every region and bin at once. An epoch is relabelled as a whole. Shuffling
+    per cell would destroy the within-subject correlation across regions and produce
+    a null far too narrow.
+    """
+    n_region, n_bin = regions_shape
+    rng = np.random.default_rng(seed)
+    subjects = list(per_subject)
+
+    null_region = np.empty((n_perm, n_region))
+    null_global = np.empty(n_perm)
+    t_crit_cache = {}
+
+    for p in range(n_perm):
+        maps = []
+        for subject in subjects:
+            Y, x = per_subject[subject]
+            # ONE permutation of this subject's epochs, shared across all cells.
+            maps.append(coef_fn(x[rng.permutation(len(x))], Y))
+        perm = np.array(maps).reshape(len(subjects), n_region, n_bin)
+
+        t, n_map = onesample_t(perm)
+        key = n_map.tobytes()
+        if key not in t_crit_cache:
+            t_crit_cache[key] = critical_t(n_map, alpha)
+        t_crit = t_crit_cache[key]
+
+        valid_p = valid & (n_map >= max(min_subjects, 2)) & np.isfinite(t) \
+            & np.isfinite(t_crit)
+        per_region, g = max_mass_per_region(t, valid_p, t_crit, min_extent, n_region)
+        null_region[p] = per_region
+        null_global[p] = g
+
+    return null_region, null_global
