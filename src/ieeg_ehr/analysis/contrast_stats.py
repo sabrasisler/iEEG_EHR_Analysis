@@ -47,7 +47,7 @@ DEFAULT_N_PERM = 200
 
 
 def paired_contrast(epoch_tables, a, b, value_col='slope', min_a=10, min_b=0,
-                    keys=('subject_id', 'region')):
+                    keys=('subject_id', 'region'), log=True):
     """Per (subject, region): mean(`a`) - mean(`b`), with the per-bin floors applied.
 
     The floors live HERE rather than in the plot script so a figure cannot forget
@@ -79,7 +79,10 @@ def paired_contrast(epoch_tables, a, b, value_col='slope', min_a=10, min_b=0,
 
     before = len(out)
     out = out[(out[f'n_{a}'] >= min_a) & (out[f'n_{b}'] >= min_b)]
-    if before - len(out):
+    # `log=False` from inside the permutation loop: the message is identical on
+    # every one of the ~200 shuffles (the floors depend on epoch counts, which the
+    # shuffle preserves by design), and repeating it buries the actual results.
+    if log and before - len(out):
         logger.info('%s-%s: %d/%d cells dropped by the per-bin floors '
                     '(>=%d %s, >=%d %s)', a, b, before - len(out), before,
                     min_a, a, min_b, b)
@@ -114,7 +117,8 @@ def permutation_null(epoch_tables, a, b, value_col='slope', min_a=10, min_b=0,
         shuffled = rows.copy()
         shuffled['pain_bin'] = (shuffled.groupby(cell, sort=False)['pain_bin']
                                 .transform(lambda s: rng.permutation(s.to_numpy())))
-        perm = paired_contrast(shuffled, a, b, value_col, min_a=min_a, min_b=min_b)
+        perm = paired_contrast(shuffled, a, b, value_col, min_a=min_a, min_b=min_b,
+                               log=False)
         if perm.empty:
             continue
         if by_region:
