@@ -33,8 +33,15 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       sub-230, i.e. one subject across 14 of 21 regions — is a subject-level
       STATE signature, not anatomy, which is mildly suggestive that this is real.
       Checkable with what already exists: `epoch_start_sec` in the epoch defs plus
-      `qc/build_run_start_times.py`. Until it is checked the slope figure is not
-      interpretable. (→ docs/labnotebook/2026-08-06.md)
+      `qc/build_run_start_times.py`.
+      **PARTLY ANSWERED 2026-08-07 and it survived.** Refitting the per-subject
+      regression on NONZERO scores only — every one of which comes from an awake,
+      reporting patient — keeps the effect, attenuated: median β +0.0068 →
+      +0.0048, subjects positive 75.9% → 69.6%. So the relationship is graded
+      WITHIN pain and cannot be only a wake/sleep contrast. What remains open is
+      the weaker version: AROUSAL grades with pain intensity too, and nothing here
+      separates those. The time-of-day check is still worth doing and is still
+      cheap. (→ docs/labnotebook/2026-08-06.md, 2026-08-07 section)
 - [ ] **Is the 1/f flattening just EMG?** Muscle activity raises broadband
       high-frequency power, which flattens a 1–250 Hz line — a patient tensing up
       in pain reproduces the entire effect. Same alternative that shadows the
