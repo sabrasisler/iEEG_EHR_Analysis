@@ -28,10 +28,12 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
 - [ ] **Is the 1/f flattening with pain just SLEEP?** The slope violins show a
       monotonic flattening none → low → high (75.9% of subjects), but NREM
       steepens the aperiodic slope, and if 0-pain reports cluster at night the
-      whole effect is circadian wearing a pain label. The wide `none` violin and
-      its long negative tail — 25 cells below z=−1.5 over 4 subjects, 14 of them
-      sub-230, i.e. one subject across 14 of 21 regions — is a subject-level
-      STATE signature, not anatomy, which is mildly suggestive that this is real.
+      whole effect is circadian wearing a pain label.
+      **RETRACTED, the supporting evidence was wrong:** the long negative `none`
+      tail was offered here as a state signature, but all four subjects producing
+      it (230, 210, 183, 109) have <5 zero-pain epochs, so it was a thin-baseline
+      artifact and says nothing about state. It is gone now that those subjects are
+      filtered.
       Checkable with what already exists: `epoch_start_sec` in the epoch defs plus
       `qc/build_run_start_times.py`.
       **PARTLY ANSWERED 2026-08-07 and it survived.** Refitting the per-subject
@@ -49,14 +51,33 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       together rather than separately. A knee-free low-frequency fit (1–40 Hz)
       would be largely immune to it, and the fit range is part of the config hash
       so it lands in its own directory. Does the effect survive there?
-      (→ docs/labnotebook/2026-08-06.md)
-- [ ] **Does the slope effect add anything the band results did not?** It is broad
-      rather than regional, which is what a broadband tilt looks like — and a
-      broadband tilt is also what would make every canonical band move together.
-      So: is the band story and the slope story ONE effect reported twice, or two?
-      Regressing the slope out of the band values would answer it, and would say
-      which of the two is the more parsimonious description.
-      (→ docs/labnotebook/2026-08-06.md)
+      **WEAKENED 2026-08-07 by a regional gradient the confound does not predict.**
+      The slope effect is deep/limbic (Hippocampus 2.4x the noise floor, Basal
+      Ganglia 2.3x, Insula 2.2x) and ABSENT in exactly the contacts closest to
+      muscle (M1 0.2x, S1 0.5x, Lateral Temporal 1.2x at 54% of subjects). EMG
+      predicts the opposite gradient, so it now has to explain why it spared the
+      superficial electrodes. The 1-40 Hz refit is still the direct test.
+      (→ docs/labnotebook/2026-08-06.md, 2026-08-07 sections)
+- [x] **Does the slope effect add anything the band results did not? — LARGELY
+      YES, they are two effects.** Answered 2026-08-07 by the regional pattern:
+      the slope effect is deep/limbic and is absent in M1 (0.2x the floor) and S1
+      (0.5x), while the 2026-08-05 band result had its clearest block in exactly
+      M1/S1/S2-PO at 13-43 Hz. Non-overlapping anatomy means the sensorimotor band
+      effect is not a broadband tilt. Regressing slope out of the band values is
+      still the clean confirmation and is now a TASKS item rather than a question.
+      Delete this line at the next commit.
+      (→ docs/labnotebook/2026-08-06.md, 2026-08-07 sections)
+
+- [ ] **Is the thin 0-pain baseline also degrading the HEATMAPS and the cluster
+      test?** Ten of 56 subjects have <5 zero-pain epochs and a 0-pain reference
+      whose SEM (0.083) exceeds the effect being measured (0.052); their tail was
+      what made the 2026-08-06 slope violin look bimodal. The `zscore` and `delta`
+      power views take their baseline from those SAME epochs, so the same subjects
+      are plausibly injecting noise into every heatmap cell and into the cluster
+      test's floor. Sabra raised this and the mechanism is now measured, not
+      hypothetical. Checking it does not need a rebuild — drop the 10 subjects at
+      plot time and see whether the noise floor falls. The real fix is a cohort/view
+      layer criterion (→ TASKS.md). (→ docs/labnotebook/2026-08-06.md)
 
 - [ ] **Why does sub-085 look off — and would feature-level artifact detection
       just make it go away?** Hunch is that whatever is wrong is an artifact the

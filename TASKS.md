@@ -52,6 +52,29 @@ date, or figure that prompted it.
       `analysis/plot_slope_violin.py`. Fit is 1–250 Hz minus the six line-noise
       bins, per channel, then averaged into ROIs. Delete this line at the next
       commit. (→ docs/labnotebook/2026-08-05.md)
+- [ ] **Adopt a minimum-0-pain-epoch criterion at the COHORT/VIEW layer, not per
+      figure.** Ten of 56 discovery subjects have <5 zero-pain epochs and a 0-pain
+      reference whose SEM (0.083) exceeds the effect being measured (0.052):
+      039, 067, 071, 109, 124, 183, 206, 209, 210, 230. The slope figures now
+      filter them at plot time via
+      `analysis/view_tables.exclude_thin_baseline_subjects`, but every
+      baseline-normalized artifact on Oak — the `zscore` and `delta` power views,
+      the heatmaps, the spectra, the cluster test — was built with them in and
+      inherits the same noisy denominator. The real fix belongs in
+      `views/build_pain_epoch_view.py` (which already raises when a subject has NO
+      0-pain epochs — this is the same check with a sane threshold) and/or
+      `config/cohorts.py` as a runnable-subject criterion. Needs a view rebuild, so
+      pair it with the split-half baseline task below rather than rebuilding twice.
+      (→ docs/labnotebook/2026-08-06.md 2026-08-07, SCRATCHPAD)
+- [ ] **Regress the 1/f slope out of the canonical-band values.** The regional
+      dissociation already argues the band and slope results are two effects — the
+      slope effect is deep/limbic and absent in M1 (0.2x the noise floor) and S1
+      (0.5x), while the 2026-08-05 band block was strongest in M1/S1/S2-PO — but
+      that is an anatomical argument, not a statistical one. Per (subject, region,
+      epoch), residualize band power on the fitted slope and re-run the band
+      contrast; if the sensorimotor beta effect survives, it is genuinely
+      narrowband. Cheap: both quantities are already in sibling view tables.
+      (→ docs/labnotebook/2026-08-06.md 2026-08-07)
 - [ ] **Re-run the slope array for the remaining splits** once BG.1's PSD backlog
       lands — the discovery build is 60 subjects, and the fit range is part of the
       config hash so a second range is a separate directory, not a rebuild.
