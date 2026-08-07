@@ -79,17 +79,27 @@ UP_COLOUR = '#c1483f'
 DOWN_COLOUR = '#2e6f95'
 
 
-def per_subject_beta(epoch_tables, min_epochs=8, min_distinct_scores=3):
+def per_subject_beta(epoch_tables, min_epochs=8, min_distinct_scores=3,
+                     min_score_range=0):
     """OLS of slope on pain_score, one fit per (subject, region).
 
     Centred sums rather than the naive sum-of-products form, matching
     views/aperiodic.py and axes.BaselineAccumulator: the naive form cancels badly
     when the spread is small next to the mean.
 
-    A (subject, region) is refused -- NaN, not a number -- unless it has both
-    enough epochs and enough DISTINCT pain scores. The second floor is the one
-    that matters and the one an epoch count alone would miss: 40 epochs that are
-    all 0-pain and one 7 give a beta determined entirely by a single epoch.
+    A (subject, region) is refused -- NaN, not a number -- unless it has enough
+    epochs, enough DISTINCT pain scores, and a wide enough score RANGE. The last
+    two are the floors an epoch count alone would miss: 40 epochs that are all
+    0-pain and one 7 give a beta determined entirely by a single epoch, and 40
+    epochs spanning only scores 6-7 give a beta divided by a tiny x-variance.
+
+    That is not hypothetical. Measured 2026-08-07 over 658 cells, |beta|
+    correlates NEGATIVELY with both n_epochs (-0.23) and score range (-0.30): the
+    biggest betas came from the thinnest fits. The largest of all (sub-090 PCC,
+    beta 0.092, 13 epochs, 4 distinct scores) implies 0.56 slope units over a
+    0->7 swing -- roughly 290% of the entire between-subject spread, which no
+    physiology produces. The median |beta| of 0.010 is ~37% of that spread and is
+    the honest number.
     """
     df = epoch_tables[['subject_id', 'region', 'epoch_id', 'pain_score', 'slope']].copy()
     df = df.dropna(subset=['pain_score', 'slope'])
@@ -105,11 +115,13 @@ def per_subject_beta(epoch_tables, min_epochs=8, min_distinct_scores=3):
     out = (df.groupby(keys, dropna=False)
            .agg(sxy=('xy', 'sum'), sxx=('xx', 'sum'), syy=('yy', 'sum'),
                 n_epochs=('slope', 'size'), n_scores=('pain_score', 'nunique'),
+                score_range=('pain_score', lambda s: s.max() - s.min()),
                 mean_slope=('slope', 'mean'))
            .reset_index())
 
     usable = ((out['n_epochs'] >= min_epochs)
               & (out['n_scores'] >= min_distinct_scores)
+              & (out['score_range'] > min_score_range)
               & (out['sxx'] > 0))
     with np.errstate(invalid='ignore', divide='ignore'):
         out['beta'] = np.where(usable, out['sxy'] / out['sxx'].replace(0, np.nan), np.nan)
@@ -117,9 +129,10 @@ def per_subject_beta(epoch_tables, min_epochs=8, min_distinct_scores=3):
                             out['sxy'] / np.sqrt(out['sxx'] * out['syy']), np.nan)
     dropped = int((~usable).sum())
     if dropped:
-        logger.info('%d/%d (subject, region) cells refused a beta (< %d epochs or '
-                    '< %d distinct pain scores)', dropped, len(out), min_epochs,
-                    min_distinct_scores)
+        logger.info('%d/%d (subject, region) cells refused a beta (< %d epochs, '
+                    '< %d distinct pain scores, or score range <= %g)',
+                    dropped, len(out), min_epochs, min_distinct_scores,
+                    min_score_range)
     out['subject'] = out['subject_id']
     return out.dropna(subset=['beta'])
 
@@ -304,11 +317,19 @@ def main():
     ap.add_argument('--min-subjects', type=int, default=8)
     ap.add_argument('--min-epochs', type=int, default=4,
                     help='Floor for the within-subject z scale (the paired figure).')
-    ap.add_argument('--min-epochs-beta', type=int, default=8,
-                    help='Floor for a per-subject regression.')
+    ap.add_argument('--min-epochs-beta', type=int, default=11,
+                    help='Floor for a per-subject regression (> 10 epochs).')
     ap.add_argument('--min-distinct-scores', type=int, default=3,
                     help='A beta needs this many DISTINCT pain scores. The floor an '
-                         'epoch count alone would miss.')
+                         'epoch count alone would miss. Deliberately NOT raised '
+                         'alongside the range floor (Sabra, 2026-08-07).')
+    ap.add_argument('--min-score-range', type=float, default=4,
+                    help='A beta needs a pain-score range GREATER than this. Betas '
+                         'correlate -0.30 with range, so the extreme values came '
+                         'from cells spanning almost no pain at all.')
+    ap.add_argument('--min-none-epochs', type=int, default=5,
+                    help='Exclude a SUBJECT with fewer than this many 0-pain epochs; '
+                         'their 0-pain reference is noisier than the effect.')
     ap.add_argument('--min-r2', type=float, default=None,
                     help='Drop (epoch, region) rows whose mean FIT r2 is below this.')
     ap.add_argument('--exclude-zero-pain', action='store_true',
@@ -345,6 +366,12 @@ def main():
         epoch_tables = epoch_tables[epoch_tables['r2'] >= args.min_r2]
         logger.info('r2 >= %.2f keeps %d/%d rows', args.min_r2, len(epoch_tables), before)
 
+    n_before = epoch_tables['subject_id'].nunique()
+    epoch_tables, excluded_thin = view_tables.exclude_thin_baseline_subjects(
+        epoch_tables, args.min_none_epochs)
+    logger.info('subjects: %d -> %d after the 0-pain floor', n_before,
+                epoch_tables['subject_id'].nunique())
+
     panels = [b for b in config.pain_bin_order(args.pain_bin_scheme)
               if b in set(epoch_tables['pain_bin'])]
     epoch_z = view_tables.within_subject_z(epoch_tables, 'slope',
@@ -363,7 +390,8 @@ def main():
         logger.info('betas on NONZERO scores only: %d of %d epoch rows',
                     len(beta_input), len(epoch_tables))
     betas = per_subject_beta(beta_input, min_epochs=args.min_epochs_beta,
-                             min_distinct_scores=args.min_distinct_scores)
+                             min_distinct_scores=args.min_distinct_scores,
+                             min_score_range=args.min_score_range)
 
     if not args.view_scheme:
         args.view_scheme = (view.scheme_code if view is not None else 'unknown')
@@ -403,6 +431,9 @@ def main():
                            'fit WITHIN one subject and one region; never pooled.',
         'min_epochs_beta': args.min_epochs_beta,
         'min_distinct_scores': args.min_distinct_scores,
+        'min_score_range': args.min_score_range,
+        'min_none_epochs': args.min_none_epochs,
+        'excluded_thin_baseline_subjects': excluded_thin,
         'beta_excludes_zero_pain': args.exclude_zero_pain,
         'beta_frac_positive_cells': float((overall > 0).mean()),
         'beta_frac_positive_subjects': float((per_subj > 0).mean()),

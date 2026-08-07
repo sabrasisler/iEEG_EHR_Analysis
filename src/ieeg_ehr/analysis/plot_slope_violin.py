@@ -118,6 +118,12 @@ def main():
                          'Default: keep everything and report the distribution -- the '
                          'metric is stored per fit precisely so the threshold is a '
                          'cheap downstream choice, not a baked-in one.')
+    ap.add_argument('--min-none-epochs', type=int, default=5,
+                    help='Exclude a SUBJECT with fewer than this many 0-pain epochs. '
+                         'Their 0-pain reference is noisier than the effect being '
+                         'measured (median SEM 0.083 vs an effect of 0.052), and the '
+                         'long negative `none` tail in the 2026-08-06 version of this '
+                         'figure came entirely from four such subjects.')
     ap.add_argument('--ncols', type=int, default=4)
     ap.add_argument('--run-name', default=None)
     view_tables.add_output_arguments(ap)
@@ -157,6 +163,12 @@ def main():
         if epoch_tables.empty:
             raise SystemExit(f'no rows survive --min-r2 {args.min_r2}')
 
+    n_before = epoch_tables['subject_id'].nunique()
+    epoch_tables, excluded_thin = view_tables.exclude_thin_baseline_subjects(
+        epoch_tables, args.min_none_epochs)
+    logger.info('subjects: %d -> %d after the 0-pain floor', n_before,
+                epoch_tables['subject_id'].nunique())
+
     # 'none' IS drawn here, unlike in the spectra and heatmaps: nothing in this
     # figure's standardization makes the 0-pain epochs their own reference.
     panels = [b for b in config.pain_bin_order(args.pain_bin_scheme)
@@ -189,6 +201,8 @@ def main():
         'unit_of_observation': "one subject (mean over that subject's epochs)",
         'min_epochs_for_scale': args.min_epochs,
         'min_r2_applied': args.min_r2,
+        'min_none_epochs': args.min_none_epochs,
+        'excluded_thin_baseline_subjects': excluded_thin,
         'r2_median': float(np.nanmedian(r2)),
         'normalization_note':
             'Within-subject z: each epoch minus that (subject, region) mean over ALL '

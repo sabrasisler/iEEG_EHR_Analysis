@@ -185,6 +185,47 @@ def subjects_per_region(stats, panels):
 # slightly SHRUNK. It is the same shrinkage for every subject, so comparisons
 # between levels stay valid; the absolute z is not comparable to the heatmaps'.
 
+def exclude_thin_baseline_subjects(epoch_tables, min_none_epochs=5):
+    """Drop subjects whose 0-pain baseline is built on too few epochs.
+
+    Returns (filtered_table, excluded_subject_ids).
+
+    WHY THIS IS NOT COSMETIC. Every pain contrast in this project is referenced to
+    the subject's own 0-pain epochs, so the precision of that reference sets the
+    precision of the contrast. Measured on the discovery slope tables 2026-08-07:
+    subjects with < 5 zero-pain epochs carry a median SEM of 0.0828 on their 0-pain
+    mean, against 0.0393 for everyone else -- and the `high - none` effect being
+    measured is +0.0515. THEIR BASELINE ERROR IS LARGER THAN THE SIGNAL.
+
+    It also explained an artifact. The long negative tail on the `none` violin of
+    the 2026-08-06 figure came from four subjects (230, 210, 183, 109), and all
+    four are below this floor. That tail was baseline instability, not physiology.
+
+    SUBJECT-level, not cell-level: the count is over the subject's distinct 0-pain
+    epochs across the session. A subject either has a usable baseline or does not,
+    and letting them into some regions but not others would make the cohort differ
+    per panel for a reason that has nothing to do with anatomy.
+
+    Ten of 56 discovery subjects fall below the default: 039, 067, 071, 109, 124,
+    183, 206, 209, 210, 230.
+    """
+    if not min_none_epochs:
+        return epoch_tables, []
+
+    per_subject = (epoch_tables[epoch_tables['pain_bin'] == 'none']
+                   .groupby('subject_id')['epoch_id'].nunique())
+    all_subjects = epoch_tables['subject_id'].unique()
+    counts = per_subject.reindex(all_subjects).fillna(0).astype(int)
+    excluded = sorted(counts[counts < min_none_epochs].index)
+
+    if excluded:
+        logger.info('%d/%d subject(s) excluded for < %d zero-pain epochs (their '
+                    '0-pain reference is noisier than the effect): %s',
+                    len(excluded), len(all_subjects), min_none_epochs,
+                    {s: int(counts[s]) for s in excluded})
+    return epoch_tables[~epoch_tables['subject_id'].isin(excluded)], excluded
+
+
 def within_subject_z(epoch_values, value_col, min_epochs=4, keys=('subject_id', 'region')):
     """z-score each epoch against its (subject, region) mean/SD over ALL epochs.
 
