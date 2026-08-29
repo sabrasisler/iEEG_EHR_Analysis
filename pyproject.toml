@@ -35,3 +35,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `slow` marks tests that actually FIT a mixed-effects model (a few seconds each,
+# not milliseconds). They are part of the default run — the point of them is to
+# catch a statsmodels API change, which a skipped test cannot do. Deselect with
+# `pytest -m "not slow"` when iterating on something else.
+markers = ["slow: fits a real model; seconds rather than milliseconds"]
