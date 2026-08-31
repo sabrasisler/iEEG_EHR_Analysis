@@ -637,10 +637,16 @@ def stage_fit(args):
         min_range=ref.criteria.get('min_range', pain_coef.MIN_RANGE),
         min_non_modal=ref.criteria.get('min_non_modal', pain_coef.MIN_NON_MODAL))
     subjects = set(eligible)
-    ref.assert_cohort_matches(subjects, allow_drift=args.allow_cohort_drift)
 
+    # A subject with no ROI-labelled channel cannot enter ANY cell, so it is not
+    # part of the cohort in any meaningful sense -- and the reference run dropped
+    # exactly these before counting to 51. Drop them BEFORE the cohort assertion,
+    # or the comparison fails on subjects that would contribute nothing either way.
     roi_scheme = ref.view_params.get('roi_scheme', 'roi_v2')
     roi_by_subject, no_roi = roi_maps(paths, subjects, roi_scheme)
+    subjects -= set(no_roi)
+    ref.assert_cohort_matches(subjects, allow_drift=args.allow_cohort_drift)
+
     regions = view_tables.roi_regions_for({'roi_scheme': roi_scheme})
 
     # -- axes --------------------------------------------------------------
