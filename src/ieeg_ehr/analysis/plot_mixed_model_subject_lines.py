@@ -77,24 +77,41 @@ def epoch_level(frame):
 
 
 def subject_slopes(per_epoch):
-    """Per-subject OLS slope of centred power on within-subject pain.
+    """Per-subject OLS slope of centred power on within-subject pain, with its SE.
 
     A subject needs at least two DISTINCT pain scores for a slope to exist at all;
     with one score the design matrix is rank-deficient and numpy would happily
     return a meaningless number. Those subjects keep their points and lose their
     line, and are counted in `n_no_slope` rather than dropped silently.
+
+    The SE is this subject's OWN evidence, computed from their epochs alone with
+    no pooling -- which is exactly what makes it the right comparison for the
+    model's shrunk estimate. `p` is the ordinary t-test on n-2 df and answers a
+    much narrower question than the group p; see the module docstring of
+    plot_mixed_model_effects for why it should not be read as "this patient
+    responds to pain".
     """
+    from scipy import stats
+
     rows = []
     for subject, grp in per_epoch.groupby('subject'):
         x = grp['NRS_within'].to_numpy(dtype='float64')
         y = grp['power_centred'].to_numpy(dtype='float64')
-        if len(np.unique(x)) < 2:
-            rows.append({'subject': subject, 'slope': np.nan, 'intercept': np.nan,
-                         'n_epochs': int(len(grp)), 'x_min': np.nan, 'x_max': np.nan})
+        n = len(x)
+        base = {'subject': subject, 'n_epochs': int(n)}
+        if len(np.unique(x)) < 2 or n < 3:
+            rows.append({**base, 'slope': np.nan, 'intercept': np.nan,
+                         'se': np.nan, 'p': np.nan,
+                         'x_min': np.nan, 'x_max': np.nan})
             continue
         slope, intercept = np.polyfit(x, y, 1)
-        rows.append({'subject': subject, 'slope': float(slope),
-                     'intercept': float(intercept), 'n_epochs': int(len(grp)),
+        resid = y - (slope * x + intercept)
+        sxx = float(((x - x.mean()) ** 2).sum())
+        se = float(np.sqrt((resid @ resid) / (n - 2) / sxx)) if sxx > 0 else np.nan
+        p = (float(2 * stats.t.sf(abs(slope / se), df=n - 2))
+             if se and np.isfinite(se) and se > 0 else np.nan)
+        rows.append({**base, 'slope': float(slope), 'intercept': float(intercept),
+                     'se': se, 'p': p,
                      'x_min': float(x.min()), 'x_max': float(x.max())})
     return pd.DataFrame(rows)
 
