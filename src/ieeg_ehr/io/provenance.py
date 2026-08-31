@@ -8,6 +8,7 @@ definitive/array run so the recorded hash matches the code that ran.
 
 import datetime
 import subprocess
+import sys
 
 from ieeg_ehr._repo import REPO_DIR
 
@@ -53,14 +54,21 @@ def git_provenance():
 
 
 def warn_if_dirty(prov=None):
-    """Print a loud warning (and return it) if the recorded code state is dirty."""
+    """Print a loud warning (and return it) if the recorded code state is dirty.
+
+    On STDERR, not stdout. Several scripts publish a machine-readable path as their
+    only stdout output so a wrapper can do RUN_DIR=$(python -m ...); a warning on
+    stdout silently corrupts that capture, and the failure surfaces far downstream
+    as an unusable path rather than as a warning anyone reads.
+    """
     prov = prov if prov is not None else git_provenance()
     if not prov.get('available'):
         print("  WARNING: could not read git provenance (git unavailable here) — "
               "commit hash NOT recorded. Capture it at submission time on the login node.",
-              flush=True)
+              file=sys.stderr, flush=True)
     elif prov['dirty']:
         print(f"  WARNING: git working tree is DIRTY ({len(prov['modified_files'])} modified "
               f"files) — recorded commit {prov['commit']} does NOT reflect what ran. "
-              f"Commit + push before a definitive run for faithful provenance.", flush=True)
+              f"Commit + push before a definitive run for faithful provenance.",
+              file=sys.stderr, flush=True)
     return prov
