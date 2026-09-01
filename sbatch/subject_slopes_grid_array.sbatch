@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=mm_slopes
 #SBATCH --partition=normal
-#SBATCH --time=02:00:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=48GB
+#SBATCH --time=00:40:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16GB
 #SBATCH --output=logs/mm_slopes_%A_%a.out
 #SBATCH --array=0-20
 #
@@ -22,6 +22,13 @@
 # The BLUPs would have been free and are the wrong answer: partial pooling drags
 # subjects toward the group, so BLUP-based sign consistency sits at 0.8-1.0
 # everywhere and separates nothing.
+#
+# RESOURCES ARE DELIBERATELY SMALL. A first version asked 48 GB / 2 CPUs / 2 h and
+# sat unscheduled behind an 80k-core backlog -- on `normal` 48 GB alone charges six
+# cores, so the request was competing for a slot it never needed. A region's 38
+# bins are ~1.4M rows of a few columns at the very worst (Lateral Temporal, 801
+# contacts), the arithmetic is one polyfit per subject, and there is no mixed model
+# anywhere in this job. 16 GB on one core backfills almost immediately.
 
 set -euo pipefail
 
