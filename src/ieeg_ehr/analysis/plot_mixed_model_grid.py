@@ -92,35 +92,44 @@ def sign_consistency(run_dir, cells, blups, regions, bins):
             'SHRUNK BLUPs -- optimistic, see footnote')
 
 
+HET_NOTE_RAW = (
+    'Panel 3 is a standard DEVIATION rather than a p-value: the heterogeneity LRT '
+    'is significant in ~98% of cells, so a p-map would be uniformly dark and carry '
+    'no information, whereas the spread has structure. READ IT DOWN A COLUMN, NOT '
+    'ACROSS A ROW: the raw SD falls with frequency (rho -0.59 vs log Hz) almost '
+    'entirely because residual log-power variability falls faster (rho -0.84), '
+    'which is a consequence of unequal spectral averaging -- a 1 Hz bin holds one '
+    'FFT frequency, a 200 Hz bin holds ~48. Regions are comparable at a fixed '
+    'frequency; frequencies are not comparable to each other. Use --het-mode '
+    'normalized for the version that is.')
+
+HET_NOTE_NORM = (
+    'Panel 3 is the between-subject slope SD divided by the residual SD -- roughly '
+    '"how much subjects differ relative to the epoch-to-epoch noise at that '
+    'frequency". The RAW SD cannot be read across frequency: it falls with '
+    'frequency (rho -0.59 vs log Hz) mostly because residual variability falls '
+    'faster (rho -0.84), an artefact of unequal spectral averaging across '
+    'log-spaced bins. Dividing them removes almost all of that trend (rho +0.11), '
+    'so structure remaining here is not a scale effect.')
+
+HET_NOTE_NONE = (
+    'The heterogeneity panel is omitted in this version. Its raw scale is not '
+    'comparable across frequency -- see --het-mode normalized.')
+
+
 def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
-                 het_vmax=None, het_pct=95.0):
+                 het_vmax=None, het_pct=95.0, het_mode='raw'):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     beta = pivot(cells, 'beta_nrs_within', regions, bins)
     sig = pivot(cells, 'p_bh_reject', regions, bins).fillna(False).astype(bool)
-    # Heterogeneity as an SD, in beta's units -- a variance is unreadable next to
-    # a slope, and this is the number that says how much subjects actually differ.
-    het = np.sqrt(pivot(cells, 'var_subj_slope', regions, bins).astype(float))
     cons, cons_source = sign_consistency(run_dir, cells, blups, regions, bins)
-
-    fig, axes = plt.subplots(1, 6, figsize=(27, 0.42 * len(regions) + 3.6),
-                             gridspec_kw={'width_ratios': [1, 1, 1, 1, 0.34, 0.34]})
 
     vmax = float(np.nanmax(np.abs(beta.to_numpy())))
     div = plt.get_cmap('RdBu_r').copy()
     div.set_bad('0.85')
-
-    # A few thin high-frequency cells run an order of magnitude above the rest
-    # (max 0.181 against a median of 0.013) and are almost certainly badly
-    # estimated rather than genuinely that heterogeneous. Scaling to the max
-    # spends the whole colour ramp on them and flattens every real cell to the
-    # bottom, so the default clips at the 95th percentile. Cells above the cap
-    # saturate rather than disappear -- the title states the cap so a saturated
-    # cell is never mistaken for one that merely sits at the top of the range.
-    het_top = float(het_vmax if het_vmax is not None
-                    else np.nanpercentile(het.to_numpy(), het_pct))
 
     # Symmetric about 0.5 so the diverging colours still mean "better/worse than
     # chance", but only as wide as the data actually goes. Floored at 0.05 so a
@@ -128,26 +137,54 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     cons_span = float(np.nanmax(np.abs(cons.to_numpy(dtype=float) - 0.5)))
     cons_span = max(cons_span, 0.05) if np.isfinite(cons_span) else 0.5
 
-    panels = [
-        (axes[0], beta, div, -vmax, vmax,
+    heat = [
+        (beta, div, -vmax, vmax,
          'pain fixed effect\nd log10 power per pain point', True),
-        (axes[1], beta.where(sig), div, -vmax, vmax,
+        (beta.where(sig), div, -vmax, vmax,
          f'the same, BH-significant only\n({int(sig.to_numpy().sum())} cells, q=0.05)',
          False),
-        (axes[2], het, _seq_cmap(plt), 0.0, het_top,
-         f'HETEROGENEITY\nbetween-subject SD of the slope (clipped at {het_top:.3f})',
-         False),
-        # Centred at 0.5 -- half the subjects agreeing is chance, so that is the
-        # neutral point -- but NOT spanning 0 to 1. A fraction of 0 would mean
-        # every subject opposes the group, which cannot happen: the group beta IS
-        # a weighted average of those same subject slopes, so its sign is set by
-        # them. The reachable range is ~0.5 to 1, with modest excursions below 0.5
-        # when a minority with large slopes carries the mean. Spanning 0-1 spent
-        # half the ramp on impossible states and rendered every real cell purple.
-        (axes[3], cons, _cons_cmap(plt), 0.5 - cons_span, 0.5 + cons_span,
-         f'SIGN CONSISTENCY\n{cons_source}', False),
     ]
-    for ax, mat, cm, vlo, vhi, title, outline in panels:
+
+    if het_mode != 'none':
+        # Heterogeneity as an SD, in beta's units -- a variance is unreadable next
+        # to a slope, and this is the number that says how much subjects differ.
+        het = np.sqrt(pivot(cells, 'var_subj_slope', regions, bins).astype(float))
+        if het_mode == 'normalized':
+            # Divided by the residual SD. The raw SD is not comparable across
+            # frequency: it falls with frequency mainly because residual
+            # variability falls faster, since a low-frequency log bin averages one
+            # FFT frequency and a high-frequency one averages dozens. The ratio is
+            # flat with frequency, so what is left is not a scale effect.
+            het = het / np.sqrt(pivot(cells, 'var_resid', regions, bins).astype(float))
+            label = ('HETEROGENEITY, normalized\nbetween-subject slope SD / '
+                     'residual SD')
+        else:
+            label = 'HETEROGENEITY (raw)\nbetween-subject SD of the slope'
+        # A few thin high-frequency cells run an order of magnitude above the rest
+        # and are almost certainly badly estimated rather than genuinely that
+        # heterogeneous. Scaling to the max spends the whole ramp on them and
+        # flattens every real cell, so this clips at a percentile. Cells above the
+        # cap saturate rather than disappear, and the cap is named in the title so
+        # a saturated cell is never mistaken for one merely at the top of the range.
+        het_top = float(het_vmax if het_vmax is not None
+                        else np.nanpercentile(het.to_numpy(), het_pct))
+        heat.append((het, _seq_cmap(plt), 0.0, het_top,
+                     f'{label} (clipped at {het_top:.3f})', False))
+
+    # Centred at 0.5 -- half the subjects agreeing is chance, so that is the
+    # neutral point -- but NOT spanning 0 to 1. A fraction of 0 would mean every
+    # subject opposes the group, which cannot happen: the group beta IS a weighted
+    # average of those same subject slopes, so its sign is set by them.
+    heat.append((cons, _cons_cmap(plt), 0.5 - cons_span, 0.5 + cons_span,
+                 f'SIGN CONSISTENCY\n{cons_source}', False))
+
+    n_heat = len(heat)
+    fig, axes = plt.subplots(
+        1, n_heat + 2, figsize=(5.8 * n_heat + 3.6, 0.42 * len(regions) + 3.6),
+        gridspec_kw={'width_ratios': [1] * n_heat + [0.34, 0.34]})
+
+    for i, (mat, cm, vlo, vhi, title, outline) in enumerate(heat):
+        ax = axes[i]
         im = ax.imshow(mat.to_numpy(dtype=float), aspect='auto', cmap=cm,
                        vmin=vlo, vmax=vhi, interpolation='nearest')
         if outline:
@@ -157,7 +194,7 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
         ax.set_xticklabels([f'{bin_labels.loc[b, "bin_low_hz"]:.0f}' for b in bins],
                            fontsize=6, rotation=90)
         ax.set_yticks(range(len(regions)))
-        ax.set_yticklabels(regions if ax is axes[0] else [], fontsize=8)
+        ax.set_yticklabels(regions if i == 0 else [], fontsize=8)
         ax.set_xlabel('frequency bin, low edge (Hz)', fontsize=8)
         common.add_band_boundary_lines(ax, bin_labels.loc[bins])
         fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02).ax.tick_params(labelsize=7)
@@ -165,8 +202,9 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     # Coverage. NOT heatmaps: both are one number per region -- verified constant
     # across all 38 bins -- and a 38-wide strip would imply they vary with
     # frequency, which is a claim the data does not make.
-    for ax, col, label, colour in ((axes[4], 'n_subjects', 'subjects', '0.55'),
-                                   (axes[5], 'n_channels', 'electrodes', '#4a7ba7')):
+    for ax, col, label, colour in ((axes[n_heat], 'n_subjects', 'subjects', '0.55'),
+                                   (axes[n_heat + 1], 'n_channels', 'electrodes',
+                                    '#4a7ba7')):
         per_region = pivot(cells, col, regions, bins).max(axis=1)
         ax.barh(range(len(regions)), per_region.to_numpy(), color=colour)
         ax.set_yticks(range(len(regions)))
@@ -185,12 +223,12 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     fig.suptitle('Mixed-model pain encoding across the region x frequency grid',
                  fontsize=13)
     fig.tight_layout(rect=(0, 0.075, 1, 0.945))
+    het_note = {'raw': HET_NOTE_RAW, 'normalized': HET_NOTE_NORM,
+                'none': HET_NOTE_NONE}[het_mode]
     fig.text(0.01, 0.005,
              'Outlines on panel 1 mark cells surviving BH across the whole grid at '
-             'q=0.05. Panel 3 is a standard DEVIATION rather than a p-value: the '
-             'heterogeneity LRT is significant in ~98% of cells, so a p-map would be '
-             'uniformly dark and carry no information, whereas the spread has '
-             'structure. Panel 4 is centred at 0.5 because half the subjects '
+             f'q=0.05. {het_note} '
+             'The sign-consistency panel is centred at 0.5 because half the subjects '
              'agreeing IS chance, and is scaled to the observed spread rather than '
              '0-1: a fraction of 0 would mean every subject opposes the group, which '
              'cannot happen, since the group effect is itself a weighted average of '
@@ -282,6 +320,11 @@ def main():
                     help='Percentile of the heterogeneity values to cap the colour '
                          'bar at (default 95). Raising it lets the extreme cells '
                          'back into the ramp at the cost of compressing the rest.')
+    ap.add_argument('--het-mode', choices=['raw', 'normalized', 'none'],
+                    default='raw',
+                    help="'raw' = between-subject slope SD, not comparable ACROSS "
+                         "frequency. 'normalized' = that divided by the residual SD, "
+                         "which is. 'none' = drop the panel entirely.")
     ap.add_argument('--suffix', default='',
                     help='Appended to figure filenames, e.g. --suffix _v2, so an '
                          'alternative scaling does not overwrite the first render.')
@@ -309,7 +352,8 @@ def main():
     spec_path = run_dir / f'fig_grid_spectra{args.suffix}.png'
 
     fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, map_path,
-                 het_vmax=args.het_vmax, het_pct=args.het_pct)
+                 het_vmax=args.het_vmax, het_pct=args.het_pct,
+                 het_mode=args.het_mode)
     logger.info('wrote %s', map_path)
     fig_grid_spectra(cells, regions, bin_labels, spec_path)
     logger.info('wrote %s', spec_path)
