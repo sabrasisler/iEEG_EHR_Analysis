@@ -310,3 +310,40 @@ def bin_edges(epoch_minutes=None):
     edges = np.asarray(io.read_manifest(unit)['bin_edges_hz'], dtype=float)
     return pd.DataFrame({'freq_bin_index': np.arange(len(edges) - 1),
                          'bin_low_hz': edges[:-1], 'bin_high_hz': edges[1:]})
+
+
+def unresolvable_bins(epoch_minutes=None):
+    """Bins narrower than the FFT can resolve, which carry DUPLICATED values.
+
+    The frequency axis is 50 log-spaced bins from 1 Hz, but the PSD comes from
+    2-second windows, so the underlying resolution is a flat 0.5 Hz. Below about
+    4.7 Hz a log bin is narrower than that, and several consecutive bins contain
+    no FFT frequency at all: bin 1 spans [1.117, 1.247) Hz and there is simply no
+    measurement in there.
+
+    The cache builder gives every bin its NEAREST FFT frequency, so those bins are
+    not empty -- they are COPIES of a neighbour. At 5-minute epochs that makes
+    bins {1, 2, 4, 5, 7, 10} exact duplicates, verified against the built view:
+    every region has 38 distinct values across its 44 non-line-noise bins.
+
+    This matters wherever bins are counted as independent. A map looks like it has
+    smooth broadband low-frequency structure when it is one number repeated; a
+    multiple-comparison family is padded with copies; and "significant across nine
+    consecutive bins from 1-2.7 Hz" is really three measurements.
+
+    Returns the indices to DROP. The bins kept are the ones whose range actually
+    contains the frequency they report, so a retained bin never has a nominal
+    range that excludes its own measurement.
+    """
+    unit = config.pain_epoch_unit_dir(epoch_minutes)
+    manifest = io.read_manifest(unit)
+    window_sec = float(manifest['params']['window_sec'])
+    edges = np.asarray(manifest['bin_edges_hz'], dtype=float)
+
+    # Rayleigh resolution of the PSD window: the FFT reports at multiples of this.
+    df = 1.0 / window_sec
+    fft_freqs = np.arange(0.0, edges[-1] + df, df)
+
+    drop = [i for i in range(len(edges) - 1)
+            if not np.any((fft_freqs >= edges[i]) & (fft_freqs < edges[i + 1]))]
+    return np.asarray(drop, dtype=int)

@@ -130,7 +130,25 @@ def stage_prepare(args):
                       or cache_reader.line_noise_bins(epoch_minutes))
     bin_table = bin_table.drop(index=[b for b in line_noise if b in bin_table.index])
 
-    min_subjects = int(ref.criteria.get('min_subjects', mm.MIN_SUBJECTS))
+    # Bins narrower than the 0.5 Hz FFT resolution are COPIES of a neighbour, not
+    # measurements. Keeping them pads the correction family with duplicates and
+    # makes a repeated number look like broadband low-frequency structure.
+    unresolvable = []
+    if not args.keep_unresolvable_bins:
+        unresolvable = [int(b) for b in cache_reader.unresolvable_bins(epoch_minutes)
+                        if b in bin_table.index]
+        bin_table = bin_table.drop(index=unresolvable)
+        logger.info('dropped %d unresolvable (duplicate) bin(s): %s',
+                    len(unresolvable), unresolvable)
+
+    min_subjects = int(args.min_subjects if args.min_subjects is not None
+                       else ref.criteria.get('min_subjects', mm.MIN_SUBJECTS))
+    if args.min_subjects is not None:
+        logger.warning('coverage floor OVERRIDDEN to min_subjects=%d (the reference '
+                       'run used %d). Cells and whole regions below it are excluded, '
+                       'so this run is NOT cell-for-cell comparable with it.',
+                       min_subjects,
+                       int(ref.criteria.get('min_subjects', mm.MIN_SUBJECTS)))
     coverage = coverage_map(paths, subjects, roi_by_subject, bin_table.index)
     manifest = build_grid_manifest(regions, bin_table, coverage, min_subjects)
 
@@ -152,6 +170,7 @@ def stage_prepare(args):
     io.write_table(manifest, run_dir / 'grid_cell_manifest.parquet',
                    params={'min_subjects': min_subjects,
                            'line_noise_bins_removed': line_noise,
+                           'unresolvable_bins_removed': unresolvable,
                            'roi_scheme': roi_scheme},
                    parents=[str(Path(args.reference_run) / 'provenance.json'),
                             str(view_dir)],
@@ -170,6 +189,8 @@ def stage_prepare(args):
         params={'stage': 'prepare', 'view_dir': str(view_dir),
                 'view_params': ref.view_params, 'criteria': ref.criteria,
                 'min_subjects': min_subjects, 'roi_scheme': roi_scheme,
+                'unresolvable_bins_removed': unresolvable,
+                'line_noise_bins_removed': line_noise,
                 'with_channel_slope': bool(args.with_channel_slope),
                 'n_regions': len(regions), 'n_bins': len(bin_table),
                 'n_cells': len(manifest), 'n_cells_fittable': n_fit},
@@ -383,6 +404,15 @@ def stage_collect(args):
 
 
 def write_methods(run_dir, cells, manifest, missing):
+    import json
+    try:
+        prov = json.loads((Path(run_dir) / 'provenance.json').read_text())
+        params = prov.get('params', {})
+    except (OSError, ValueError):
+        params = {}
+    dropped = params.get('unresolvable_bins_removed', [])
+    floor = params.get('min_subjects', '?')
+
     text = f"""# Phase 2: mass-univariate mixed-effects models, full grid
 
 {DISCLAIMER}
@@ -398,10 +428,22 @@ cannot leak into the within-subject slope. Fitted with REML.
 
 ## Cells
 
-{len(manifest)} region x frequency cells in the manifest;
-{int(manifest['above_coverage_floor'].sum())} clear the inherited coverage floor
-and were fitted. Cells below the floor remain as manifest rows and are not
-silently absent. {len(cells)} fitted rows were collected.
+{len(manifest)} region x frequency cells in the manifest
+({manifest['region'].nunique()} regions x {manifest['freq_bin_index'].nunique()} bins);
+{int(manifest['above_coverage_floor'].sum())} clear the coverage floor of
+min_subjects={floor} and were fitted. Cells below the floor remain as manifest rows
+and are not silently absent. {len(cells)} fitted rows were collected.
+
+## Frequency axis
+
+Line-noise bins are removed, as in the reference run. In addition, bins
+{dropped} are dropped as UNRESOLVABLE: the axis is 50 log-spaced bins from 1 Hz
+but the PSD comes from 2-second windows, so the real resolution is a flat 0.5 Hz.
+Below ~4.7 Hz a log bin is narrower than that and contains no FFT frequency of its
+own; the cache builder fills it from the nearest neighbour, making it an exact
+duplicate. Retained bins are those whose nominal range contains the frequency they
+report. Keeping the duplicates would pad the correction family with copies and
+make one repeated number read as broadband low-frequency structure.
 
 ## Multiple comparisons
 
@@ -453,6 +495,14 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--mask-label', default=None)
     ap.add_argument('--allow-cohort-drift', action='store_true')
+    ap.add_argument('--min-subjects', type=int, default=None,
+                    help='Coverage floor. Default: inherited from the reference run '
+                         '(8). Raising it drops whole regions and breaks cell-for-cell '
+                         'comparability with the reference.')
+    ap.add_argument('--keep-unresolvable-bins', action='store_true',
+                    help='Keep log bins narrower than the FFT resolution. They are '
+                         'exact duplicates of a neighbour; only for reproducing an '
+                         'older run.')
     ap.add_argument('--with-channel-slope', action='store_true',
                     help='Also fit the channel random-slope model. Phase 1 found it '
                          'improved fit in 1/19 cells, so this is off by default.')
