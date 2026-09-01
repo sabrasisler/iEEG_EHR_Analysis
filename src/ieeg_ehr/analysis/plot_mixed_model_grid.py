@@ -122,6 +122,12 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     het_top = float(het_vmax if het_vmax is not None
                     else np.nanpercentile(het.to_numpy(), 95))
 
+    # Symmetric about 0.5 so the diverging colours still mean "better/worse than
+    # chance", but only as wide as the data actually goes. Floored at 0.05 so a
+    # uniformly consistent grid does not get its noise amplified into structure.
+    cons_span = float(np.nanmax(np.abs(cons.to_numpy(dtype=float) - 0.5)))
+    cons_span = max(cons_span, 0.05) if np.isfinite(cons_span) else 0.5
+
     panels = [
         (axes[0], beta, div, -vmax, vmax,
          'pain fixed effect\nd log10 power per pain point', True),
@@ -131,9 +137,14 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
         (axes[2], het, _seq_cmap(plt), 0.0, het_top,
          f'HETEROGENEITY\nbetween-subject SD of the slope (clipped at {het_top:.3f})',
          False),
-        # Centred at 0.5: half the subjects agreeing is what chance looks like, so
-        # that has to be the visual midpoint or every panel reads as consensus.
-        (axes[3], cons, _cons_cmap(plt), 0.0, 1.0,
+        # Centred at 0.5 -- half the subjects agreeing is chance, so that is the
+        # neutral point -- but NOT spanning 0 to 1. A fraction of 0 would mean
+        # every subject opposes the group, which cannot happen: the group beta IS
+        # a weighted average of those same subject slopes, so its sign is set by
+        # them. The reachable range is ~0.5 to 1, with modest excursions below 0.5
+        # when a minority with large slopes carries the mean. Spanning 0-1 spent
+        # half the ramp on impossible states and rendered every real cell purple.
+        (axes[3], cons, _cons_cmap(plt), 0.5 - cons_span, 0.5 + cons_span,
          f'SIGN CONSISTENCY\n{cons_source}', False),
     ]
     for ax, mat, cm, vlo, vhi, title, outline in panels:
@@ -180,10 +191,14 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
              'heterogeneity LRT is significant in ~98% of cells, so a p-map would be '
              'uniformly dark and carry no information, whereas the spread has '
              'structure. Panel 4 is centred at 0.5 because half the subjects '
-             'agreeing IS chance; it is computed from the model\'s shrunk '
-             'per-subject estimates, which pulls subjects toward the group, so read '
-             'it as an OPTIMISTIC bound on consistency -- most flattering exactly '
-             'where the effect is weakest. Subject and electrode counts are constant '
+             'agreeing IS chance, and is scaled to the observed spread rather than '
+             '0-1: a fraction of 0 would mean every subject opposes the group, which '
+             'cannot happen, since the group effect is itself a weighted average of '
+             'those subject slopes. Orange means FEWER than half of subjects share '
+             'the group\'s direction -- the mean is being carried by a minority with '
+             'large slopes and does not describe a typical patient. Its denominator '
+             'is subjects whose slope is defined at all (>=2 distinct pain scores); '
+             'in the pilot that excluded nobody. Subject and electrode counts are constant '
              'across frequency, hence bars. Grey = no data. Bins narrower than the '
              '0.5 Hz FFT resolution were removed as exact duplicates.\n' + DISCLAIMER,
              fontsize=7, va='bottom', ha='left', color='0.35', wrap=True)
