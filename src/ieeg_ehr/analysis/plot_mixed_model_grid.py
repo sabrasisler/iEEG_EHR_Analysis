@@ -93,7 +93,7 @@ def sign_consistency(run_dir, cells, blups, regions, bins):
 
 
 def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
-                 het_vmax=None):
+                 het_vmax=None, het_pct=95.0):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -120,7 +120,7 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     # saturate rather than disappear -- the title states the cap so a saturated
     # cell is never mistaken for one that merely sits at the top of the range.
     het_top = float(het_vmax if het_vmax is not None
-                    else np.nanpercentile(het.to_numpy(), 95))
+                    else np.nanpercentile(het.to_numpy(), het_pct))
 
     # Symmetric about 0.5 so the diverging colours still mean "better/worse than
     # chance", but only as wide as the data actually goes. Floored at 0.05 so a
@@ -277,7 +277,11 @@ def main():
     ap.add_argument('--roi-scheme', default='roi_v2')
     ap.add_argument('--het-vmax', type=float, default=None,
                     help='Colour-bar top for the heterogeneity panel, in beta units. '
-                         'Default: the 95th percentile across cells.')
+                         'Overrides --het-pct.')
+    ap.add_argument('--het-pct', type=float, default=95.0,
+                    help='Percentile of the heterogeneity values to cap the colour '
+                         'bar at (default 95). Raising it lets the extreme cells '
+                         'back into the ramp at the cost of compressing the rest.')
     ap.add_argument('--suffix', default='',
                     help='Appended to figure filenames, e.g. --suffix _v2, so an '
                          'alternative scaling does not overwrite the first render.')
@@ -305,7 +309,7 @@ def main():
     spec_path = run_dir / f'fig_grid_spectra{args.suffix}.png'
 
     fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, map_path,
-                 het_vmax=args.het_vmax)
+                 het_vmax=args.het_vmax, het_pct=args.het_pct)
     logger.info('wrote %s', map_path)
     fig_grid_spectra(cells, regions, bin_labels, spec_path)
     logger.info('wrote %s', spec_path)
