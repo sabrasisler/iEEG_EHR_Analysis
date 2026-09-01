@@ -92,7 +92,8 @@ def sign_consistency(run_dir, cells, blups, regions, bins):
             'SHRUNK BLUPs -- optimistic, see footnote')
 
 
-def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path):
+def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
+                 het_vmax=None):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -111,18 +112,25 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path):
     div = plt.get_cmap('RdBu_r').copy()
     div.set_bad('0.85')
 
+    # A few thin high-frequency cells run an order of magnitude above the rest
+    # (max 0.181 against a median of 0.013) and are almost certainly badly
+    # estimated rather than genuinely that heterogeneous. Scaling to the max
+    # spends the whole colour ramp on them and flattens every real cell to the
+    # bottom, so the default clips at the 95th percentile. Cells above the cap
+    # saturate rather than disappear -- the title states the cap so a saturated
+    # cell is never mistaken for one that merely sits at the top of the range.
+    het_top = float(het_vmax if het_vmax is not None
+                    else np.nanpercentile(het.to_numpy(), 95))
+
     panels = [
         (axes[0], beta, div, -vmax, vmax,
          'pain fixed effect\nd log10 power per pain point', True),
         (axes[1], beta.where(sig), div, -vmax, vmax,
          f'the same, BH-significant only\n({int(sig.to_numpy().sum())} cells, q=0.05)',
          False),
-        # 98th percentile, not the max: a handful of cells (thin regions at high
-        # frequency) run an order of magnitude above the rest and would flatten
-        # every other cell to the bottom of the colour ramp.
-        (axes[2], het, _seq_cmap(plt), 0.0,
-         float(np.nanpercentile(het.to_numpy(), 98)),
-         'HETEROGENEITY\nbetween-subject SD of the slope', False),
+        (axes[2], het, _seq_cmap(plt), 0.0, het_top,
+         f'HETEROGENEITY\nbetween-subject SD of the slope (clipped at {het_top:.3f})',
+         False),
         # Centred at 0.5: half the subjects agreeing is what chance looks like, so
         # that has to be the visual midpoint or every panel reads as consensus.
         (axes[3], cons, _cons_cmap(plt), 0.0, 1.0,
@@ -252,6 +260,12 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run-dir', required=True)
     ap.add_argument('--roi-scheme', default='roi_v2')
+    ap.add_argument('--het-vmax', type=float, default=None,
+                    help='Colour-bar top for the heterogeneity panel, in beta units. '
+                         'Default: the 95th percentile across cells.')
+    ap.add_argument('--suffix', default='',
+                    help='Appended to figure filenames, e.g. --suffix _v2, so an '
+                         'alternative scaling does not overwrite the first render.')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -272,11 +286,14 @@ def main():
     logger.info('%d cells | %d regions | %d bins', len(cells), len(regions), len(bins))
 
     blups = io.read_table(run_dir / 'grid_blups.parquet', on_stale='warn')
-    fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels,
-                 run_dir / 'fig_grid_map.png')
-    logger.info('wrote %s', run_dir / 'fig_grid_map.png')
-    fig_grid_spectra(cells, regions, bin_labels, run_dir / 'fig_grid_spectra.png')
-    logger.info('wrote %s', run_dir / 'fig_grid_spectra.png')
+    map_path = run_dir / f'fig_grid_map{args.suffix}.png'
+    spec_path = run_dir / f'fig_grid_spectra{args.suffix}.png'
+
+    fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, map_path,
+                 het_vmax=args.het_vmax)
+    logger.info('wrote %s', map_path)
+    fig_grid_spectra(cells, regions, bin_labels, spec_path)
+    logger.info('wrote %s', spec_path)
 
     io.log_analysis('mixed-model grid overview figures: region x frequency map and '
                     'per-region spectra (EXPLORATORY)', run_dir)
