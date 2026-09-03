@@ -99,3 +99,4 @@ working tree had uncommitted changes, so that commit does NOT describe what ran.
 - 2026-09-03 14:53 | analgesic administration rate + normalized dose by hospital day, 4 drugs, n=93 | $DERIV/analysis/meds/administration_patterns/hospital_day/hospital_day_20260903-145343 | 13d3e67cc3ff+dirty | [x]
 - 2026-09-03 14:53 | analgesic co-administration PETHs, 5 formulations x 7 classes, n=93 | $DERIV/analysis/meds/administration_patterns/coadmin_peth/coadmin_peth_20260903-145348 | 13d3e67cc3ff+dirty | [x]
 - 2026-09-03 16:16 | analgesic administration burden, 12 drugs, 1754 administrations, n=93 | $DERIV/analysis/meds/administration_patterns/burden_scatter/burden_scatter_20260903-161614 | 151200a884b9 | [x]
+- 2026-09-03 16:31 | analgesic administration burden, 12 drugs, 1754 administrations, n=93 | $DERIV/analysis/meds/administration_patterns/burden_scatter/burden_scatter_20260903-163138 | 4356f43496ee+dirty | [x]
