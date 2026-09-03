@@ -410,6 +410,16 @@ def med_admin_files():
     return sorted(Path(RAW_DIR).glob('sub-*/ses-*/ehr/*_med-admin.csv'))
 
 
+def pain_score_files():
+    """Every pain-score export on disk, sorted. Sibling glob of med_admin_files().
+
+    99 exist against 98 MAR exports, and every MAR session has one — so
+    anything joining doses to assessments is bounded by the MAR glob, not by
+    this one. Not a cohort definition on its own.
+    """
+    return sorted(Path(RAW_DIR).glob('sub-*/ses-*/ehr/*_pain-scores.csv'))
+
+
 def epoch_channel_power_csv(subject, session):
     return CACHE_DIR / f'sub-{subject}_ses-{session}_epoch_channel_power.csv'
 
@@ -566,6 +576,12 @@ def sweep_run_dir(run_name, event='pain', timestamp=None):
 MED_EVENT = 'meds'
 MED_ANALYSIS_ROOT = ANALYSIS_DIR / MED_EVENT
 MED_DEFAULT_QUESTION = 'administration_patterns'
+
+#: Level-2 question: how dosing lines up with the charted pain score. Opened
+#: deliberately (CLAUDE.md: levels 1-2 are not created per run) because "was
+#: this dose preceded by pain?" is a different question from "what was
+#: administered", not another output type of it.
+MED_PAIN_QUESTION = 'pain_coupling'
 
 #: Frozen snapshot of the taxonomy source table (config/med_taxonomy.py records
 #: the live path). Copied once so a run's provenance points at something stable.
