@@ -155,9 +155,14 @@ def label_points(ax, xs, ys, labels, *, marker_size=170, fontsize=None,
     axes_box = ax.get_window_extent(renderer)
 
     # Nearest ring first, and due-east first within a ring, so a sparse panel
-    # still comes out looking conventionally labelled.
-    rings = (11.0, 17.0, 25.0, 35.0, 48.0)
-    angles = (0, 35, -35, 70, -70, 110, -110, 145, -145, 180)
+    # still comes out looking conventionally labelled. The far rings exist for
+    # linear axes, where a cluster of low-value points can sit inside a few
+    # marker widths of each other: without somewhere distant to go, every label
+    # in the cluster falls back to least-overlap and they print on top of one
+    # another. A leader line is what makes the long travel legible.
+    rings = (11.0, 17.0, 25.0, 35.0, 48.0, 65.0, 85.0, 110.0, 140.0)
+    angles = (0, 20, -20, 35, -35, 55, -55, 75, -75, 95, -95,
+              115, -115, 145, -145, 180)
     candidates = [(r, math.radians(a)) for r in rings for a in angles]
 
     for (x_data, y_data), text in zip(xy, labels):
@@ -188,11 +193,17 @@ def label_points(ax, xs, ys, labels, *, marker_size=170, fontsize=None,
         if r >= leader_from_pt:
             arrow = dict(arrowstyle='-', color=AXIS_COLOR, linewidth=0.7,
                          shrinkA=1.5, shrinkB=marker_r / px + 1.0)
+        # An opaque backing, because in a tight cluster somebody else's leader
+        # line will cross this label however well it is placed, and a line
+        # struck through a drug name is worse than a line interrupted by one.
+        backing = dict(boxstyle='square,pad=0.15', facecolor='white',
+                       edgecolor='none')
         ax.annotate(text, (x_data, y_data), textcoords='offset points',
                     xytext=(dx, dy),
                     ha='left' if dx > 1 else 'right' if dx < -1 else 'center',
                     va='bottom' if dy > 1 else 'top' if dy < -1 else 'center',
-                    fontsize=fontsize, color=color, zorder=6, arrowprops=arrow)
+                    fontsize=fontsize, color=color, zorder=6, arrowprops=arrow,
+                    bbox=backing)
         placed.append(box)
 
     return placed

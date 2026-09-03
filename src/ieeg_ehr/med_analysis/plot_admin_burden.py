@@ -24,8 +24,10 @@ Run on Slurm, never the login node:
 """
 
 import logging
+import math
 
 import pandas as pd
+from matplotlib import ticker
 
 from ieeg_ehr import config, io
 from ieeg_ehr.config import med_taxonomy
@@ -114,22 +116,38 @@ def plot_scatter(summary, out_path, n_subjects_total):
                    color=colors[level2], edgecolor='white', linewidth=0.8,
                    label=level2, zorder=3)
 
+    # LINEAR axes. The previous symlog was unreadable for two reasons: with
+    # `linthresh=10` position meant one thing below 10 administrations and
+    # another above it, and a single shared limit driven by x's maximum (643)
+    # left everything above y=73 as empty panel, because no drug can have more
+    # subjects than administrations.
+    #
+    # The cost of linear is real and worth stating: 7 of the 12 drugs sit under
+    # 50 administrations, so they crowd into the leftmost tenth of the x axis
+    # and their positions stop being separable. Those drugs are carried by their
+    # labels and by drug_summary.csv, not by their coordinates. What linear buys
+    # is that a distance means the same thing everywhere on the axis, so ratios
+    # between the drugs that DO carry Figs 2-4 can be read straight off it.
+    x_hi = summary['n_admin'].max() * 1.12
+    y_hi = summary['n_subjects'].max() * 1.12
+    ax.set_xlim(0, x_hi)
+    ax.set_ylim(0, y_hi)
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(100))
+    ax.xaxis.set_minor_locator(ticker.MultipleLocator(25))
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(10))
+    ax.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+
     # A drug on this line was given once to each subject who got it; drugs far
     # below it are repeat-dosed in a few people, which is the fragility Figs 2-4
-    # have to survive.
-    lim = max(summary['n_admin'].max(), summary['n_subjects'].max()) * 1.15
-    ax.plot([0, lim], [0, lim], color=style.AXIS_COLOR, linewidth=1,
+    # have to survive. It stops at the top of the y axis rather than the corner
+    # of the panel, since the two axes no longer share a range.
+    diag_hi = min(x_hi, y_hi)
+    ax.plot([0, diag_hi], [0, diag_hi], color=style.AXIS_COLOR, linewidth=1,
             linestyle='--', zorder=1)
-    ax.annotate('1 administration per subject', (lim * 0.55, lim * 0.58),
-                fontsize=style.FOOTNOTE_SIZE + 1, color=style.TEXT_MUTED,
-                rotation=38, ha='center')
-
-    ax.set_xscale('symlog', linthresh=10)
-    ax.set_yscale('symlog', linthresh=10)
-    ax.set_xlim(0, lim)
-    ax.set_ylim(0, lim)
 
     style.style_axes(ax, grid_axis='both')
+    ax.grid(True, which='minor', color=style.GRID_COLOR, linewidth=0.4,
+            alpha=0.55, zorder=0)
     style.label_axes(ax, 'Total administrations', 'Total subjects',
                      'Analgesic administration burden\n'
                      f'{len(summary)} drugs, {n_subjects_total} subjects with '
@@ -145,7 +163,23 @@ def plot_scatter(summary, out_path, n_subjects_total):
     # in the same corner it occupies.
     fig.tight_layout()
     fig.canvas.draw()
-    legend_box = leg.get_window_extent(fig.canvas.get_renderer())
+    renderer = fig.canvas.get_renderer()
+
+    # The on-screen angle of y=x depends on the axes box and on the two ranges,
+    # which are no longer equal, so the rotation is measured from the transform
+    # instead of hardcoded — and measured here, because tight_layout is what
+    # settles that box.
+    p0 = ax.transData.transform((0, 0))
+    p1 = ax.transData.transform((diag_hi, diag_hi))
+    diag_label = ax.annotate(
+        '1 administration per subject', (diag_hi * 0.62, diag_hi * 0.62),
+        textcoords='offset points', xytext=(0, 4),
+        rotation=math.degrees(math.atan2(p1[1] - p0[1], p1[0] - p0[0])),
+        rotation_mode='anchor', ha='center', va='bottom',
+        fontsize=style.FOOTNOTE_SIZE + 1, color=style.TEXT_MUTED)
+
+    obstacles = [leg.get_window_extent(renderer),
+                 diag_label.get_window_extent(renderer)]
 
     # EVERY drug gets a name. This panel's whole job is to say which drugs have
     # enough data to carry Figs 2-4, and an unlabelled marker cannot answer
@@ -155,10 +189,10 @@ def plot_scatter(summary, out_path, n_subjects_total):
     style.label_points(ax, summary['n_admin'].tolist(),
                        summary['n_subjects'].tolist(),
                        [d.title() for d in summary['drug']],
-                       marker_size=MARKER_SIZE, obstacles=[legend_box])
+                       marker_size=MARKER_SIZE, obstacles=obstacles)
 
     return style.save(fig, out_path,
-                      footnote='log-log axes; dashed line = 1 administration per subject')
+                      footnote='linear axes; dashed line = 1 administration per subject')
 
 
 def main():
