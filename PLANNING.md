@@ -92,6 +92,23 @@ A level-2 folder is opened DELIBERATELY and only for a question named here
 |---|---|---|
 | PSD physiology | `psd_physiology` | Descriptive, pre-model: across the discovery cohort, what does the pain-related change in the power spectrum LOOK like per region — where is it (heatmaps) and what shape does it have (spectra)? Opened 2026-07-29. Deliberately not a hypothesis test: its output feeds P2.2's sweep axes and P2.6's frozen feature set, and nothing from it is a finding. |
 
+### Level-1 event `meds` — medication administration patterns
+
+A SECOND level-1 event beside `pain`, opened 2026-09-03. The unit of analysis is
+a drug administration from the EHR MAR export, not a pain epoch; nothing in it
+reads the PSD cache, the QC masks, or the view chain. Level-1 vocabulary in
+`architecture.md` PART 5 anticipated `opioid`; `meds` is used instead because the
+drug set is all analgesics, not opioids alone.
+
+| Question | Folder | What it asks |
+|---|---|---|
+| Administration patterns | `administration_patterns` | Descriptive characterization of analgesic administration across the ~96 subjects with a MAR export: which drugs carry enough data to analyze, when they are given (clock time, inter-dose interval), how administration rate and dose evolve across the hospitalization, and what they are co-prescribed with. Opened 2026-09-03. Purely descriptive — no neural data, no hypothesis test. Code: `src/ieeg_ehr/med_analysis/`. |
+
+Downstream, this is the descriptive groundwork for **Aim 3 (opioid modulation)**
+in Phase 3, and for `BG.6` (EHR/confound tables joined to epoch definitions) — the
+tidy administration table is the join key for a medication-state covariate. It is
+NOT itself either of those.
+
 | P2.6 | **FREEZE** — dated freeze doc: ranked directional hypotheses, frozen feature set + view config, model spec, correction plan + n_tests, predicted directions. Ends exploration. |
 
 P2.6 is the hinge where accumulated notebook narrative becomes `DECISIONS.md`

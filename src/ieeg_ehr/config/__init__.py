@@ -35,6 +35,10 @@ from ieeg_ehr.config.pain_params import *    # noqa: F401,F403
 from ieeg_ehr.config.cache_params import *   # noqa: F401,F403
 from ieeg_ehr.config.cohorts import *        # noqa: F401,F403
 
+# NOT star-imported, same as roi_schemes: both are mapping tables whose members
+# have names that are only unambiguous in their own namespace (`classify`,
+# `DRUG_CLASS`). Import the module — `from ieeg_ehr.config import med_taxonomy`.
+
 # Re-exported for backwards compatibility with `config.<name>` call sites.
 from ieeg_ehr.io.provenance import (         # noqa: F401
     git_provenance,

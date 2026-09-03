@@ -388,6 +388,28 @@ def pain_scores_csv(subject, session):
             / f'sub-{subject}_ses-{session}_pain-scores.csv')
 
 
+def med_admin_csv(subject, session):
+    """The MAR (medication administration record) export for one session.
+
+    Sibling of pain_scores_csv in the same ehr/ folder. 98 of these exist across
+    96 subjects; not every subject with iEEG has one, which is why the med
+    cohort is defined by med_admin_files() rather than by the file registry.
+    """
+    return (Path(RAW_DIR) / f'sub-{subject}' / f'ses-{session}' / 'ehr'
+            / f'sub-{subject}_ses-{session}_med-admin.csv')
+
+
+def med_admin_files():
+    """Every MAR export on disk, sorted. THIS is the medication cohort.
+
+    Deliberately a glob rather than a cohort file: the question these figures
+    answer is "what was administered in this dataset", so the denominator is
+    "has an EHR medication export", not "has usable iEEG". A subject whose
+    recording failed QC still received the same drugs.
+    """
+    return sorted(Path(RAW_DIR).glob('sub-*/ses-*/ehr/*_med-admin.csv'))
+
+
 def epoch_channel_power_csv(subject, session):
     return CACHE_DIR / f'sub-{subject}_ses-{session}_epoch_channel_power.csv'
 
@@ -528,8 +550,39 @@ def analysis_run_dir(question, output_type, run_name, view_scheme=None,
 
 def sweep_run_dir(run_name, event='pain', timestamp=None):
     """A tiered nomination run. All grid combinatorics live as ROWS in this
-    run's results.parquet — never as sibling folders."""
+    run's results table — never as sibling folders."""
     return ANALYSIS_DIR / event / 'sweeps' / f'{run_name}_{_run_stamp(timestamp)}'
+
+
+# ============================================================================
+# MEDICATION ADMINISTRATION  —  level-1 event 'meds'
+# ============================================================================
+# Opened deliberately (PLANNING.md, "Medication administration patterns"). This
+# is a second level-1 event beside 'pain': the unit of analysis is a drug
+# administration from the EHR, not a pain epoch, and nothing in it touches the
+# PSD cache or the view chain. Level 2 is the named question; there is no level-4
+# view_scheme because there are no views here.
+
+MED_EVENT = 'meds'
+MED_ANALYSIS_ROOT = ANALYSIS_DIR / MED_EVENT
+MED_DEFAULT_QUESTION = 'administration_patterns'
+
+#: Frozen snapshot of the taxonomy source table (config/med_taxonomy.py records
+#: the live path). Copied once so a run's provenance points at something stable.
+MED_TAXONOMY_SNAPSHOT = MED_ANALYSIS_ROOT / 'medications_classified_snapshot.csv'
+
+
+def med_run_dir(output_type, run_name, question=MED_DEFAULT_QUESTION,
+                timestamp=None):
+    """Build (do not create) a run directory under the 'meds' event.
+
+    Thin wrapper over analysis_run_dir with event='meds' and no view_scheme.
+    Deliberately NOT analysis.view_tables.resolve_run_dir, which hardcodes
+    event='pain' and expects a view directory these scripts do not have.
+    """
+    return analysis_run_dir(question=question, output_type=output_type,
+                            run_name=run_name, event=MED_EVENT,
+                            timestamp=timestamp)
 
 
 # ============================================================================

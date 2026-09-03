@@ -407,3 +407,78 @@ explicit call (see `TASKS.md`); it is not resolved by this entry.
 **What would reverse it:** nothing reverses the discovery lock — that is the point.
 A *different* cohort must be a NEW dated file, never an edit of this one, so any
 artifact citing this filename always means the same 65 subjects.
+
+---
+
+## 2026-09-03 — Analgesic medication analysis: drug set, dose units, day 0, denominator
+
+Six calls made while building `src/ieeg_ehr/med_analysis/` (level-1 event `meds`,
+question `administration_patterns`), adapted from a colleague's benzodiazepine
+analysis at `/home/groups/ckeller1/sisler/iEEG-EHR_Code/med_admin/`.
+
+**1. Analgesics only; anesthetics excluded.** The MAR export does not capture
+procedural medication. Across all 98 sessions there is 1 propofol administration,
+3 rocuronium, 21 lidocaine (mostly topical/uro-jet), no ketamine, no
+dexmedetomidine, no remifentanil, and **not one row with a populated
+`infusion_rate`**. There is no anesthetic exposure to analyze. The classes stay in
+the taxonomy so the exclusion is a visible predicate
+(`med_taxonomy.ANESTHETIC_SUBCLASSES`), not a missing row.
+*Reverses if:* an anesthesia record export lands separately.
+
+**2. Doses stay in native units and are never pooled.** 516 of 1,754 analgesic
+administrations (every combination product) are dosed in `tablet` or `Film`;
+fentanyl is in `mcg`; the rest in `mg`. Product strength lives in the drug NAME,
+not in a column, so mg for a combination product is only recoverable by parsing
+"5-325" out of the product string. No MME conversion. Every dose axis is per
+(drug × route); `load.assert_single_unit` refuses a mixed-unit pool rather than
+trusting the caller. Fig 3's fraction-of-personal-max normalization is unit-free,
+which is what makes that panel legitimate at all.
+
+**3. Hospital day 0 = midnight of the session's own `session_start` date.** The
+colleague's code hardcodes `EPOCH_DATE = 2000-01-01`, on the grounds that
+de-identification shifts every admission onto that date. That holds for 95 of 98
+sessions; two start 2000-01-05 and one starts 1999-12-31, and those get shifted or
+negative day indices under a global constant. Per-session anchoring is identical
+wherever the assumption holds. Day 0 is therefore *the calendar day the iEEG
+session began* — captions must not call it "admission".
+
+**4. Cohort = every subject with a MAR export** (96 subjects / 98 sessions),
+defined by the glob, not by `TFR/incl_subjects.csv` or the discovery lock. The
+question is what was administered in this dataset; a subject whose recording
+failed QC still received the same drugs. This is a DESCRIPTIVE EHR
+characterization with no neural data in it, so the discovery/hold-out split does
+not apply — that gate exists to stop hold-out neural data being looked at.
+
+**5. Recorded-hours denominator is registry-where-available, session-span
+otherwise.** `sherlock_file_registry.csv` only populates `start_datetime` for runs
+that have a PREPROCESSED file — all 2,136 null-timestamp rows have
+`has_preprocessed == False` — so registry timing measures *preprocessed* coverage,
+not *recorded* coverage. Of the 98 MAR sessions, 41 are fully timestamped, 41
+partial, 16 have none at all, and an untimestamped run cannot be placed on a
+hospital day. Pure gap-aware would give 16 sessions a zero denominator. So:
+gap-aware union where a session has ≥2 timestamped runs covering ≥50% of its runs,
+MAR `session_start`→`session_end` span otherwise, with the method recorded per
+session and the split logged. Where the registry IS complete, coverage is a median
+0.965 of span — so span-based sessions overstate monitoring by ~3.5%.
+**Rates from Fig 3 are accurate to a few percent, not exact.**
+*Reverses if:* the raw-NWB span extraction in TASKS.md is built — `session_start_time`,
+`starting_time`, `rate` and data shape are all present in the raw files (checked),
+so true gap-aware coverage for every session is available for the cost of one array job.
+
+**6. Tables under `analysis/` are CSV, not Parquet** (repo-wide, not just here).
+Small, terminal, read by eye; Parquet costs a pyarrow round-trip to open a 20-row
+table and buys nothing. The cache, views, `features/` and `preprocessed/` stay
+Parquet — large, column-sliced, dtype-critical. `io.write_table` already
+dispatched on the path extension and emits the sidecar either way, so no IO code
+changed. Sidecars stay JSON. See `CLAUDE.md` "IO / naming" and
+`docs/io_conventions.md` "Which format, and why".
+
+**Where it lives:** `src/ieeg_ehr/config/med_taxonomy.py`,
+`src/ieeg_ehr/med_analysis/`, `sbatch/med_figures.sbatch`,
+`tests/test_med_analysis.py`.
+
+**Validation that these choices did not break the port:** the loader reproduces
+the colleague's independently published corpus totals exactly — 98 files, 7,340
+MAR rows, 421 multi-product rows collapsed, **6,919 unique administrations**, and
+**380 benzodiazepine administrations**, with zero unmatched drug names
+(`tests/test_med_analysis.py::test_loader_reproduces_published_corpus_totals`).

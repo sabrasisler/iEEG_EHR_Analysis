@@ -225,6 +225,21 @@ date, or figure that prompted it.
 
 ## Next
 
+- [ ] **Build a raw-NWB span manifest, so "recorded iEEG hours" means recorded.**
+      `sherlock_file_registry.csv` only timestamps runs that have a PREPROCESSED
+      file (every one of its 2,136 null-`start_datetime` rows has
+      `has_preprocessed == False`), so registry timing measures preprocessed
+      coverage. Of the 98 med-admin sessions only 41 are fully timestamped, 41 are
+      partial and 16 have none — and an untimestamped run cannot be placed on a
+      hospital day at all. `med_analysis/recording_hours.py` currently falls back
+      to MAR session span for those, which overstates monitoring by ~3.5%
+      (DECISIONS.md 2026-09-03, call 5). The fix: a per-subject Slurm array that
+      reads `session_start_time` + `acquisition/*/starting_time` + `rate` + data
+      shape straight from the raw NWB (all four confirmed present, metadata-only —
+      no data load), writing one run-span row per run. Then
+      `recording_hours.session_coverage` uses one method for every session and
+      Fig 3's rates become exact. Also unblocks a real coverage denominator for
+      anything else that needs one.
 - [ ] **P1.1 Refactor `build_pain_epoch_power.py`** into the epoch-definitions +
       per-window Parquet cache builder. Blocked on P0.1, P0.2 only now (P0.3 +
       P0.6 are settled). Writes via `io.write_table` +

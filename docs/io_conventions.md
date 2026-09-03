@@ -12,8 +12,10 @@ seven view axes), `WORKFLOW.md` (where *records* go, as opposed to artifacts).
 
 ## 1. The contract
 
-1. **Parquet** for tables, **joblib** for fitted objects, **JSON** for manifests
-   and sidecars. Never pickle tabular data.
+1. **Format follows the tree**: tables under `analysis/` are **CSV**, the cache /
+   views / `features/` / `preprocessed/` are **Parquet**, fitted objects are
+   **joblib**, manifests and sidecars are **JSON**. Never pickle tabular data.
+   See §"Which format, and why" below.
 2. **Every write emits a provenance sidecar in the same call.** A bare
    `df.to_parquet` / `joblib.dump` / `to_csv` is forbidden — not by convention
    alone, but because the sanctioned writers make it the easier path.
@@ -39,8 +41,8 @@ which submodule a helper lives in.
 
 | Call | Use it for |
 |---|---|
-| `io.write_table(df, path, params=..., parents=..., subjects=...)` | any table. Parquet by extension, sidecar in the same call |
-| `io.read_table(path, columns=[...], parents=..., config=..., on_stale=...)` | reading one back, staleness-checked. `columns` is why the cache is Parquet |
+| `io.write_table(df, path, params=..., parents=..., subjects=...)` | any table. Format from the extension (`.csv` under `analysis/`, `.parquet` for the cache), sidecar in the same call |
+| `io.read_table(path, columns=[...], parents=..., config=..., on_stale=...)` | reading one back, staleness-checked. `columns` slices off disk for Parquet; for CSV it reads then subsets, which is why the cache stays Parquet |
 | `io.write_manifest(unit_dir, params=...)` | a cache / base-unit directory's `manifest.json` |
 | `io.read_manifest(unit_dir)` / `io.manifest_ref(unit_dir)` | reading it / referencing it as a parent |
 | `io.write_view_sidecar(save_path, view_config=..., cache_manifest=...)` | a **materialized** view's staleness sidecar |
@@ -198,9 +200,26 @@ on-disk artifacts; converting it would invalidate them for no analytical benefit
 `io.append_table` is CSV-only by nature (Parquet has no meaningful
 append-a-few-rows mode — a streaming metrics target needs one).
 
-Everything new is Parquet through `io.write_table`. **New artifacts only — do not
-bulk-convert.** When you next touch a script that writes an old CSV, that is the
-moment to convert it *and* give it a sidecar.
+### Which format, and why
+
+The split is by **tree**, not by file type, because the two trees are read by
+different consumers:
+
+| Tree | Format | Why |
+|---|---|---|
+| `analysis/` (runs, figures' backing tables, sweeps) | **CSV** | Small, terminal, opened by a human. Parquet costs a pyarrow round-trip to read a 20-row table. pandas `to_csv` writes the shortest round-tripping repr for float64, so no precision is lost at these sizes. |
+| `preprocessed/`, `features/`, cache, materialized views | **Parquet** | Large, sliced by column (`read_table(columns=[...])` reads only those bins off disk), and dtype-critical — `config.CACHE_FLOAT_DTYPE` and the P0.6 precision audit both assume a typed round-trip that CSV does not give. |
+| `qc/` | **CSV** | Pre-existing artifacts with a working metric/threshold split. |
+| Sidecars, manifests, run provenance | **JSON** | Nested (`params`, `parents[]`, `subjects[]`); CSV is not a possible shape, and JSON is already readable text. |
+
+Either way the writer is `io.write_table`, which dispatches on the path extension
+and emits the sidecar in the same call — so "never a bare `to_csv` / `to_parquet`"
+is unchanged.
+
+**New artifacts only — do not bulk-convert, in either direction.** Existing
+`analysis/` scripts that write `.parquet` are left alone; when you next touch one,
+that is the moment to convert it. Likewise an old CSV gets a sidecar when you next
+touch it.
 
 ---
 

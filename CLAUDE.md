@@ -218,8 +218,15 @@ eye or a model. A view is a step; an analysis is a stop.
 Full contract + API: `docs/io_conventions.md`. Read it before writing any script
 that produces output. The rules:
 
-- Parquet for tables; joblib (NOT raw pickle) for fitted models / FOOOF objects;
-  JSON for manifests and sidecars. Never pickle tabular data.
+- **Format follows the tree, not the file type.** Tables under `analysis/` are
+  **CSV**: they are small, terminal, and read by eye, so Parquet buys nothing and
+  costs a pyarrow round-trip to open one. The **cache, views, `features/` and
+  `preprocessed/` stay Parquet** — large, column-sliced, and dtype-critical
+  (`config.CACHE_FLOAT_DTYPE`, the P0.6 precision audit). The QC tree stays CSV as
+  before. joblib (NOT raw pickle) for fitted models / FOOOF objects; JSON for
+  manifests and sidecars. Never pickle tabular data.
+  `io.write_table` picks the format from the path extension and emits the sidecar
+  either way, so nothing else about the contract changes.
 - **Go through `ieeg_ehr.io`, never a bare writer.** `io.write_table` /
   `io.save_model` / `io.write_manifest` / `io.write_run_provenance` emit the
   provenance sidecar in the same call; `io.read_table` / `io.load_model` /
@@ -231,9 +238,11 @@ that produces output. The rules:
   Phase-1 cache, `analysis_run_dir` / `sweep_run_dir` for the 5-level analysis
   scheme. All resolve to Oak.
 - The **QC tree stays CSV** (existing artifacts, working metric/threshold split);
-  `io.save_table` and `io.append_table` remain for it. Everything new is Parquet.
-- New artifacts only — do NOT bulk-convert existing CSVs; convert one when next
-  touched, and give it a sidecar when you do.
+  `io.save_table` and `io.append_table` remain for it.
+- New artifacts only — do NOT bulk-convert in either direction. Existing
+  `analysis/` scripts that write `.parquet` are left alone; convert one when you
+  next touch it. Sidecars stay JSON regardless — they are nested, so CSV is not a
+  possible format, and JSON is already readable text.
 - Do NOT fingerprint runs or plots (use human label + timestamp). Fingerprint ONLY
   materialized-view folders, and only if recompute is measured slow —
   `io.config_hash` is the one sanctioned fingerprint.
