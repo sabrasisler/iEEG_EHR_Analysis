@@ -239,7 +239,7 @@ date, or figure that prompted it.
       no data load), writing one run-span row per run. Then
       `recording_hours.session_coverage` uses one method for every session and
       Fig 3's rates become exact. Also unblocks a real coverage denominator for
-      anything else that needs one.
+      anything else that needs one. (→ `docs/labnotebook/2026-09-03.md`)
 - [ ] **P1.1 Refactor `build_pain_epoch_power.py`** into the epoch-definitions +
       per-window Parquet cache builder. Blocked on P0.1, P0.2 only now (P0.3 +
       P0.6 are settled). Writes via `io.write_table` +
