@@ -95,7 +95,12 @@ def subclass_summary(admin_df):
             .reset_index(drop=True))
 
 
-def plot_scatter(summary, out_path, n_subjects_total, label_top=6):
+#: Marker area in pt^2. Shared with `style.label_points` so the label placer
+#: knows how big an obstacle each marker is; the two must not drift apart.
+MARKER_SIZE = 170
+
+
+def plot_scatter(summary, out_path, n_subjects_total):
     subclasses = [s for s in med_taxonomy.ANALGESIC_SUBCLASS_ORDER
                   if s in set(summary['level2'])]
     subclasses += [s for s in summary['level2'].unique() if s not in subclasses]
@@ -105,22 +110,9 @@ def plot_scatter(summary, out_path, n_subjects_total, label_top=6):
 
     for level2 in subclasses:
         sub = summary[summary['level2'] == level2]
-        ax.scatter(sub['n_admin'], sub['n_subjects'], s=170,
+        ax.scatter(sub['n_admin'], sub['n_subjects'], s=MARKER_SIZE,
                    color=colors[level2], edgecolor='white', linewidth=0.8,
                    label=level2, zorder=3)
-
-    # Label the drugs that carry the analysis; labelling all of them turns the
-    # panel into a word cloud. Offsets alternate above/below because the top
-    # drugs cluster in the same corner and a fixed offset stacks their labels on
-    # top of each other.
-    labelled = summary.head(label_top)
-    for i, r in enumerate(labelled.itertuples()):
-        above = i % 2 == 0
-        ax.annotate(r.drug.title(), (r.n_admin, r.n_subjects),
-                    textcoords='offset points',
-                    xytext=(8, 7) if above else (8, -13),
-                    va='bottom' if above else 'top',
-                    fontsize=style.TICK_SIZE, color=style.TEXT_PRIMARY)
 
     # A drug on this line was given once to each subject who got it; drugs far
     # below it are repeat-dosed in a few people, which is the fragility Figs 2-4
@@ -147,7 +139,24 @@ def plot_scatter(summary, out_path, n_subjects_total, label_top=6):
                     loc='lower right')
     leg._legend_box.align = 'left'
 
+    # Labels are placed by measuring text boxes in display space, so the layout
+    # has to be final before they go on — hence tight_layout here rather than
+    # after. The legend is passed in as an obstacle because the low-n drugs sit
+    # in the same corner it occupies.
     fig.tight_layout()
+    fig.canvas.draw()
+    legend_box = leg.get_window_extent(fig.canvas.get_renderer())
+
+    # EVERY drug gets a name. This panel's whole job is to say which drugs have
+    # enough data to carry Figs 2-4, and an unlabelled marker cannot answer
+    # that — the reader has to join it to the companion table by eye. `summary`
+    # is sorted by administrations, so the drugs that will carry those figures
+    # are placed first and get the cleanest spots.
+    style.label_points(ax, summary['n_admin'].tolist(),
+                       summary['n_subjects'].tolist(),
+                       [d.title() for d in summary['drug']],
+                       marker_size=MARKER_SIZE, obstacles=[legend_box])
+
     return style.save(fig, out_path,
                       footnote='log-log axes; dashed line = 1 administration per subject')
 
