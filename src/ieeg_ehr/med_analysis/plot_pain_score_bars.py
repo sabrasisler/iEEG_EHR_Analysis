@@ -11,6 +11,10 @@ Two panels are written, and they answer different questions:
                                            at each score
   fig5b_admin_by_pain_score_normalized.png each drug scaled to its own total —
                                            WHERE on the scale a given drug is used
+  fig5c_pain_score_violin.png              the same distributions per drug, as
+                                           violins: one distribution per drug
+                                           side by side, for reading the
+                                           ordering off directly
 
 5a is the requested view. 5b exists because acetaminophen and
 hydrocodone-acetaminophen have three to four times the administrations of
@@ -106,8 +110,92 @@ def plot_grouped_bars(counts, summary, out_path, *, normalize, window_minutes,
         fig, out_path,
         footnote=(f'{n_dropped} of {n_total} administrations excluded — no pain '
                   f'assessment in the {window_minutes} min before the dose; '
-                  f'a same-minute score counts as prior. NOT causal: an '
-                  f'assessment is often charted because a dose was requested'))
+                  f'a same-minute score counts as prior\n'
+                  f'NOT causal: an assessment is often charted because a dose '
+                  f'was requested'))
+
+
+def _drug_tick_label(drug, n):
+    """Drug name for an x tick, wrapped at the hyphen so it fits under a violin."""
+    name = drug.title()
+    if len(name) > 14 and '-' in name:
+        name = name.replace('-', '-\n', 1)
+    return f'{name}\nn={n}'
+
+
+def plot_violin(linked, summary, out_path, *, window_minutes, n_subjects,
+                n_dropped, n_total):
+    """One distribution per drug: x = drug, y = the score before the dose."""
+    drugs = [d for d in summary['drug'] if summary.loc[
+        summary['drug'] == d, 'n_linked'].iloc[0] > 0]
+    colors = style.categorical_colors(drugs)
+    data = [linked.loc[linked['drug'] == d, 'pain_score'].to_numpy(dtype=float)
+            for d in drugs]
+
+    fig, ax = plt.subplots(figsize=(8.5, 6))
+
+    parts = ax.violinplot(data, positions=range(len(drugs)), widths=0.78,
+                          showmedians=False, showextrema=False)
+    for body, drug in zip(parts['bodies'], drugs):
+        body.set_facecolor(colors[drug])
+        body.set_edgecolor(colors[drug])
+        body.set_alpha(0.32)
+        body.set_linewidth(1.2)
+
+    # The scores are INTEGERS 0-10, so a violin outline is a kernel density of
+    # discrete data and its smoothness is an artifact of the estimator rather
+    # than structure in the ratings — it will also bulge past 0 and 10, where no
+    # rating can exist. The jittered points go on top for exactly that reason:
+    # they land in eleven horizontal rows and make the granularity visible
+    # instead of letting the outline imply a continuous scale. Jitter is on x
+    # ONLY. Jittering y would move a point off the score that was charted.
+    rng = np.random.default_rng(0)
+    for i, (drug, values) in enumerate(zip(drugs, data)):
+        ax.scatter(i + rng.uniform(-0.17, 0.17, size=len(values)), values,
+                   s=7, color=colors[drug], alpha=0.30, linewidth=0, zorder=3)
+
+    # Median and IQR drawn explicitly, because the ordering claim rests on them
+    # and a KDE's fattest point is not its median.
+    for i, drug in enumerate(drugs):
+        row = summary.loc[summary['drug'] == drug].iloc[0]
+        ax.plot([i, i], [row['score_q1'], row['score_q3']],
+                color=style.TEXT_PRIMARY, linewidth=1.2, zorder=4,
+                solid_capstyle='round')
+        ax.plot([i - 0.28, i + 0.28], [row['score_median']] * 2,
+                color=style.TEXT_PRIMARY, linewidth=2.2, zorder=5,
+                solid_capstyle='round')
+
+    ax.set_xticks(range(len(drugs)))
+    ax.set_xticklabels([
+        _drug_tick_label(d, int(summary.loc[summary['drug'] == d,
+                                           'n_linked'].iloc[0]))
+        for d in drugs], fontsize=style.TICK_SIZE)
+    ax.set_xlim(-0.6, len(drugs) - 0.4)
+    ax.set_yticks(range(pain_link.PAIN_SCORE_MIN, pain_link.PAIN_SCORE_MAX + 1))
+    ax.set_ylim(pain_link.PAIN_SCORE_MIN - 0.6, pain_link.PAIN_SCORE_MAX + 0.6)
+
+    style.style_axes(ax, grid_axis='y')
+    # No x label: the tick labels are drug names, so "Medication" underneath
+    # them is redundant, and with a wrapped two-line name it collides.
+    style.label_axes(
+        ax, None,
+        f'Pain score in the {window_minutes} min before the dose (0-10)',
+        'Preceding pain score by medication\n'
+        f'{len(linked)} administrations with an assessment in the preceding '
+        f'{window_minutes} min, {n_subjects} subjects')
+
+    # Reserve the bottom band explicitly: the tick labels run to three lines
+    # for a wrapped drug name plus its n, and the default margin lets them
+    # collide with the footnote.
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+
+    return style.save(
+        fig, out_path,
+        footnote=(f'bar = median, vertical line = IQR, points = individual '
+                  f'administrations (x-jittered only); scores are integers, so '
+                  f'the violin outline is a KDE of discrete data\n'
+                  f'{n_dropped} of {n_total} administrations excluded — no '
+                  f'assessment in the {window_minutes} min before the dose'))
 
 
 def build_parser():
@@ -182,6 +270,8 @@ def main():
     plot_grouped_bars(counts, summary,
                       run_dir / 'fig5b_admin_by_pain_score_normalized.png',
                       normalize=True, **common)
+    plot_violin(linked, summary, run_dir / 'fig5c_pain_score_violin.png',
+                **common)
 
     output.write_run(
         run_dir, SCRIPT, args, linked, paths,

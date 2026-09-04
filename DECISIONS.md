@@ -482,3 +482,53 @@ the colleague's independently published corpus totals exactly — 98 files, 7,34
 MAR rows, 421 multi-product rows collapsed, **6,919 unique administrations**, and
 **380 benzodiazepine administrations**, with zero unmatched drug names
 (`tests/test_med_analysis.py::test_loader_reproduces_published_corpus_totals`).
+
+---
+
+## 2026-09-03 — Linking a dose to the pain score before it: window and ties
+
+Two calls, both made on measurements rather than on plausibility, for the new
+level-2 question `pain_coupling` (`med_analysis/pain_link.py`).
+
+**1. The lookback is 30 minutes, and it is an INCLUSION CRITERION.** Matching an
+administration to "the most recent prior score" with no cap is not a small
+approximation: across the four most-administered analgesics the median gap from
+dose back to assessment is 1.3 h, but p90 is 4.9 h and the tail reaches 19 h, so
+an uncapped join attributes doses to day-old assessments. 30 minutes was set by
+request. The consequence is that an administration with no assessment in the
+preceding 30 min is **dropped, not imputed** — 396 of 1,509 (26%) — so
+`link_to_prior_score` returns a frame with those rows already removed rather
+than a `pain_score` column full of NaNs for a caller to remember about.
+Consequently Fig 5's totals do NOT reconcile with Fig 1's, and the excluded
+count is printed on the figure so the gap is not mistaken for a data loss.
+*Reverses if:* the window changes — it is a `--window-minutes` flag, and the
+figure title and footnote both read from it.
+
+**2. A pain score stamped in the same minute as the dose counts as prior.** 45%
+of administrations (679 of 1,509) are exactly this case. Charting is
+minute-resolution and the nursing sequence is assess -> administer -> chart both,
+so a same-minute score is the assessment that prompted the dose, and a gap of
+zero is "within 30 minutes prior". This was measured both ways before choosing:
+excluding exact matches drops the linked sample from 1,113 to 496 and leaves
+every per-drug distribution AND their ordering unchanged (medians stay
+acetaminophen 4, hydrocodone-acetaminophen 6, oxycodone 6-7, hydromorphone 8).
+It therefore buys sample size, not a conclusion. Kept reachable as
+`--strict-prior`, and `n_linked_if_strictly_prior` goes into every run's
+provenance so the choice is auditable from the artifact alone.
+*Reverses if:* evidence appears that same-minute scores are post-dose
+reassessments rather than pre-dose ones — the median gap being exactly 0.0 min
+for all four drugs is consistent with paired charting but does not prove
+ordering within the minute.
+
+**3. This question is NOT causal, and the code says so in three places**
+(module docstring, figure footnote, run provenance). A score preceding a dose
+does not make it the reason for the dose: scheduled drugs are given on a clock
+whatever the assessment says, and an assessment is often charted precisely
+because a PRN dose was requested — the arrow can point either way and this
+table cannot separate them. Per CLAUDE.md the ordering it shows is a
+NOMINATION, not a finding.
+
+**Where it lives:** `src/ieeg_ehr/med_analysis/pain_link.py`,
+`src/ieeg_ehr/med_analysis/plot_pain_score_bars.py`,
+`sbatch/med_pain_coupling.sbatch`, `tests/test_med_pain_link.py` (15 tests),
+`config.pain_score_files()`, `config.MED_PAIN_QUESTION`.

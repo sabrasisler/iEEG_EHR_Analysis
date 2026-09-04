@@ -19,6 +19,7 @@ Layout:
 - `plot_hospital_day`  Fig 3: administration rate and dose across hospital days
 - `plot_coadmin_peth`  Fig 4: co-administration peri-event time histograms
 - `plot_pain_score_bars`  Fig 5: administrations by the preceding pain score
+- `plot_dose_distribution`  Fig 6: which doses were given, per drug and route
 
 Figures 1-4 live under the `administration_patterns` question; Fig 5 opens a
 second one, `pain_coupling` (config.MED_PAIN_QUESTION), because "was this dose

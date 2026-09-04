@@ -103,6 +103,7 @@ drug set is all analgesics, not opioids alone.
 | Question | Folder | What it asks |
 |---|---|---|
 | Administration patterns | `administration_patterns` | Descriptive characterization of analgesic administration across the ~96 subjects with a MAR export: which drugs carry enough data to analyze, when they are given (clock time, inter-dose interval), how administration rate and dose evolve across the hospitalization, and what they are co-prescribed with. Opened 2026-09-03. Purely descriptive — no neural data, no hypothesis test. Code: `src/ieeg_ehr/med_analysis/`. |
+| Pain coupling | `pain_coupling` | Where on the 0-10 charted pain scale each drug is actually used: administrations of the four most-administered analgesics binned by the pain score assessed in the 30 min before the dose. Opened 2026-09-03. A different question from the one above rather than another view of it — that one asks what was given, this asks what the chart said first. Still no neural data, still descriptive. Explicitly NOT causal: scheduled drugs are given on a clock whatever the assessment says, and an assessment is often charted precisely because a PRN dose was requested. Code: `med_analysis/pain_link.py` + `plot_pain_score_bars.py`. |
 
 Downstream, this is the descriptive groundwork for **Aim 3 (opioid modulation)**
 in Phase 3, and for `BG.6` (EHR/confound tables joined to epoch definitions) — the
