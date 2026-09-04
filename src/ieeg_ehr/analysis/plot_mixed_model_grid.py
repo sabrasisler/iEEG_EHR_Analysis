@@ -118,13 +118,20 @@ HET_NOTE_NONE = (
 
 
 def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
-                 het_vmax=None, het_pct=95.0, het_mode='raw'):
+                 het_vmax=None, het_pct=95.0, het_mode='raw',
+                 value_column='beta_nrs_within', value_label=None,
+                 reject_column='p_bh_reject'):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    beta = pivot(cells, 'beta_nrs_within', regions, bins)
-    sig = pivot(cells, 'p_bh_reject', regions, bins).fillna(False).astype(bool)
+    # `value_column` lets the same figure render the medication-interaction
+    # coefficient, which lives in a different column and has its own BH family.
+    # Sign consistency and heterogeneity are always about NRS_within, so they are
+    # NOT re-pointed -- they would be meaningless against an interaction term.
+    beta = pivot(cells, value_column, regions, bins)
+    sig = pivot(cells, reject_column, regions, bins).fillna(False).astype(bool)
+    value_label = value_label or 'pain fixed effect\nd log10 power per pain point'
     cons, cons_source = sign_consistency(run_dir, cells, blups, regions, bins)
 
     vmax = float(np.nanmax(np.abs(beta.to_numpy())))
@@ -138,8 +145,7 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     cons_span = max(cons_span, 0.05) if np.isfinite(cons_span) else 0.5
 
     heat = [
-        (beta, div, -vmax, vmax,
-         'pain fixed effect\nd log10 power per pain point', True),
+        (beta, div, -vmax, vmax, value_label, True),
         (beta.where(sig), div, -vmax, vmax,
          f'the same, BH-significant only\n({int(sig.to_numpy().sum())} cells, q=0.05)',
          False),
@@ -320,6 +326,14 @@ def main():
                     help='Percentile of the heterogeneity values to cap the colour '
                          'bar at (default 95). Raising it lets the extreme cells '
                          'back into the ramp at the cost of compressing the rest.')
+    ap.add_argument('--value-column', default='beta_nrs_within',
+                    help="Which coefficient to map. 'med_ix_beta' renders the "
+                         'medication x pain interaction.')
+    ap.add_argument('--reject-column', default='p_bh_reject',
+                    help='Which BH-rejection column outlines panel 1. Must match '
+                         "--value-column's own family, e.g. med_ix_bh_reject.")
+    ap.add_argument('--value-label', default=None,
+                    help='Title for panel 1 when mapping a non-default column.')
     ap.add_argument('--het-mode', choices=['raw', 'normalized', 'none'],
                     default='raw',
                     help="'raw' = between-subject slope SD, not comparable ACROSS "
@@ -353,7 +367,8 @@ def main():
 
     fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, map_path,
                  het_vmax=args.het_vmax, het_pct=args.het_pct,
-                 het_mode=args.het_mode)
+                 het_mode=args.het_mode, value_column=args.value_column,
+                 value_label=args.value_label, reject_column=args.reject_column)
     logger.info('wrote %s', map_path)
     fig_grid_spectra(cells, regions, bin_labels, spec_path)
     logger.info('wrote %s', spec_path)

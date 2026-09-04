@@ -96,6 +96,16 @@ logger = logging.getLogger(__name__)
 
 FORMULA = 'log10_power ~ NRS_within + NRS_submean'
 
+# The medication-stratification model. `med_state` is 0/1, so `NRS_within` is the
+# pain slope in the UNMEDICATED stratum and `NRS_within:med_state` is the
+# DIFFERENCE between strata -- which is the estimand. Fitting the two strata
+# separately gives two maps but no test that they differ; this gives the test, on
+# one cohort, with medication state varying within subject.
+FORMULA_MED_INTERACTION = 'log10_power ~ NRS_within * med_state + NRS_submean'
+
+#: The interaction term's name in patsy's output, for pulling it out of a fit.
+MED_INTERACTION_TERM = 'NRS_within:med_state'
+
 # The full model. Keys become the names in res.model.exog_vc.names.
 VC_FULL = {
     'subj_int': '1',
@@ -200,20 +210,26 @@ def cell_is_fittable(df, *, min_subjects=MIN_SUBJECTS, min_rows=MIN_ROWS):
 # FITTING
 # ============================================================================
 
-def fit_cell(df, vc=None, *, reml=True, start_params=None, method=None,
-             maxiter=200):
+def fit_cell(df, vc=None, *, formula=None, reml=True, start_params=None,
+             method=None, maxiter=200):
     """Fit one cell. Returns (results, captured_warning_messages).
 
     Raises CellFitError rather than returning junk, so the caller records a row
     with converged=False instead of a silently plausible number.
+
+    `formula` defaults to `FORMULA`. It is a parameter rather than a hardcode so
+    the medication-interaction model can reuse this function unchanged; note that
+    `lrt` refuses to compare two fits whose fixed-effects designs differ, so
+    varying it cannot silently invalidate a likelihood-ratio test.
     """
     import statsmodels.formula.api as smf
 
     vc = VC_FULL if vc is None else vc
+    formula = FORMULA if formula is None else formula
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
         try:
-            md = smf.mixedlm(FORMULA, data=df, groups=df['subject'],
+            md = smf.mixedlm(formula, data=df, groups=df['subject'],
                              re_formula='0', vc_formula=vc)
             kw = {'reml': reml, 'maxiter': maxiter}
             if start_params is not None:
@@ -285,16 +301,42 @@ def lrt(res_full, res_reduced):
 # EXTRACTION
 # ============================================================================
 
+def term_stats(res, term, prefix):
+    """{prefix_beta, prefix_se, prefix_z, prefix_p} for one fixed-effect term.
+
+    Returns NaNs rather than raising when the term is absent, so a caller can ask
+    for the interaction unconditionally and a stratified fit -- which has no such
+    term -- simply records blanks instead of needing a branch at every call site.
+    """
+    if term not in res.fe_params.index:
+        return {f'{prefix}_{k}': np.nan for k in ('beta', 'se', 'z', 'p')}
+    return {f'{prefix}_beta': float(res.fe_params[term]),
+            f'{prefix}_se': float(res.bse[term]),
+            f'{prefix}_z': float(res.tvalues[term]),
+            f'{prefix}_p': float(res.pvalues[term])}
+
+
 def cell_record(res, res_reduced, df, *, region, freq_bin_index, bin_low_hz,
                 bin_high_hz, fit_seconds, warnings_full=(), warnings_reduced=(),
-                tol=BOUNDARY_TOL):
-    """The flat per-cell row. Column names are the analysis's output schema."""
+                tol=BOUNDARY_TOL, extra_terms=()):
+    """The flat per-cell row. Column names are the analysis's output schema.
+
+    `extra_terms` is a sequence of (term, prefix) pairs for fixed effects beyond
+    the two this schema always carries -- the medication interaction being the
+    reason it exists. Absent terms come back as NaN columns, so one schema covers
+    a stratified fit and an interaction fit without either growing a special case.
+    """
     at_boundary, ratios = boundary_report(res, df, tol=tol)
     vc = vcomp_by_name(res)
     stat, p_lrt = lrt(res, res_reduced) if res_reduced is not None else (np.nan, np.nan)
     boundary_msg = 'boundary of the parameter space'
 
+    extra = {}
+    for term, prefix in extra_terms:
+        extra.update(term_stats(res, term, prefix))
+
     return {
+        **extra,
         'region': region,
         'freq_bin_index': int(freq_bin_index),
         'freq_bin_low': float(bin_low_hz),
