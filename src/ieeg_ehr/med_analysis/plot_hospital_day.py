@@ -148,10 +148,21 @@ def mean_sem_by_day(series, days):
     return pd.DataFrame(rows)
 
 
+def _panel_width(ncols):
+    """Narrower panels once the grid is wide, so the image stays openable.
+
+    Rows are the two measures, so this grid cannot wrap — every extra drug is
+    another column. At 4.6 in a seven-drug grid is 32 in / 6.4k px wide, which
+    is a file people scroll rather than read.
+    """
+    return 4.6 if ncols <= 4 else 3.6
+
+
 def plot_grid(rate_frames, dose_frames, drugs, out_path, days):
     ncols = len(drugs)
     fig, axes = plt.subplots(2, ncols, squeeze=False,
-                             figsize=(4.6 * ncols, 7.6), sharex='col')
+                             figsize=(_panel_width(ncols) * ncols, 7.6),
+                             sharex='col')
 
     for col, drug in enumerate(drugs):
         # --- top: administration rate -----------------------------------
@@ -210,7 +221,8 @@ def plot_subject_trajectories(dose_series, drugs, out_path, days):
     """One line per patient — the counterpart to the group mean."""
     ncols = len(drugs)
     fig, axes = plt.subplots(1, ncols, squeeze=False,
-                             figsize=(4.6 * ncols, 3.8), sharey=True)
+                             figsize=(_panel_width(ncols) * ncols, 3.8),
+                             sharey=True)
 
     for col, drug in enumerate(drugs):
         ax = axes[0][col]
@@ -254,8 +266,8 @@ def main():
     day_hours = recording_hours.subject_hours_by_day(coverage, admin)
 
     days = list(range(args.day_lo, args.day_hi + 1))
-    counts = admin['drug'].value_counts()
-    drugs = [d for d in counts.index if counts[d] >= args.min_admin][:args.max_drugs]
+    drugs = load.select_drugs(admin, drugs=args.drugs,
+                              min_admin=args.min_admin, limit=args.max_drugs)
     if not drugs:
         raise SystemExit(f'no drug reaches --min-admin={args.min_admin}')
 

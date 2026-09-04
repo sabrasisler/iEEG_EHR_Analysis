@@ -47,11 +47,23 @@ logger = logging.getLogger(__name__)
 OUTPUT_TYPE = 'pain_score_bars'
 SCRIPT = 'ieeg_ehr/med_analysis/plot_pain_score_bars.py'
 
-#: The four most-administered analgesics, in descending administration count
-#: (Fig 1's table: 643, 493, 216, 157). Fixed order so the bar within a group
-#: means the same drug in every group and across both panels.
+#: The analgesics with enough administrations to carry a distribution, in
+#: descending administration count (Fig 1's table: 643, 493, 216, 157, 94, 47,
+#: 39). Fixed order so a given bar position means the same drug in every group
+#: and across all three panels.
+#:
+#: Morphine (25 administrations, 9 linked, 2 subjects) and ibuprofen (2 and 2)
+#: are deliberately absent: at that size a distribution is two patients'
+#: habits, not a dosing pattern, and a violin of two identical points is not
+#: even estimable. Excluded by omission from this list so the omission is
+#: visible, rather than by a threshold that silently drops them.
 DEFAULT_DRUGS = ('ACETAMINOPHEN', 'HYDROCODONE-ACETAMINOPHEN', 'OXYCODONE',
-                 'HYDROMORPHONE')
+                 'HYDROMORPHONE', 'FENTANYL', 'KETOROLAC', 'TRAMADOL')
+
+#: A violin needs a distribution. Below this the KDE is either meaningless or,
+#: for a single repeated value, singular and raising — so such a drug is left
+#: out of 5c and named in its footnote, while 5a/5b still show its bars.
+MIN_VIOLIN_N = 5
 
 
 def plot_grouped_bars(counts, summary, out_path, *, normalize, window_minutes,
@@ -65,7 +77,9 @@ def plot_grouped_bars(counts, summary, out_path, *, normalize, window_minutes,
         totals = values.sum(axis=0).replace(0, np.nan)
         values = values.divide(totals, axis=1) * 100.0
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Wider as drugs are added: eleven score groups times N bars, so at seven
+    # drugs this is 77 bars and a 10-in frame makes each one a hairline.
+    fig, ax = plt.subplots(figsize=(min(10 + 1.1 * max(0, len(drugs) - 4), 16), 6))
 
     # Bars are placed side by side inside a 0.8-wide slot centred on the score,
     # leaving 0.2 of clear space between adjacent scores so the groups read as
@@ -102,7 +116,9 @@ def plot_grouped_bars(counts, summary, out_path, *, normalize, window_minutes,
                     loc='upper left')
     leg._legend_box.align = 'left'
 
-    fig.tight_layout()
+    # Reserve the bottom band: the footnote runs to two lines and would
+    # otherwise sit on top of the axis label.
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
     # The excluded count belongs ON the image: this panel is a subset of the
     # administrations, and a reader comparing its totals to Fig 1's needs to
     # know why they differ without going to the provenance file.
@@ -113,6 +129,17 @@ def plot_grouped_bars(counts, summary, out_path, *, normalize, window_minutes,
                   f'a same-minute score counts as prior\n'
                   f'NOT causal: an assessment is often charted because a dose '
                   f'was requested'))
+
+
+def violin_eligible(summary, min_n=MIN_VIOLIN_N):
+    """Drugs with enough linked administrations to estimate a density.
+
+    Kept as a plain function rather than inlined so the threshold is testable:
+    the failure it prevents is a raise from a singular KDE, which only shows up
+    with real data.
+    """
+    return [row.drug for row in summary.itertuples()
+            if getattr(row, 'n_linked', 0) >= min_n]
 
 
 def _drug_tick_label(drug, n):
@@ -126,13 +153,15 @@ def _drug_tick_label(drug, n):
 def plot_violin(linked, summary, out_path, *, window_minutes, n_subjects,
                 n_dropped, n_total):
     """One distribution per drug: x = drug, y = the score before the dose."""
-    drugs = [d for d in summary['drug'] if summary.loc[
-        summary['drug'] == d, 'n_linked'].iloc[0] > 0]
+    eligible = violin_eligible(summary)
+    omitted = [d for d in summary['drug'] if d not in eligible]
+    drugs = eligible
     colors = style.categorical_colors(drugs)
     data = [linked.loc[linked['drug'] == d, 'pain_score'].to_numpy(dtype=float)
             for d in drugs]
 
-    fig, ax = plt.subplots(figsize=(8.5, 6))
+    # ~1.9 in per violin, so seven drugs do not squeeze into a four-drug frame.
+    fig, ax = plt.subplots(figsize=(max(8.5, 1.9 * len(drugs)), 6))
 
     parts = ax.violinplot(data, positions=range(len(drugs)), widths=0.78,
                           showmedians=False, showextrema=False)
@@ -189,13 +218,17 @@ def plot_violin(linked, summary, out_path, *, window_minutes, n_subjects,
     # collide with the footnote.
     fig.tight_layout(rect=(0, 0.08, 1, 1))
 
+    omitted_note = (f'; {", ".join(d.title() for d in omitted)} omitted '
+                    f'(fewer than {MIN_VIOLIN_N} linked administrations — no '
+                    f'estimable density)' if omitted else '')
     return style.save(
         fig, out_path,
         footnote=(f'bar = median, vertical line = IQR, points = individual '
                   f'administrations (x-jittered only); scores are integers, so '
                   f'the violin outline is a KDE of discrete data\n'
                   f'{n_dropped} of {n_total} administrations excluded — no '
-                  f'assessment in the {window_minutes} min before the dose'))
+                  f'assessment in the {window_minutes} min before the dose'
+                  + omitted_note))
 
 
 def build_parser():
@@ -226,10 +259,14 @@ def main():
     io.warn_if_dirty()
 
     paths = config.med_admin_files()
-    admin = load.load_administrations(paths=paths)
-    admin = admin[admin['drug'].isin(set(args.drugs))].copy()
+    admin_all = load.load_administrations(paths=paths)
+    # Validated against the WHOLE corpus before filtering, so a misspelled drug
+    # raises here — with the available names — instead of quietly becoming a
+    # figure with one fewer panel than its caption claims.
+    requested = load.select_drugs(admin_all, drugs=args.drugs)
+    admin = admin_all[admin_all['drug'].isin(set(requested))].copy()
     if admin.empty:
-        raise SystemExit(f'no administrations for drugs {args.drugs}')
+        raise SystemExit(f'no administrations for drugs {requested}')
 
     scores = pain_link.load_pain_scores()
     linked, stats = pain_link.link_to_prior_score(
@@ -239,7 +276,12 @@ def main():
         raise SystemExit('no administration had a pain score in the window')
 
     # Plot the drugs in the order given, not the order pandas groups them in.
-    drugs = [d for d in args.drugs if d in set(linked['drug'])]
+    drugs = [d for d in requested if d in set(linked['drug'])]
+    lost = [d for d in requested if d not in set(linked['drug'])]
+    if lost:
+        logger.warning('%s: no administration had an assessment within %d min, '
+                       'so they are absent from these panels',
+                       ', '.join(lost), args.window_minutes)
     counts = pain_link.counts_by_score(linked, drugs)
     summary = pain_link.per_drug_summary(linked, drugs)
 

@@ -154,8 +154,8 @@ def plot_interdose(intervals, formulations, out_path):
         style.style_axes(ax)
         style.label_axes(
             ax, 'Inter-dose interval (hours)', 'Number of intervals',
-            f'{label}\nn={len(sub)} intervals from {n_subj} subjects with '
-            f'≥2 doses')
+            f'{label}\nn={len(sub)} intervals from {n_subj} '
+            f'subject{"" if n_subj == 1 else "s"} with ≥2 doses')
         if n_beyond:
             ax.text(0.98, 0.95, f'{n_beyond} interval(s) beyond {INTERVAL_MAX_H}h '
                                 'not shown',
@@ -183,14 +183,35 @@ def main():
     paths = config.med_admin_files()
     admin = load.load_administrations(paths=paths, subclasses=args.subclasses)
 
-    counts = admin['drug'].value_counts()
-    drugs = [d for d in counts.index if counts[d] >= args.min_admin][:args.max_panels]
+    drugs = load.select_drugs(admin, drugs=args.drugs,
+                              min_admin=args.min_admin, limit=args.max_panels)
     if not drugs:
         raise SystemExit(f'no drug reaches --min-admin={args.min_admin}')
 
     intervals = interval_table(admin)
-    formulations = load.top_formulations(admin, n=args.max_panels,
-                                         min_admin=args.min_admin)
+    # Fig 2b's rows are formulations, so they are drawn from the SELECTED drugs
+    # rather than from the whole corpus — otherwise naming a drug set would
+    # change the top row of panels and not the bottom, and the two halves of
+    # one figure would be about different drugs.
+    in_set = admin[admin['drug'].isin(set(drugs))]
+    formulations = load.top_formulations(
+        in_set, n=args.max_panels,
+        min_admin=1 if args.drugs else args.min_admin)
+
+    # A formulation can clear the administration threshold and still have NO
+    # inter-dose intervals, because an interval needs two doses of it inside one
+    # session — IV acetaminophen, 3 administrations spread across 3 subjects, is
+    # exactly that. Its panel would be empty axes titled "n=0 intervals", which
+    # reads as a broken figure rather than as a real absence. Drop those and
+    # log what went, since the drop is silent on the image.
+    has_intervals = set(zip(intervals['drug'], intervals['route']))
+    dropped = [label for drug, route, label in formulations
+               if (drug, route) not in has_intervals]
+    formulations = [f for f in formulations if (f[0], f[1]) in has_intervals]
+    if dropped:
+        logger.info('no inter-dose interval for %s — panel(s) omitted from '
+                    'fig2b (needs two doses of one formulation in a session)',
+                    ', '.join(dropped))
 
     run_dir = output.resolve_run_dir(args, OUTPUT_TYPE)
     parents = output.source_parents(paths)

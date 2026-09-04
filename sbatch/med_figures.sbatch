@@ -20,6 +20,11 @@
 #   sbatch sbatch/med_figures.sbatch
 #   SCRATCH_RUN=1 sbatch sbatch/med_figures.sbatch      # throwaway, to scratch/
 #   FIGURES="burden timing" sbatch sbatch/med_figures.sbatch
+#
+#   # the seven-drug analgesic set, held identical across every figure
+#   DRUGS="ACETAMINOPHEN HYDROCODONE-ACETAMINOPHEN OXYCODONE HYDROMORPHONE \
+#   FENTANYL KETOROLAC TRAMADOL" MAX_PANELS=12 \
+#       FIGURES="timing hospital" sbatch sbatch/med_figures.sbatch
 
 set -euo pipefail
 
@@ -40,7 +45,16 @@ DEST=${SCRATCH_RUN:+--scratch}
 
 COMMON=(--question "$QUESTION" --min-admin "$MIN_ADMIN")
 
+# Naming a drug set overrides --min-admin and each figure's panel cap, so the
+# SAME drugs appear in every figure of a submission rather than each one
+# re-deriving its own list from value_counts. Unquoted on purpose: this is a
+# word-split list of drug names.
+if [[ -n "${DRUGS:-}" ]]; then
+    COMMON+=(--drugs ${DRUGS})
+fi
+
 echo "=== analgesic med figures | question=$QUESTION | figures=$FIGURES ($(date)) ==="
+echo "=== drugs=${DRUGS:-<top by administrations, min ${MIN_ADMIN}>} ==="
 
 for fig in $FIGURES; do
     case "$fig" in

@@ -260,6 +260,38 @@ def drug_route_counts(df):
     return grouped.sort_values('n_admin', ascending=False).reset_index(drop=True)
 
 
+def select_drugs(df, drugs=None, min_admin=20, limit=None):
+    """Which drugs a figure should show. An EXPLICIT list always wins.
+
+    Every figure here used to pick its own drugs the same way — take the
+    value_counts, keep whatever clears `min_admin`, truncate to the panel
+    budget — which meant "the drugs in Fig 2" and "the drugs in Fig 3" were
+    two independently-derived sets that happened to agree, and comparing the
+    figures assumed an agreement nothing enforced. This is that rule in one
+    place, plus the ability to name the set outright.
+
+    With `drugs` given, `min_admin` and `limit` are DELIBERATELY ignored: the
+    point of naming a set is to get that set, and silently dropping a drug for
+    being small would make a figure that disagrees with its own caption. A
+    named drug absent from the data still raises, because that is a typo, not
+    a small sample. Callers that want a low-n drug excluded should leave it out
+    of the list — an exclusion the reader can see.
+    """
+    if drugs:
+        present = set(df['drug'])
+        missing = [d for d in drugs if d not in present]
+        if missing:
+            raise ValueError(
+                f'requested drug(s) not present in the administrations: '
+                f'{missing}. Check spelling against the MAR `drug` column; '
+                f'available: {sorted(present)}')
+        return list(drugs)
+
+    counts = df['drug'].value_counts()
+    chosen = [d for d in counts.index if counts[d] >= min_admin]
+    return chosen[:limit] if limit else chosen
+
+
 def top_formulations(df, n=5, min_admin=20):
     """The top n (drug, route) pairs with at least `min_admin` administrations.
 

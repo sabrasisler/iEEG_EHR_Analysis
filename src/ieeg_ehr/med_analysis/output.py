@@ -55,6 +55,13 @@ def add_cohort_arguments(parser):
     parser.add_argument('--min-admin', type=int, default=20,
                         help='drop drugs with fewer administrations than this from '
                              'the per-drug panels')
+    parser.add_argument('--drugs', nargs='+', default=None,
+                        help='name the drugs to show, as they appear in the MAR '
+                             '`drug` column. Overrides --min-admin and the '
+                             'per-figure panel cap, so the same set can be held '
+                             'fixed across figures; a name absent from the data '
+                             'is an error, not a silent drop. Default: the '
+                             'most-administered drugs clearing --min-admin.')
     return parser
 
 

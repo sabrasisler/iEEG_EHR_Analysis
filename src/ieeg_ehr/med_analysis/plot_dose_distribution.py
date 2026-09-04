@@ -47,9 +47,11 @@ logger = logging.getLogger(__name__)
 OUTPUT_TYPE = 'dose_distribution'
 SCRIPT = 'ieeg_ehr/med_analysis/plot_dose_distribution.py'
 
-#: Same four drugs, same order, as Fig 5 — descending administration count.
+#: Same drugs, same order, as Fig 5 — descending administration count. Morphine
+#: and ibuprofen are excluded there for having no estimable distribution, and
+#: are kept out here too so the two figures describe one drug set.
 DEFAULT_DRUGS = ('ACETAMINOPHEN', 'HYDROCODONE-ACETAMINOPHEN', 'OXYCODONE',
-                 'HYDROMORPHONE')
+                 'HYDROMORPHONE', 'FENTANYL', 'KETOROLAC', 'TRAMADOL')
 
 
 def dose_counts(admin_df, drugs):
@@ -101,7 +103,9 @@ def plot_panels(counts, out_path, drugs, n_subjects_total, n_missing_dose):
               .sort_values(ascending=False).index.tolist())
     colors = style.categorical_colors(routes)
 
-    ncols = 2
+    # Three across once there are more than four panels, so seven drugs are a
+    # 3x3 block rather than a four-row column.
+    ncols = 2 if len(drugs) <= 4 else 3
     nrows = int(np.ceil(len(drugs) / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(11, 4.1 * nrows))
     axes = np.atleast_1d(axes).ravel()
@@ -135,8 +139,13 @@ def plot_panels(counts, out_path, drugs, n_subjects_total, n_missing_dose):
         ax.set_ylim(0, bottom.max() * 1.16 if len(bottom) else 1)
 
         style.style_axes(ax, grid_axis='y')
+        # Titles are left-aligned, so a long name runs into the next panel's
+        # title rather than being clipped. Wrap at the hyphen instead.
+        name = drug.title()
+        if len(name) > 18 and '-' in name:
+            name = name.replace('-', '-\n', 1)
         style.label_axes(ax, f'Dose ({unit})', 'Administrations',
-                         f'{drug.title()}  (n={int(sub["n_admin"].sum())})')
+                         f'{name}  (n={int(sub["n_admin"].sum())})')
 
     for ax in axes[len(drugs):]:
         ax.set_visible(False)
@@ -182,12 +191,13 @@ def main():
     io.warn_if_dirty()
 
     paths = config.med_admin_files()
-    admin = load.load_administrations(paths=paths)
-    admin = admin[admin['drug'].isin(set(args.drugs))].copy()
+    admin_all = load.load_administrations(paths=paths)
+    # Validated against the whole corpus first, so a misspelling raises with
+    # the available names rather than silently dropping a panel.
+    drugs = load.select_drugs(admin_all, drugs=args.drugs)
+    admin = admin_all[admin_all['drug'].isin(set(drugs))].copy()
     if admin.empty:
-        raise SystemExit(f'no administrations for drugs {args.drugs}')
-
-    drugs = [d for d in args.drugs if d in set(admin['drug'])]
+        raise SystemExit(f'no administrations for drugs {drugs}')
     counts, n_missing_dose = dose_counts(admin, drugs)
     if counts.empty:
         raise SystemExit('no administration had a parseable dose')
