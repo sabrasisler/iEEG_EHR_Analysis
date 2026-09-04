@@ -532,3 +532,43 @@ NOMINATION, not a finding.
 `src/ieeg_ehr/med_analysis/plot_pain_score_bars.py`,
 `sbatch/med_pain_coupling.sbatch`, `tests/test_med_pain_link.py` (15 tests),
 `config.pain_score_files()`, `config.MED_PAIN_QUESTION`.
+
+---
+
+## 2026-09-04 — Attributing a dose to one assessment (Fig 7)
+
+**Each administration belongs to its NEAREST PRECEDING assessment.** Fig 7 asks
+the forward question — given an assessment, was an analgesic given within 30
+min — so two assessments inside one window could both claim the same dose and
+the percentages would stop being a partition. The rule chosen is provably
+equivalent to truncating each assessment's window at the next assessment
+("the dose whose closest earlier assessment is this one" and "a dose inside
+(t_i, min(t_i+30, t_i+1))" select the same rows), so nothing is double-counted.
+The cost is explicit and stated on the figure: an assessment followed five
+minutes later by another and then a dose reads as "no analgesic", because the
+dose answered the later assessment.
+
+Measured before choosing: only 7.8% of assessments have a neighbour inside 30
+min, median gap to the next assessment is 120 min, and `--exclude-clustered`
+(dropping those assessments outright) moves the overall responded share 24.7% →
+24.2%, with per-score deltas under 2 points except score 10, which moves 9
+points on n=57 → 45. The rule does not drive the result.
+*Reverses if:* a finer-grained charting timestamp appears, making within-minute
+ordering recoverable.
+
+**Observability comes from the MAR export EXISTING, not from it containing
+analgesic rows.** Three of the four sessions with no analgesic rows do have an
+export; those assessments are genuine "no analgesic given" and belong in the
+denominator. Only 1 assessment is truly unobservable. Assessments whose window
+runs past `session_end` are dropped as right-censored (22, 0.5%) — absence
+there is unearned rather than false.
+
+**"No analgesic" is computed against EVERY analgesic**, not the seven coloured
+drugs, with the remainder pooled as "Other analgesic"; otherwise a morphine dose
+would read as nothing having happened. "Two analgesics" is its own segment
+because 4.8% of responded-to assessments have two distinct drugs and a stacked
+bar has to assign each assessment exactly one segment for the bar to mean 100%.
+
+**Where it lives:** `pain_link.session_bounds`,
+`pain_link.response_by_assessment`, `plot_pain_score_response.py`,
+`tests/test_med_pain_response.py` (12 tests).
