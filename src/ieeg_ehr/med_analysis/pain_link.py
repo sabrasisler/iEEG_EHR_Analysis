@@ -173,6 +173,116 @@ def link_to_prior_score(admin_df, scores_df, window_minutes=WINDOW_MINUTES,
     return linked, stats
 
 
+def session_bounds(admin_df):
+    """(subject, session) -> session_start / session_end, from the MAR export.
+
+    Doubles as the OBSERVABILITY index. An assessment can only be scored for
+    "was a drug given after it" in a session that has a MAR export at all;
+    without one, "no drug" is unobserved rather than false. Note this must come
+    from the export EXISTING, not from it containing analgesic rows — three of
+    the four sessions with no analgesic rows do have an export, and those are
+    genuine "no analgesic given", not missing data.
+    """
+    return (admin_df.groupby(['subject', 'session'])
+            [['session_start', 'session_end']].first())
+
+
+def response_by_assessment(scores_df, analgesic_admin, bounds,
+                           window_minutes=WINDOW_MINUTES,
+                           exclude_clustered=False):
+    """One row per observable assessment: which analgesics followed it.
+
+    The mirror of `link_to_prior_score`. That one asks, of a dose, what the
+    score was before it; this asks, of an assessment, whether a dose followed.
+    Both are built on the SAME pairing so the two figures cannot disagree.
+
+    THE ATTRIBUTION RULE, and why it settles the two-assessments-in-30-minutes
+    problem. Each administration is attributed to its NEAREST PRECEDING
+    assessment. That is identical to truncating each assessment's window at the
+    next assessment — "the dose whose closest earlier assessment is this one"
+    and "a dose inside (t_i, min(t_i + window, t_i+1))" select the same rows —
+    so no dose is ever counted for two assessments and the percentages are a
+    real partition. The cost is explicit: an assessment followed five minutes
+    later by another assessment and then a dose reads as "no analgesic", on the
+    grounds that the dose answered the LATER assessment. Measured on this
+    corpus only 7.8% of assessments have another within 30 min (median gap to
+    the next is 120 min), so the rule rarely bites; `exclude_clustered` drops
+    those assessments entirely as a sensitivity check.
+
+    Two exclusions, both because absence would otherwise be unearned:
+    assessments in sessions with no MAR export (unobservable), and assessments
+    whose window runs past `session_end` (right-censored — 0.5% here).
+
+    Returns `(per_assessment, stats)`. `per_assessment` carries `drugs` (a
+    sorted tuple, empty for none), `n_drugs`, `clustered` and
+    `next_gap_minutes`; turning that into plot categories is the figure's job,
+    not this function's.
+    """
+    n_input = len(scores_df)
+
+    observable = scores_df.set_index(['subject', 'session']).index.isin(bounds.index)
+    s = (scores_df[observable].set_index(['subject', 'session'])
+         .join(bounds).reset_index())
+    n_unobservable = n_input - len(s)
+
+    s = s.sort_values(['subject', 'session', 'score_dt']).reset_index(drop=True)
+    s['next_gap_minutes'] = (s.groupby(['subject', 'session'])['score_dt']
+                             .shift(-1).sub(s['score_dt'])
+                             .dt.total_seconds() / 60.0)
+    s['clustered'] = s['next_gap_minutes'] <= window_minutes
+
+    to_end = (s['session_end'] - s['score_dt']).dt.total_seconds() / 60.0
+    censored = to_end < window_minutes
+    n_censored = int(censored.sum())
+    s = s[~censored].copy()
+
+    n_clustered = int(s['clustered'].sum())
+    if exclude_clustered:
+        s = s[~s['clustered']].copy()
+
+    linked, link_stats = link_to_prior_score(
+        analgesic_admin, scores_df, window_minutes=window_minutes,
+        allow_exact=True)
+    grouped = (linked.groupby(['subject', 'session', 'score_dt'])['drug']
+               .agg(drugs=lambda col: tuple(sorted(set(col))),
+                    n_administrations='size')
+               .reset_index())
+
+    per = s.merge(grouped, on=['subject', 'session', 'score_dt'], how='left')
+    per['drugs'] = per['drugs'].apply(
+        lambda v: v if isinstance(v, tuple) else ())
+    per['n_drugs'] = per['drugs'].apply(len)
+    per['n_administrations'] = per['n_administrations'].fillna(0).astype(int)
+
+    n_with_any = int((per['n_drugs'] > 0).sum())
+    stats = {
+        'window_minutes': window_minutes,
+        'exclude_clustered': bool(exclude_clustered),
+        'n_assessments_input': int(n_input),
+        'n_dropped_session_has_no_mar': int(n_unobservable),
+        'n_dropped_right_censored': n_censored,
+        'n_clustered_within_window': n_clustered,
+        'n_assessments_scored': int(len(per)),
+        'n_with_any_analgesic': n_with_any,
+        'frac_with_any_analgesic': (round(n_with_any / len(per), 4)
+                                    if len(per) else None),
+        'n_with_multiple_drugs': int((per['n_drugs'] > 1).sum()),
+        'n_analgesic_administrations_linked': link_stats['n_linked'],
+        'n_linked_admin_on_dropped_assessment': int(
+            len(grouped) - (per['n_drugs'] > 0).sum()),
+        'attribution': ('each administration attributed to its nearest '
+                        'preceding assessment, equivalent to truncating each '
+                        'assessment window at the next assessment; no dose is '
+                        'counted twice'),
+    }
+    logger.info('%d/%d observable assessments followed by an analgesic within '
+                '%d min (%.1f%%); dropped %d unobservable + %d censored',
+                n_with_any, len(per), window_minutes,
+                100 * n_with_any / len(per) if len(per) else 0,
+                n_unobservable, n_censored)
+    return per, stats
+
+
 def counts_by_score(linked, drugs):
     """pain_score x drug administration counts on the FULL 0-10 scale.
 

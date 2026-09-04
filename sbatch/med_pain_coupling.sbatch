@@ -23,6 +23,7 @@
 #   SCRATCH_RUN=1 sbatch sbatch/med_pain_coupling.sbatch    # throwaway
 #   WINDOW=60 sbatch sbatch/med_pain_coupling.sbatch        # wider window
 #   STRICT=1 sbatch sbatch/med_pain_coupling.sbatch         # drop same-minute scores
+#   NOCLUST=1 sbatch sbatch/med_pain_coupling.sbatch        # Fig 7 sensitivity: drop clustered assessments
 
 set -euo pipefail
 
@@ -36,10 +37,17 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 WINDOW=${WINDOW:-30}
 DEST=${SCRATCH_RUN:+--scratch}
 STRICT_FLAG=${STRICT:+--strict-prior}
+NOCLUST_FLAG=${NOCLUST:+--exclude-clustered}
 
 echo "=== analgesic dosing vs preceding pain score | window=${WINDOW}min ($(date)) ==="
 
+# Fig 5: given a dose, what was the score before it.
 python -m ieeg_ehr.med_analysis.plot_pain_score_bars \
     --window-minutes "$WINDOW" ${STRICT_FLAG} ${DEST}
+
+# Fig 7: the mirror -- given an assessment, was a dose given after it. Same
+# window and the same underlying pairing, so the two cannot disagree.
+python -m ieeg_ehr.med_analysis.plot_pain_score_response \
+    --window-minutes "$WINDOW" ${NOCLUST_FLAG} ${DEST}
 
 echo "=== done ($(date)) ==="

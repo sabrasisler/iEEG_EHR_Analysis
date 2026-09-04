@@ -20,6 +20,8 @@ Layout:
 - `plot_coadmin_peth`  Fig 4: co-administration peri-event time histograms
 - `plot_pain_score_bars`  Fig 5: administrations by the preceding pain score
 - `plot_dose_distribution`  Fig 6: which doses were given, per drug and route
+- `plot_pain_score_response`  Fig 7: the mirror of Fig 5 -- given an assessment,
+  was a drug given in the next 30 min, and which
 
 Figures 1-4 live under the `administration_patterns` question; Fig 5 opens a
 second one, `pain_coupling` (config.MED_PAIN_QUESTION), because "was this dose
