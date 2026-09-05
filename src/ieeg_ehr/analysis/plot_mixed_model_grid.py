@@ -256,6 +256,112 @@ def _cons_cmap(plt):
     return cm
 
 
+def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
+    """The interaction model's two coefficients, and what they imply together.
+
+    The medication interaction model estimates TWO things per cell, and showing
+    only the second -- as `--value-column med_ix_beta` does -- leaves a reader
+    unable to tell a slope that reversed from one that merely got steeper:
+
+        beta_nrs_within   the pain slope when UNMEDICATED
+        med_ix_beta       how much that slope CHANGES when medicated
+
+    So this draws the baseline, the change, and their sum (the implied medicated
+    slope) on ONE shared symmetric scale. Sharing the scale is the point -- a
+    change of +0.01 against a baseline of -0.002 is a sign reversal, and against
+    a baseline of +0.02 it is a 50% increase, and those look identical if each
+    panel is normalised to its own range.
+
+    Panel 3 is DERIVED, not fitted: it is the model's implied slope at
+    med_state=1, so it carries no separate significance and gets no outline.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    base = pivot(cells, 'beta_nrs_within', regions, bins)
+    delta = pivot(cells, 'med_ix_beta', regions, bins)
+    implied = base + delta
+    sig_base = pivot(cells, 'p_bh_reject', regions, bins).fillna(False).astype(bool)
+    sig_ix = pivot(cells, 'med_ix_bh_reject', regions, bins).fillna(False).astype(bool)
+
+    vmax = float(np.nanmax(np.abs(np.concatenate(
+        [base.to_numpy(dtype=float).ravel(), delta.to_numpy(dtype=float).ravel(),
+         implied.to_numpy(dtype=float).ravel()]))))
+    cmap = plt.get_cmap('RdBu_r').copy()
+    cmap.set_bad('0.85')
+
+    panels = [
+        (base, 'pain slope when UNMEDICATED\n(beta_NRS_within)', sig_base),
+        (delta, f'CHANGE when medicated\n(interaction; {int(sig_ix.to_numpy().sum())} '
+                'cells BH-significant)', sig_ix),
+        (implied, 'implied slope when MEDICATED\n(baseline + change; derived)', None),
+        (delta.where(sig_ix), 'the change, BH-significant only', None),
+    ]
+
+    n_heat = len(panels)
+    fig, axes = plt.subplots(
+        1, n_heat + 2, figsize=(5.8 * n_heat + 3.6, 0.42 * len(regions) + 3.6),
+        gridspec_kw={'width_ratios': [1] * n_heat + [0.34, 0.34]})
+
+    for i, (mat, title, outline) in enumerate(panels):
+        ax = axes[i]
+        im = ax.imshow(mat.to_numpy(dtype=float), aspect='auto', cmap=cmap,
+                       vmin=-vmax, vmax=vmax, interpolation='nearest')
+        if outline is not None:
+            common.draw_mask_outline(ax, outline.to_numpy())
+        ax.set_title(title, fontsize=10)
+        ax.set_xticks(range(len(bins)))
+        ax.set_xticklabels([f'{bin_labels.loc[b, "bin_low_hz"]:.0f}' for b in bins],
+                           fontsize=6, rotation=90)
+        ax.set_yticks(range(len(regions)))
+        ax.set_yticklabels(regions if i == 0 else [], fontsize=8)
+        ax.set_xlabel('frequency bin, low edge (Hz)', fontsize=8)
+        common.add_band_boundary_lines(ax, bin_labels.loc[bins])
+        fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02).ax.tick_params(labelsize=7)
+
+    for ax, col, label, colour in ((axes[n_heat], 'n_subjects', 'subjects', '0.55'),
+                                   (axes[n_heat + 1], 'n_channels', 'electrodes',
+                                    '#4a7ba7')):
+        per_region = pivot(cells, col, regions, bins).max(axis=1)
+        ax.barh(range(len(regions)), per_region.to_numpy(), color=colour)
+        ax.set_yticks(range(len(regions)))
+        ax.set_yticklabels([])
+        ax.set_ylim(len(regions) - 0.5, -0.5)
+        ax.set_title(f'n {label}\nper region', fontsize=10)
+        ax.set_xlabel(f'n {label}', fontsize=8)
+        ax.tick_params(labelsize=7)
+        vals = per_region.to_numpy()
+        span = np.nanmax(vals) if np.isfinite(np.nanmax(vals)) else 1.0
+        for j, v in enumerate(vals):
+            if np.isfinite(v):
+                ax.text(v + 0.02 * span, j, f'{int(v)}', va='center', fontsize=6.2,
+                        color='0.3')
+
+    fig.suptitle('Medication x pain interaction: baseline slope, its change, and '
+                 'the implied medicated slope', fontsize=13)
+    fig.tight_layout(rect=(0, 0.075, 1, 0.945))
+    fig.text(0.01, 0.005,
+             'ALL THREE COEFFICIENT PANELS SHARE ONE SCALE, so a change can be read '
+             'against the baseline it modifies: same-colour panels 1 and 2 mean the '
+             'effect strengthens, opposite colours mean it weakens or reverses. '
+             'Panel 3 is arithmetic (baseline + change), not a separate fit, so it '
+             'carries no significance of its own. Outlines are BH at q=0.05 within '
+             'this model -- panel 1 against its own family, panel 2 against the '
+             'interaction family.\n'
+             'CAUTION ON MAGNITUDE. `med_ix_beta` correlates 0.84 with the '
+             'difference between the separately-fitted stratified slopes but runs '
+             'up to ~2x larger in the biggest cells, and some cells significant '
+             'here are significant in NEITHER stratified map. Medication state and '
+             'NRS_within are correlated within subject -- patients are medicated '
+             'BECAUSE they are in pain -- so this term is not estimated on an '
+             'orthogonal design. Treat it as where to look, not as a count of real '
+             'differences.\n' + DISCLAIMER,
+             fontsize=7, va='bottom', ha='left', color='0.35', wrap=True)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def _seq_cmap(plt):
     cm = plt.get_cmap('viridis').copy()
     cm.set_bad('0.85')
@@ -326,6 +432,10 @@ def main():
                     help='Percentile of the heterogeneity values to cap the colour '
                          'bar at (default 95). Raising it lets the extreme cells '
                          'back into the ramp at the cost of compressing the rest.')
+    ap.add_argument('--interaction', action='store_true',
+                    help='Draw the medication-interaction figure instead: baseline '
+                         'slope, its change when medicated, and their sum, on one '
+                         'shared scale. Requires a run with med_ix_* columns.')
     ap.add_argument('--value-column', default='beta_nrs_within',
                     help="Which coefficient to map. 'med_ix_beta' renders the "
                          'medication x pain interaction.')
@@ -360,6 +470,17 @@ def main():
                                    'freq_bin_high': 'bin_high_hz'})
                   .sort_index())
     logger.info('%d cells | %d regions | %d bins', len(cells), len(regions), len(bins))
+
+    if args.interaction:
+        if 'med_ix_beta' not in cells.columns:
+            raise SystemExit(f'{run_dir}/grid_cells.parquet has no med_ix_beta; '
+                             'this is not an interaction run')
+        out = run_dir / f'fig_interaction_map{args.suffix}.png'
+        fig_interaction_map(cells, regions, bins, bin_labels, out)
+        logger.info('wrote %s', out)
+        io.log_analysis('medication interaction map: baseline slope, its change, '
+                        'and the implied medicated slope (EXPLORATORY)', run_dir)
+        return
 
     blups = io.read_table(run_dir / 'grid_blups.parquet', on_stale='warn')
     map_path = run_dir / f'fig_grid_map{args.suffix}.png'
