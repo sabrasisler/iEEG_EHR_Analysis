@@ -120,13 +120,21 @@ def _series(stats, region, pain_bin, freq_bins, line_noise_bins, spread):
 
 def plot_grid(stats, regions, region_n, panels, bin_labels, line_noise_bins,
               title, out_path, value_label, spread='sem', ncols=4, share_y=True,
-              zero_line=True):
+              zero_line=True, colors=None, legend_title=None):
     """One panel per region; one line per pain bin; optional +-spread ribbon.
 
     `zero_line` draws the 0-pain reference at y=0. It must be OFF for an
     un-normalized view: raw log power sits near -10, so forcing 0 into the y-limits
     would compress every curve into a flat line at the top of the panel.
+
+    `colors` maps each series name to a colour, defaulting to the pain-level palette.
+    Generalized so this one function also draws series that are NOT pain levels --
+    plot_pain_coef_spectra.py draws a single regression-coefficient line through it.
+    Duplicating the grid instead would let two spectra figures drift apart in axis
+    ticks, line-noise masking and isolated-point handling, which is exactly the
+    class of divergence view_tables exists to prevent.
     """
+    colors = colors or config.PAIN_BIN_COLORS
     freq_bins = bin_labels.index.tolist()
     x_hz = bin_labels['bin_low_hz'].to_numpy(dtype=float)
 
@@ -148,7 +156,7 @@ def plot_grid(stats, regions, region_n, panels, bin_labels, line_noise_bins,
         for pain_bin in panels:
             mean, lo, hi = _series(stats, region, pain_bin, freq_bins,
                                    line_noise_bins, spread)
-            color = config.PAIN_BIN_COLORS[pain_bin]
+            color = colors[pain_bin]
             if spread:
                 ax.fill_between(x_hz, lo, hi, color=color, alpha=0.22,
                                 linewidth=0, zorder=2)
@@ -200,7 +208,8 @@ def plot_grid(stats, regions, region_n, panels, bin_labels, line_noise_bins,
                    'sd': ' (shaded: +-SD across subjects)'}.get(spread, '')
     fig.legend(handles, labels, loc='lower center', ncol=len(panels) + 1,
                frameon=False, fontsize=9,
-               title=f'Pain level{spread_note}', title_fontsize=8)
+               title=f'{legend_title or "Pain level"}{spread_note}',
+               title_fontsize=8)
     fig.suptitle(title, fontsize=12)
     fig.tight_layout(rect=(0, 0.045, 1, 0.97))
 

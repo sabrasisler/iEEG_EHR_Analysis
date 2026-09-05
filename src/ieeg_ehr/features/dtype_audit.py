@@ -11,9 +11,9 @@ Answers the three questions PLANNING.md P0.6 asks, as four legs:
   B. ROUND-TRIP  Does a float32 array survive write->read bit-exactly, in HDF5
                  (what bipolar_fft uses today) and Parquet (what the P1.1 cache
                  will use)?
-  C. ACCUMULATE  Averaging a real 5-minute epoch of stored float32 values: how
-                 far does a float32 accumulator drift from a float64 one? This
-                 is a question about the VIEW layer, not about storage.
+  C. ACCUMULATE  Averaging an epoch's worth (~5 min) of stored float32 values:
+                 how far does a float32 accumulator drift from a float64 one?
+                 This is a question about the VIEW layer, not about storage.
   D. RECOMPUTE   The headline test. Recompute one run's PSD in float64 all the
                  way through, and compare its epoch averages against the
                  production float32 path's. This is the actual cost of the
@@ -22,9 +22,9 @@ Answers the three questions PLANNING.md P0.6 asks, as four legs:
 WHAT IS AND ISN'T UNDER TEST. Leg D holds the bipolar time series fixed at
 float32 and varies ONLY the dtype of the log-power output. That is deliberate:
 the float32 voltage cast in `io/nwb.py` is a separate, earlier decision, and
-leg A reports the raw dtype so you can see whether that cast is itself lossless
-(it is, for integer raw data of <=24 bits). P0.6 is about the CACHE dtype, so
-the cache dtype is the only thing that moves.
+leg A reports the raw dtype AND probes that cast empirically (the raw series
+turns out to be float64, so the dtype alone settles nothing). P0.6 is about the
+CACHE dtype, so the cache dtype is the only thing that moves.
 
 WHY REPORT SIG FIGS *AND* LINEAR-DOMAIN ERROR. The stored quantity is
 log10(V^2/Hz), so a relative error on it is not the physically interesting
@@ -62,16 +62,6 @@ from ieeg_ehr.io import nwb as io_utils
 from ieeg_ehr.io.analysis_log import log_analysis
 from ieeg_ehr.io.provenance import git_provenance, run_timestamp, warn_if_dirty
 from ieeg_ehr.preprocessing import bipolar_reref
-
-# Production epoch selection, reused rather than reimplemented so leg C measures
-# the epochs the pipeline actually builds. Private names, same package.
-from ieeg_ehr.features.build_pain_epoch_power import (
-    _excluded_mask,
-    _find_matching_run,
-    _load_run_psd,
-    load_mask,
-    load_pain_scores,
-)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -464,72 +454,14 @@ def leg_b_round_trip(sample_log_power, tmp_dir):
 
 
 # ============================================================================
-# LEG C — float32 vs float64 accumulator when averaging a real epoch
+# LEG C — float32 vs float64 accumulator when averaging an epoch's worth of windows
 # ============================================================================
 
-def _leg_c_one_run(subject, session, run, run_data, pain_df, mask_df,
-                    epoch_minutes, max_excluded_frac, rows):
-    """Compare accumulators over every epoch that falls wholly inside one run.
-
-    Returns how many epochs were processed. Passing a single-run list to
-    `_find_matching_run` keeps production's matching logic verbatim while
-    naturally skipping the 'boundary' and 'no_match' cases, which production
-    drops anyway.
-    """
-    n_epochs = 0
-    for _, pain_row in pain_df.iterrows():
-        if pain_row['pain_bin'] is None:
-            continue
-        pain_time = pain_row['date']
-        window_start = pain_time - pd.Timedelta(minutes=epoch_minutes)
-        status, matched = _find_matching_run(pain_time, window_start, [run_data])
-        if status != 'match':
-            continue
-        dts = matched['run_datetimes']
-        epoch_rows = np.where((dts >= window_start) & (dts < pain_time))[0]
-        if len(epoch_rows) == 0:
-            continue
-
-        excluded = _excluded_mask(matched, matched['run_id_full'], epoch_rows, mask_df)
-        epoch_lp = matched['log_power'][epoch_rows]
-        n_epoch_rows = epoch_lp.shape[0]
-        n_epochs += 1
-
-        for pair_i, channel in enumerate(matched['channel_names']):
-            row_excluded = excluded[:, pair_i]
-            n_kept = int((~row_excluded).sum())
-            if 1.0 - (n_kept / n_epoch_rows) > max_excluded_frac:
-                continue
-            kept = epoch_lp[~row_excluded, pair_i, :]
-            if not np.all(np.isfinite(kept)):
-                continue    # production drops these channel-epochs too
-
-            mean64 = kept.astype(np.float64).mean(axis=0)
-            mean32_default = kept.mean(axis=0)                    # numpy default
-            mean32_forced = kept.mean(axis=0, dtype=np.float32)   # naive accumulator
-
-            for arm, mean_test in (('numpy_default_float32', mean32_default),
-                                    ('forced_float32_accumulator', mean32_forced)):
-                abs_err = np.abs(mean_test.astype(np.float64) - mean64)
-                rel_err = abs_err / np.maximum(np.abs(mean64), np.finfo(np.float64).tiny)
-                rows.append({
-                    'subject': subject, 'session': session, 'run': run,
-                    'pain_event_id': int(pain_row['pain_event_id']),
-                    'channel': channel, 'arm': arm,
-                    'n_windows_averaged': n_kept,
-                    'max_abs_error': float(abs_err.max()),
-                    'max_rel_error': float(rel_err.max()),
-                    'min_sig_figs': _sig_figs(float(rel_err.max())),
-                })
-    return n_epochs
-
-
-def leg_c_accumulation(subjects, mask_label, epoch_minutes, max_excluded_frac,
-                        max_sessions_per_subject, max_runs, max_channel_epochs):
-    """Average real 5-minute channel-epochs three ways and compare.
+def leg_c_accumulation(subjects, epoch_minutes, max_runs, max_channel_epochs):
+    """Average an epoch's worth of stored windows three ways and compare.
 
     Reference is a float64 accumulator over the stored float32 values, which is
-    exact to ~1e-16 and so isolates accumulator error from storage error (leg D
+    exact to ~1e-16 and so isolates ACCUMULATOR error from STORAGE error (leg D
     covers storage). The two test arms are numpy's default for float32 input
     (float32 accumulator, pairwise summation) and a forced-float32 accumulator.
 
@@ -537,51 +469,69 @@ def leg_c_accumulation(subjects, mask_label, epoch_minutes, max_excluded_frac,
     before it averages, which is free to do and independent of what the cache
     stores.
 
-    Runs are loaded ONE AT A TIME and freed, unlike build_pain_epoch_power which
-    holds a whole session in memory: a session here can be 80+ runs (~15 GB of
-    log-power), and this leg needs a sample of epochs, not all of them. Both
-    caps are logged when they bite, so a truncated sample never reads as a
-    complete one.
+    SCOPE, stated because it is a deliberate narrowing: windows are taken as
+    CONTIGUOUS BLOCKS of the epoch length, not by matching real pain events and
+    applying the QC mask. Accumulator error is a function of how many terms are
+    summed and how large they are -- not of which windows were selected -- and
+    these are real stored values at real magnitudes in real block sizes, so the
+    measurement is unaffected. The upside is that this leg does not depend on the
+    epoch-selection internals of `build_pain_epoch_power`, which is being
+    rewritten for P1.1; an earlier version borrowed its private helpers and broke
+    when they moved.
     """
-    logger.info('LEG C: epoch-average accumulator dtype, on real epochs')
-    rows = []
-    n_epochs_seen = 0
-    truncated = []
+    logger.info('LEG C: epoch-average accumulator dtype')
+    hop_sec = config.PSD_WINDOW_SEC * (1.0 - config.PSD_OVERLAP_FRAC)
+    windows_per_block = max(1, int(round(epoch_minutes * 60.0 / hop_sec)))
+    rows, truncated = [], []
+    n_blocks_seen = 0
 
     for subject in subjects:
-        sessions = sorted({s for s, _r, _p in io_utils.get_session_runs(subject)})
-        if len(sessions) > max_sessions_per_subject:
-            truncated.append(f'sub-{subject}: {len(sessions)} sessions, used '
-                             f'{max_sessions_per_subject}')
-        for session in sessions[:max_sessions_per_subject]:
-            pain_df = load_pain_scores(subject, session)
-            if pain_df is None or pain_df.empty:
-                logger.info('  sub-%s ses-%s: no pain scores, skipping', subject, session)
+        available = _psd_nwb_paths(subject, max_runs)
+        if not available:
+            logger.warning('  sub-%s: no PSD runs available', subject)
+            continue
+        for session, run, path in available:
+            with h5py.File(str(path), 'r') as fh:
+                log_power = fh[PSD_DATA_H5][:]        # (n_time, n_pairs, n_bins)
+            n_time, n_pairs, _n_bins = log_power.shape
+            n_blocks = n_time // windows_per_block
+            if n_blocks == 0:
+                del log_power
                 continue
-            mask_df = load_mask(subject, session, mask_label)
 
-            available = [(run, config.bipolar_psd_nwb_path(subject, session, run))
-                         for _s, run, _raw in io_utils.get_session_runs(subject, session)]
-            available = [(run, p) for run, p in available if p.exists()]
-            if not available:
-                logger.warning('  sub-%s ses-%s: no usable PSD runs', subject, session)
-                continue
-            if len(available) > max_runs:
-                truncated.append(f'sub-{subject} ses-{session}: {len(available)} PSD runs, '
-                                 f'used {max_runs}')
+            for b in range(n_blocks):
+                block = log_power[b * windows_per_block:(b + 1) * windows_per_block]
+                n_blocks_seen += 1
+                for pair_i in range(n_pairs):
+                    kept = block[:, pair_i, :]
+                    # Production drops a channel-epoch on any non-finite value
+                    # (a dead channel's log10(0) = -inf), so those carry no
+                    # dtype information; skip them the same way.
+                    if not np.all(np.isfinite(kept)):
+                        continue
 
-            for run, path in available[:max_runs]:
-                run_data = _load_run_psd(path)
-                run_data['run'] = run
-                run_data['run_id_full'] = f'run-{run}'
-                n_epochs_seen += _leg_c_one_run(
-                    subject, session, run, run_data, pain_df, mask_df,
-                    epoch_minutes, max_excluded_frac, rows)
-                del run_data
-                if len(rows) >= 2 * max_channel_epochs:      # two arms per channel-epoch
-                    truncated.append(f'sub-{subject} ses-{session}: hit the '
-                                     f'{max_channel_epochs} channel-epoch cap, stopped early')
+                    mean64 = kept.astype(np.float64).mean(axis=0)
+                    mean32_default = kept.mean(axis=0)                    # numpy default
+                    mean32_forced = kept.mean(axis=0, dtype=np.float32)   # naive accumulator
+
+                    for arm, mean_test in (('numpy_default_float32', mean32_default),
+                                            ('forced_float32_accumulator', mean32_forced)):
+                        abs_err = np.abs(mean_test.astype(np.float64) - mean64)
+                        rel_err = abs_err / np.maximum(np.abs(mean64),
+                                                        np.finfo(np.float64).tiny)
+                        rows.append({
+                            'subject': subject, 'session': session, 'run': run,
+                            'block_idx': b, 'channel_idx': pair_i, 'arm': arm,
+                            'n_windows_averaged': int(kept.shape[0]),
+                            'max_abs_error': float(abs_err.max()),
+                            'max_rel_error': float(rel_err.max()),
+                            'min_sig_figs': _sig_figs(float(rel_err.max())),
+                        })
+                if len(rows) >= 2 * max_channel_epochs:    # two arms per channel-block
+                    truncated.append(f'sub-{subject} ses-{session} run-{run}: hit the '
+                                     f'{max_channel_epochs} channel-block cap, stopped early')
                     break
+            del log_power
             if len(rows) >= 2 * max_channel_epochs:
                 break
         if len(rows) >= 2 * max_channel_epochs:
@@ -591,16 +541,16 @@ def leg_c_accumulation(subjects, mask_label, epoch_minutes, max_excluded_frac,
         logger.info('  coverage note — %s', note)
 
     if not rows:
-        return {'n_channel_epochs': 0, 'n_epochs_seen': n_epochs_seen,
+        return {'n_channel_epochs': 0, 'n_blocks_seen': n_blocks_seen,
                 'coverage_notes': truncated,
-                'note': 'no surviving channel-epochs found in the sampled subjects'}
+                'note': 'no fully finite channel-blocks found in the sampled subjects'}
 
     df = pd.DataFrame(rows)
-    summary = {'n_epochs_seen': n_epochs_seen,
+    summary = {'n_blocks_seen': n_blocks_seen,
                'n_channel_epoch_comparisons': int(len(df)),
                'n_subjects': int(df['subject'].nunique()),
-               'windows_per_epoch_median': float(df['n_windows_averaged'].median()),
-               'windows_per_epoch_max': int(df['n_windows_averaged'].max()),
+               'windows_per_block': windows_per_block,
+               'window_selection': 'contiguous blocks (not pain-event matched) — see docstring',
                'coverage_notes': truncated,
                'arms': {}}
     for arm, sub in df.groupby('arm'):
@@ -615,11 +565,9 @@ def leg_c_accumulation(subjects, mask_label, epoch_minutes, max_excluded_frac,
             'median_sig_figs': float(sub['min_sig_figs'].median()),
             'meets_sig_fig_target': _sig_figs(worst) >= SIG_FIG_TARGET,
         }
-        logger.info('  %s: worst rel err %.3e (%.1f sig figs) over %d channel-epochs',
+        logger.info('  %s: worst rel err %.3e (%.1f sig figs) over %d channel-blocks',
                     arm, worst, _sig_figs(worst), len(sub))
     return summary, df
-
-
 # ============================================================================
 # LEG D — float64 recompute vs the production float32 path
 # ============================================================================
@@ -1055,22 +1003,19 @@ def main():
                               'subjects across different sfreq/channel counts is enough.')
     parser.add_argument('--max-runs-per-subject', type=int, default=3,
                          help='Cap on PSD NWBs inspected per subject in leg A.')
-    parser.add_argument('--max-sessions-per-subject', type=int, default=1,
-                         help='Cap on sessions used for the leg C epoch sweep.')
     parser.add_argument('--max-runs-leg-c', type=int, default=8,
-                         help='Cap on PSD runs loaded per session in leg C. A session can '
-                              'be 80+ runs; each is loaded and freed one at a time.')
+                         help='Cap on PSD runs loaded per subject in leg C. Each is loaded '
+                              'and freed one at a time; a session can be 80+ runs.')
     parser.add_argument('--max-channel-epochs', type=int, default=4000,
-                         help='Cap on channel-epochs compared in leg C. Reported in the '
+                         help='Cap on channel-blocks compared in leg C. Reported in the '
                               'output when it bites.')
     parser.add_argument('--recompute-channels', type=int, default=8,
                          help='Bipolar pairs re-referenced and recomputed in leg D.')
     parser.add_argument('--skip-recompute', action='store_true',
                          help='Skip leg D (the only leg that reads raw data).')
-    parser.add_argument('--mask-label', default=None,
-                         help=f'Raw-voltage mask label (default: {config.CANONICAL_MASK_LABEL}).')
-    parser.add_argument('--epoch-minutes', type=float, default=config.EPOCH_MINUTES_BEFORE)
-    parser.add_argument('--max-excluded-frac', type=float, default=config.EPOCH_MAX_EXCLUDED_FRAC)
+    parser.add_argument('--epoch-minutes', type=float, default=config.EPOCH_MINUTES_BEFORE,
+                         help='Epoch length, which sets how many windows leg C and leg D '
+                              'average per block.')
     parser.add_argument('--label', default='p0.6',
                          help='Human label for the output run directory.')
     args = parser.parse_args()
@@ -1095,11 +1040,8 @@ def main():
         'run_timestamp': ts,
         'subjects': subjects,
         'params': {
-            'mask_label': mask_label,
             'epoch_minutes': args.epoch_minutes,
-            'max_excluded_frac': args.max_excluded_frac,
             'max_runs_per_subject': args.max_runs_per_subject,
-            'max_sessions_per_subject': args.max_sessions_per_subject,
             'max_runs_leg_c': args.max_runs_leg_c,
             'max_channel_epochs': args.max_channel_epochs,
             'recompute_channels': args.recompute_channels,
@@ -1127,8 +1069,7 @@ def main():
                                        'parquet': {'available': False},
                                        'note': 'no PSD NWB available to sample'}
 
-    acc = leg_c_accumulation(subjects, mask_label, args.epoch_minutes,
-                              args.max_excluded_frac, args.max_sessions_per_subject,
+    acc = leg_c_accumulation(subjects, args.epoch_minutes,
                               args.max_runs_leg_c, args.max_channel_epochs)
     if isinstance(acc, tuple):
         report['leg_c_accumulation'], accumulation_df = acc
