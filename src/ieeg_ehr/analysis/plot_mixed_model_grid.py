@@ -256,6 +256,32 @@ def _cons_cmap(plt):
     return cm
 
 
+def _outcome_map(base, implied, sig):
+    """(categorical outcome per cell, counts among significant cells).
+
+    0 weaker, 1 stronger, 2 reversed. "Reversed" is checked FIRST and wins,
+    because a slope that crossed zero has not become a smaller version of the
+    same effect -- it is a different claim about the physiology, and folding it
+    into "weaker" on the strength of |slope| alone would hide the sign change
+    that is the interesting part.
+    """
+    b = base.to_numpy(dtype=float)
+    m = implied.to_numpy(dtype=float)
+    out = np.full(b.shape, np.nan)
+    ok = np.isfinite(b) & np.isfinite(m)
+    flipped = ok & (np.sign(m) != np.sign(b)) & (b != 0) & (m != 0)
+    grew = ok & ~flipped & (np.abs(m) > np.abs(b))
+    shrank = ok & ~flipped & ~grew
+    out[shrank] = 0
+    out[grew] = 1
+    out[flipped] = 2
+    s = sig.to_numpy()
+    counts = {'weaker': int((out[s] == 0).sum()),
+              'stronger': int((out[s] == 1).sum()),
+              'reversed': int((out[s] == 2).sum())}
+    return pd.DataFrame(out, index=base.index, columns=base.columns), counts
+
+
 def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
     """The interaction model's two coefficients, and what they imply together.
 
@@ -296,10 +322,9 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
         (delta, f'CHANGE when medicated\n(interaction; {int(sig_ix.to_numpy().sum())} '
                 'cells BH-significant)', sig_ix),
         (implied, 'implied slope when MEDICATED\n(baseline + change; derived)', None),
-        (delta.where(sig_ix), 'the change, BH-significant only', None),
     ]
 
-    n_heat = len(panels)
+    n_heat = len(panels) + 1        # + the categorical outcome panel
     fig, axes = plt.subplots(
         1, n_heat + 2, figsize=(5.8 * n_heat + 3.6, 0.42 * len(regions) + 3.6),
         gridspec_kw={'width_ratios': [1] * n_heat + [0.34, 0.34]})
@@ -319,6 +344,33 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
         ax.set_xlabel('frequency bin, low edge (Hz)', fontsize=8)
         common.add_band_boundary_lines(ax, bin_labels.loc[bins])
         fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02).ax.tick_params(labelsize=7)
+
+    # The question the three coefficient panels make you answer in your head:
+    # did the effect get bigger, smaller, or flip? Comparing two diverging
+    # colourmaps by eye is exactly the comparison people get wrong, so it is
+    # computed and drawn as its own categorical panel.
+    outcome, counts = _outcome_map(base, implied, sig_ix)
+    ax = axes[len(panels)]
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    ocmap = ListedColormap(['#4f9dc7', '#b03a2e', '#6a3d9a'])   # weaker/stronger/reversed
+    ocmap.set_bad('0.85')
+    im = ax.imshow(outcome.to_numpy(dtype=float), aspect='auto', cmap=ocmap,
+                   norm=BoundaryNorm([-0.5, 0.5, 1.5, 2.5], 3),
+                   interpolation='nearest')
+    common.draw_mask_outline(ax, sig_ix.to_numpy())
+    ax.set_title('does the effect STRENGTHEN, weaken, or REVERSE?\n'
+                 f'BH-significant cells: {counts["stronger"]} stronger, '
+                 f'{counts["weaker"]} weaker, {counts["reversed"]} reversed',
+                 fontsize=10)
+    ax.set_xticks(range(len(bins)))
+    ax.set_xticklabels([f'{bin_labels.loc[b, "bin_low_hz"]:.0f}' for b in bins],
+                       fontsize=6, rotation=90)
+    ax.set_yticks(range(len(regions)))
+    ax.set_yticklabels([])
+    ax.set_xlabel('frequency bin, low edge (Hz)', fontsize=8)
+    common.add_band_boundary_lines(ax, bin_labels.loc[bins])
+    cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02, ticks=[0, 1, 2])
+    cb.ax.set_yticklabels(['weaker', 'stronger', 'reversed'], fontsize=7)
 
     for ax, col, label, colour in ((axes[n_heat], 'n_subjects', 'subjects', '0.55'),
                                    (axes[n_heat + 1], 'n_channels', 'electrodes',
@@ -348,7 +400,13 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
              'Panel 3 is arithmetic (baseline + change), not a separate fit, so it '
              'carries no significance of its own. Outlines are BH at q=0.05 within '
              'this model -- panel 1 against its own family, panel 2 against the '
-             'interaction family.\n'
+             'interaction family. The last panel answers "stronger or weaker" '
+             'directly, since comparing two diverging colourmaps by eye is exactly '
+             'the comparison that goes wrong: RED IN PANEL 2 MEANS THE SLOPE MOVED '
+             'POSITIVE, which strengthens a positive baseline and cancels a '
+             'negative one. A cell that crossed zero counts as reversed rather '
+             'than weaker -- a sign change is a different claim, not a smaller '
+             'version of the same one.\n'
              'CAUTION ON MAGNITUDE. `med_ix_beta` correlates 0.84 with the '
              'difference between the separately-fitted stratified slopes but runs '
              'up to ~2x larger in the biggest cells, and some cells significant '
