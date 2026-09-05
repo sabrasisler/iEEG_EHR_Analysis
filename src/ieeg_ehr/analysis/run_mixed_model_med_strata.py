@@ -65,7 +65,7 @@ FDR_Q = 0.05
 
 #: Subdirectory per fit. Named `grid_cells.parquet` inside each so every existing
 #: plotting script works on them unchanged.
-STRATA = ('medpos', 'medneg', 'interaction')
+STRATA = ('medpos', 'medneg', 'interaction', 'matched')
 
 
 def stratum_dir(run_dir, name):
@@ -270,6 +270,83 @@ def fit_interaction(df, meta):
     return rec, blups
 
 
+def matched_subject_diffs(df):
+    """Per subject: mean over NRS levels of (medicated power - unmedicated power).
+
+    A NONPARAMETRIC companion to the matched model, and the honest one. For each
+    (subject, NRS level) that has epochs in BOTH strata it takes the difference of
+    the two means, then averages those differences within subject. Levels present
+    in only one stratum contribute nothing, so nothing is ever compared across
+    pain levels and the shape of the pain->power curve is irrelevant by
+    construction.
+
+    Averaging the level differences UNWEIGHTED is deliberate: weighting by epoch
+    count would let NRS=0, which is a third of all unmedicated epochs, dominate a
+    quantity that is supposed to describe the whole scale.
+    """
+    e = (df.groupby(['subject', 'epoch_id'], as_index=False)
+         .agg(y=('log10_power', 'mean'), NRS=('NRS', 'first'),
+              med=('med_state', 'first')))
+    rows = []
+    for subject, g in e.groupby('subject'):
+        diffs = []
+        for nrs, gg in g.groupby('NRS'):
+            pos, neg = gg[gg['med'] == 1.0], gg[gg['med'] == 0.0]
+            if len(pos) and len(neg):
+                diffs.append(pos['y'].mean() - neg['y'].mean())
+        if diffs:
+            rows.append({'subject': subject, 'diff': float(np.mean(diffs)),
+                         'n_levels': len(diffs)})
+    return pd.DataFrame(rows)
+
+
+def fit_matched(df, meta):
+    """The matched-NRS fit: is power different at the SAME reported pain?"""
+    t0 = time.time()
+    n_sub = df['subject'].nunique()
+    base = {'region': meta['region'], 'freq_bin_index': meta['freq_bin_index'],
+            'freq_bin_low': meta['bin_low_hz'], 'freq_bin_high': meta['bin_high_hz'],
+            'cell_index': meta['cell_index'], 'n_subjects': n_sub,
+            'n_channels': df['channel_uid'].nunique(), 'n_rows': len(df)}
+
+    diffs = matched_subject_diffs(df)
+    base['nonparam_diff'] = float(diffs['diff'].mean()) if len(diffs) else np.nan
+    base['n_subjects_matched'] = int(len(diffs))
+    base['frac_sign_consistent'] = (
+        float((np.sign(diffs['diff']) == np.sign(diffs['diff'].mean())).mean())
+        if len(diffs) else np.nan)
+
+    # Both strata must be present, or `med_state` is constant and unidentified.
+    if df['med_state'].nunique() < 2 or n_sub < mm.MIN_SUBJECTS:
+        return {**base, 'converged': False,
+                'error': 'med_state constant or too few subjects'}
+    try:
+        res, warn = mm.fit_cell(df, mm.VC_MATCHED, formula=mm.FORMULA_MATCHED)
+    except mm.CellFitError as exc:
+        return {**base, 'converged': False, 'error': f'matched: {exc}'[:200]}
+    try:
+        res_red, _ = mm.fit_cell(df, mm.VC_MATCHED_REDUCED,
+                                 formula=mm.FORMULA_MATCHED)
+        stat, p_lrt = mm.lrt(res, res_red)
+    except (mm.CellFitError, Exception):                     # noqa: BLE001
+        stat, p_lrt = np.nan, np.nan
+
+    vc = mm.vcomp_by_name(res)
+    return {**base,
+            'beta_med': float(res.fe_params['med_state']),
+            'se': float(res.bse['med_state']),
+            'z': float(res.tvalues['med_state']),
+            'p': float(res.pvalues['med_state']),
+            'var_subj_int': float(vc.get('subj_int', np.nan)),
+            'var_subj_med': float(vc.get('subj_med', np.nan)),
+            'var_channel': float(vc.get('channel', np.nan)),
+            'var_resid': float(res.scale),
+            'lrt_stat': float(stat), 'p_lrt_mixture': float(p_lrt),
+            'converged': bool(res.converged),
+            'n_warnings': len(warn), 'error': '',
+            'fit_seconds': time.time() - t0}
+
+
 def unpooled_slopes(df, meta, stratum):
     """Per-subject OLS slopes for this cell, computed while the frame is in hand.
 
@@ -359,7 +436,8 @@ def stage_fit(args):
         # the term `med_state[T.True]`, which MED_INTERACTION_TERM would miss.
         df['med_state'] = df['med_state'].astype(float)
 
-        for name, want in (('medpos', 1.0), ('medneg', 0.0)):
+        for name, want in (() if args.matched_only
+                           else (('medpos', 1.0), ('medneg', 0.0))):
             sub = df[df['med_state'] == want]
             # Re-centre WITHIN the stratum -- see the module docstring.
             sub = mm.add_nrs_components(sub)
@@ -371,13 +449,23 @@ def stage_fit(args):
             if len(sub):
                 slopes.append(unpooled_slopes(sub, meta, name))
 
+        if args.matched_only:
+            records['matched'].append(fit_matched(df, meta))
+            continue
+
         rec, bl = fit_interaction(df, meta)
         rec['stratum'] = 'interaction'
         records['interaction'].append(rec)
         if bl:
             blups['interaction'].append(pd.DataFrame(bl))
+        records['matched'].append(fit_matched(df, meta))
 
     for name in STRATA:
+        # Skip strata this task did not compute -- with --matched-only that is
+        # everything but `matched`, and an empty file would look to `collect`
+        # like a region that produced no fittable cells.
+        if not records[name]:
+            continue
         io.write_table(pd.DataFrame(records[name]),
                        run_dir / 'cells' / f'{name}_{args.region_index:03d}.parquet',
                        params={'region': region, 'stratum': name},
@@ -452,6 +540,7 @@ def stage_collect(args):
             cells = add_fdr(cells, 'med_ix_p', 'med_ix')
 
         out = stratum_dir(run_dir, name)
+        out.mkdir(parents=True, exist_ok=True)   # `matched` may postdate prepare
         io.write_table(cells, out / 'grid_cells.parquet',
                        params={'stratum': name, 'fdr_q': FDR_Q,
                                'families': 'global within this stratum (primary); '
@@ -466,7 +555,10 @@ def stage_collect(args):
                            out / 'grid_blups.parquet', params={'stratum': name},
                            script='ieeg_ehr/analysis/run_mixed_model_med_strata.py')
 
-        if len(all_slopes) and name != 'interaction':
+        # `matched` carries its own frac_sign_consistent, computed from matched
+        # per-subject differences rather than from slopes, so the slope-based
+        # version would be meaningless there.
+        if len(all_slopes) and name not in ('interaction', 'matched'):
             cons = sign_consistency_from(
                 all_slopes[all_slopes['stratum'] == name], cells)
             io.write_table(cons, out / 'sign_consistency.parquet',
@@ -570,6 +662,10 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--allow-cohort-drift', action='store_true')
     ap.add_argument('--min-subjects', type=int, default=10)
+    ap.add_argument('--matched-only', action='store_true',
+                    help='Fit ONLY the matched-NRS model, reusing an existing '
+                         "run's cohort, manifest and med state -- so the matched "
+                         'analysis lands on exactly the same cells as the others.')
     ap.add_argument('--per-stratum-cohort', action='store_true',
                     help='Let each stratum keep its own eligible set. The two maps '
                          'then describe different patients and are NOT comparable '

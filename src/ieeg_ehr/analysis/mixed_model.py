@@ -106,6 +106,28 @@ FORMULA_MED_INTERACTION = 'log10_power ~ NRS_within * med_state + NRS_submean'
 #: The interaction term's name in patsy's output, for pulling it out of a fit.
 MED_INTERACTION_TERM = 'NRS_within:med_state'
 
+# The MATCHED-NRS model. Pain enters as a FACTOR, not a number, so the fit makes
+# no assumption whatever about the shape of the pain->power relationship -- each
+# score gets its own level and the curve can be any shape at all. `med_state` is
+# then the difference between medicated and unmedicated epochs AT THE SAME SCORE.
+#
+# This exists because the slope-difference question cannot be answered cleanly on
+# this data: the two strata sample the 0-10 scale very differently (NRS=0 is a
+# third of unmedicated epochs; NRS>=9 is almost only medicated), so a linear slope
+# fitted in each stratum is a tangent to a non-monotone curve at two different
+# places, and the extreme scores that carry the most leverage exist in only one
+# stratum. Conditioning on the score sidesteps all of that -- nothing is ever
+# compared across levels.
+FORMULA_MATCHED = 'log10_power ~ C(NRS) + med_state'
+
+#: Per-subject medication effect, the matched model's analogue of `subj_slope`.
+VC_MATCHED = {
+    'subj_int': '1',
+    'subj_med': '0 + med_state',
+    'channel': '0 + C(channel_uid)',
+}
+VC_MATCHED_REDUCED = {k: v for k, v in VC_MATCHED.items() if k != 'subj_med'}
+
 # The full model. Keys become the names in res.model.exog_vc.names.
 VC_FULL = {
     'subj_int': '1',
