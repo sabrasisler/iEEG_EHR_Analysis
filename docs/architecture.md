@@ -207,10 +207,19 @@ not bulk-convert old CSVs.
 
 ## PART 5 — analysis/ organization (5 levels)
 
-1. `<event>/` — pain | mood | opioid | seizure.
+1. `<event>/` — pain | mood | opioid | seizure | meds.
 2. `<question>/` — MUST match a named question in the exploration log / freeze doc.
    Do NOT open one without a named question — else `sweeps/` or `scratch/`.
    Discovery vs confirmation is NOT a level; it's a cohort ref in config.
+   - `<scope>/` — OPTIONAL extra level, off by default. Added 2026-09-08 for
+     `decoding`, whose taxonomy has two independent axes: the scope a model is
+     fitted at (`individual_subject` vs a future `generalizable`) and the model
+     family, which is level 3. Justified only when both axes genuinely belong in
+     the path; collapsing them into one folder name is what `view_registry.md`
+     argues against for view schemes. Safe to add because NOTHING reads this tree
+     by depth — consumers build paths through `analysis_run_dir` and pass them
+     around, and run membership comes from `provenance.json`, never the path.
+     See DECISIONS 2026-09-08.
 3. `<output_type>/` — plot type OR model OR stats table; one per script+layout.
 4. `<view_scheme>/` — optional small enumerable variant slot; omit if none.
 5. `<run_name>_<timestamp>/` — one run: config.yaml + provenance.json + outputs.

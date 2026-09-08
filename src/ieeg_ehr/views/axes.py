@@ -174,6 +174,24 @@ def epoch_mean(block):
 # AXIS 5 -- frequency aggregation
 # ---------------------------------------------------------------------------
 
+def bands_for(freq):
+    """The band dict a freq-axis value selects, or None when it aggregates nothing.
+
+    ONE mapping from registry AXIS 5's vocabulary to actual edges, so the view
+    builder and every consumer cannot disagree about what 'paper_bands_6' means.
+    Raises on an unknown value rather than falling through to a default: silently
+    aggregating to CANONICAL_BANDS_HZ when the caller asked for something else
+    would produce a plausible table of the wrong quantity.
+    """
+    if freq == 'log_bins_50':
+        return None
+    if freq == 'canonical_bands':
+        return config.CANONICAL_BANDS_HZ
+    if freq == 'paper_bands_6':
+        return config.PAPER_BANDS_6_HZ
+    raise ValueError(f'unknown freq axis value {freq!r}')
+
+
 def aggregate_bands(values, bin_table, bands=None, is_difference=True, domain='log'):
     """(n_pairs, n_bins) -> (n_pairs, n_bands), plus the band names.
 

@@ -154,9 +154,11 @@ def build_subject_view(subject, session, view_config, epoch_minutes=None,
         if drop_bins.size:
             values[:, drop_bins] = np.nan
 
-        if view_config.freq == 'canonical_bands':
+        bands = axes.bands_for(view_config.freq)
+        if bands is not None:
             values, col_names = axes.aggregate_bands(
-                values, bin_table, is_difference=view_config.is_difference,
+                values, bin_table, bands=bands,
+                is_difference=view_config.is_difference,
                 domain=view_config.domain)
             col_index = col_names
         else:

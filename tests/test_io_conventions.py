@@ -241,6 +241,37 @@ def test_run_dir_always_gets_a_timestamp():
     assert a.name.startswith('label_') and len(a.name) > len('label_')
 
 
+def test_optional_scope_adds_a_sixth_level_and_defaults_off():
+    """The scope level exists for `decoding` and must not perturb anything else."""
+    from ieeg_ehr.config import paths
+
+    scoped = paths.analysis_run_dir('decoding', 'regression', 'run',
+                                    view_scheme='chan-paper6-raw',
+                                    scope='individual_subject',
+                                    timestamp='20260908-120000')
+    assert scoped.parts[-6:] == ('pain', 'decoding', 'individual_subject',
+                                 'regression', 'chan-paper6-raw',
+                                 'run_20260908-120000')
+
+    # Default is OFF: every pre-existing five-level path stays byte-identical.
+    assert paths.analysis_run_dir('q', 'heatmap', 'r', view_scheme='s',
+                                  timestamp='20260908-120000') == \
+        paths.analysis_run_dir('q', 'heatmap', 'r', view_scheme='s',
+                               scope=None, timestamp='20260908-120000')
+
+
+def test_decoding_run_dir_validates_the_arm():
+    """A mistyped arm must fail, not quietly open a new output_type folder."""
+    from ieeg_ehr.config import paths
+
+    run = paths.decoding_run_dir('ordinal', 'run', view_scheme='chan-paper6-raw',
+                                 timestamp='20260908-120000')
+    assert run.parts[-6:-1] == ('pain', 'decoding', 'individual_subject',
+                                'ordinal', 'chan-paper6-raw')
+    with pytest.raises(ValueError, match='not one of'):
+        paths.decoding_run_dir('regresion', 'run')   # typo
+
+
 if __name__ == '__main__':
     import sys
     sys.exit(pytest.main([__file__, '-v']))

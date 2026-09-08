@@ -25,6 +25,18 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
 
 ## Open
 
+- **Why does sub-067 have only 6 bipolar pairs?** All from one right-insula
+  depth electrode (RI1-RI2 … RI5-RI6, plus RI13-RI14 in caudal middle frontal),
+  and 3 of the 6 are white matter. The RI6→RI13 gap means contacts were dropped
+  somewhere upstream of the pain-epoch cache, since the cache is unmasked — so
+  this is not the QC mask. Either a genuinely targeted implant, or an upstream
+  exclusion ate most of the montage. It passes every decoder eligibility rule
+  (35 epochs, nonzero median, range 9) while being the only unit where p < n
+  (36 features vs 34 epochs), so it will produce a number that looks comparable
+  to the others and is not. Worth 10 minutes in the raw NWB electrodes table
+  before the decoder's group summary gets read.
+  (→ docs/labnotebook/2026-09-08.md)
+
 - [ ] **Is the 1/f flattening with pain just SLEEP?** The slope violins show a
       monotonic flattening none → low → high (75.9% of subjects), but NREM
       steepens the aperiodic slope, and if 0-pain reports cluster at night the

@@ -90,3 +90,38 @@ CANONICAL_BANDS_HZ = {
     'low_gamma': (30, 58), 'high_gamma1': (65, 115), 'high_gamma2': (125, 175),
     'high_gamma3': (185, 235),
 }
+
+# ----------------------------------------------------------------------------
+# THE DECODING REPLICATION'S BANDS  (Prasad et al. 2025, doi 10/nat.s41467-025-59756-5)
+# ----------------------------------------------------------------------------
+# The six bands the per-subject pain decoder replicates. A SEPARATE constant
+# rather than a replacement for CANONICAL_BANDS_HZ, because the two answer
+# different questions and neither supersedes the other: these are the target
+# paper's edges, exactly as published, and CANONICAL_BANDS_HZ is this project's
+# own revision of them. Both are selectable on the view's frequency axis, so the
+# DISCREPANCY noted above becomes an empirical comparison instead of a conflict.
+#
+# TWO PROPERTIES OF THESE EDGES THAT MATTER, and are the paper's, not ours:
+#
+# 1. `gamma` and `high_gamma` STRADDLE the 60/120 Hz line-noise harmonics, which
+#    is precisely what CANONICAL_BANDS_HZ's finer gamma split exists to avoid. So
+#    a view using these bands MUST also set drop_line_noise_bins=True. Unlike
+#    preprocessing.bipolar_bands.aggregate_to_bands, views.axes.aggregate_bands
+#    does NOT exclude flagged bins itself -- it relies on them already being NaN,
+#    and nanmean skipping them. Without the flag, gamma silently absorbs the
+#    58-62 Hz notch residue and high_gamma the 118-122 Hz residue.
+#
+# 2. There is a GAP at 12-15 Hz: alpha ends at 12 and beta starts at 15. That is
+#    how the paper defines them, so it is reproduced rather than closed. Nothing
+#    above 170 Hz is covered either, though the stored spectrum reaches 250 Hz.
+#
+# Low-frequency caveat (ours, not theirs): below ~4.7 Hz a stored log bin is
+# narrower than the 2 s window's 0.5 Hz resolution, so bins {1,2,4,5,7,10} are
+# exact DUPLICATES of a neighbour (views.cache_reader.unresolvable_bins). Those
+# all fall in delta and theta, which are therefore built from fewer independent
+# measurements than their bin counts suggest -- relevant if either turns up as an
+# important decoder feature.
+PAPER_BANDS_6_HZ = {
+    'delta': (1, 4), 'theta': (4, 8), 'alpha': (8, 12),
+    'beta': (15, 25), 'gamma': (25, 70), 'high_gamma': (70, 170),
+}

@@ -343,6 +343,97 @@ def test_absolute_bins_use_fixed_cutpoints():
 
 
 # ---------------------------------------------------------------------------
+# AXIS 5: the decoding replication's band set
+# ---------------------------------------------------------------------------
+
+def _bin_table(edges):
+    edges = np.asarray(edges, dtype=float)
+    return pd.DataFrame({'freq_bin_index': np.arange(len(edges) - 1),
+                         'bin_low_hz': edges[:-1], 'bin_high_hz': edges[1:]})
+
+
+def test_bands_for_maps_the_axis_vocabulary_and_refuses_unknowns():
+    """A typo must raise, not silently aggregate to a different band set."""
+    assert axes.bands_for('log_bins_50') is None
+    assert axes.bands_for('canonical_bands') is config.CANONICAL_BANDS_HZ
+    assert axes.bands_for('paper_bands_6') is config.PAPER_BANDS_6_HZ
+    with pytest.raises(ValueError, match='unknown freq axis value'):
+        axes.bands_for('paper_bands6')
+
+
+def test_paper_bands_are_the_published_edges():
+    """Pinned because these are a REPLICATION TARGET, not our own choice.
+
+    Including the 12-15 Hz gap between alpha and beta, which is the paper's and
+    is reproduced deliberately rather than closed.
+    """
+    assert config.PAPER_BANDS_6_HZ == {
+        'delta': (1, 4), 'theta': (4, 8), 'alpha': (8, 12),
+        'beta': (15, 25), 'gamma': (25, 70), 'high_gamma': (70, 170),
+    }
+    assert config.PAPER_BANDS_6_HZ['alpha'][1] < config.PAPER_BANDS_6_HZ['beta'][0]
+
+
+def test_raw_log_power_bands_average_linear_then_log():
+    """Registry AXIS 5's Jensen rule: a mean of logs is a GEOMETRIC mean.
+
+    Two bins of raw log-power 1 and 3 must give log10(mean(10, 1000)) = 2.70,
+    not mean(1, 3) = 2. The difference is 0.7 log units — large, and invisible in
+    the output if the wrong branch is taken.
+    """
+    values = np.array([[1.0, 3.0]])                      # (n_pairs, n_bins)
+    bin_table = _bin_table([1.0, 2.0, 4.0])              # centres ~1.41, ~2.83
+    out, names = axes.aggregate_bands(
+        values, bin_table, bands={'delta': (1, 4)}, is_difference=False, domain='log')
+    assert names == ['delta']
+    assert out[0, 0] == pytest.approx(np.log10((10.0 ** 1 + 10.0 ** 3) / 2))
+    assert out[0, 0] != pytest.approx(2.0)
+
+    # A DIFFERENCE of logs is already a ratio, so it averages arithmetically.
+    out_diff, _ = axes.aggregate_bands(
+        values, bin_table, bands={'delta': (1, 4)}, is_difference=True, domain='log')
+    assert out_diff[0, 0] == pytest.approx(2.0)
+
+
+def test_line_noise_bins_must_be_nan_before_band_aggregation():
+    """views.axes does NOT exclude flagged bins itself — unlike
+    preprocessing.bipolar_bands.aggregate_to_bands, which masks them inline.
+
+    The paper's gamma (25-70) and high_gamma (70-170) STRADDLE the 60/120 Hz
+    harmonics, so a view on these bands is only correct with
+    drop_line_noise_bins=True. This pins the mechanism it relies on: a NaN'd bin
+    is skipped by nanmean, and a NON-NaN'd one is silently absorbed.
+    """
+    bin_table = _bin_table([50.0, 58.0, 62.0, 70.0])     # middle bin ~ 60 Hz
+    contaminated = np.array([[1.0, 6.0, 1.0]])           # 60 Hz bin is enormous
+
+    absorbed, _ = axes.aggregate_bands(
+        contaminated, bin_table, bands={'gamma': (25, 70)},
+        is_difference=False, domain='log')
+
+    dropped = contaminated.copy()
+    dropped[:, 1] = np.nan                               # what the flag does
+    clean, _ = axes.aggregate_bands(
+        dropped, bin_table, bands={'gamma': (25, 70)},
+        is_difference=False, domain='log')
+
+    assert clean[0, 0] == pytest.approx(1.0)             # the two good bins
+    assert absorbed[0, 0] > clean[0, 0] + 1.0            # >1 log unit of notch residue
+
+
+def test_a_band_with_no_bins_is_skipped_not_zeroed():
+    """Nothing falls in 70-170 Hz here, so the column must be absent entirely —
+    a zero would read as 'measured, and flat'."""
+    bin_table = _bin_table([1.0, 2.0, 4.0])
+    out, names = axes.aggregate_bands(
+        np.array([[1.0, 3.0]]), bin_table,
+        bands={'delta': (1, 4), 'high_gamma': (70, 170)},
+        is_difference=False, domain='log')
+    assert names == ['delta']
+    assert out.shape == (1, 1)
+
+
+# ---------------------------------------------------------------------------
 # ViewConfig guardrails
 # ---------------------------------------------------------------------------
 

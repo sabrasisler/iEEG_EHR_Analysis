@@ -545,13 +545,30 @@ def _run_stamp(timestamp=None):
 
 
 def analysis_run_dir(question, output_type, run_name, view_scheme=None,
-                     event='pain', timestamp=None):
-    """Build (do not create) the level-5 run directory.
+                     event='pain', timestamp=None, scope=None):
+    """Build (do not create) the run directory.
 
     A timestamp is ALWAYS appended so two runs can never overwrite each other's
     provenance.json — that has bitten this project once already.
+
+    `scope` is an OPTIONAL sixth level, inserted between the question and the
+    output type. It exists for `decoding`, where the taxonomy has two genuinely
+    independent axes — the scope a model is fitted at (`individual_subject` vs a
+    future `generalizable`) and the model family (`regression` / `ordinal` /
+    `classification`) — and collapsing both into one folder name is the thing
+    docs/view_registry.md argues against for view schemes. Default None keeps
+    every existing five-level path byte-identical.
+
+    Adding a level is safe because NOTHING reads this tree by depth: consumers
+    build paths through this function and pass them around, and "which subjects
+    were in a run" is answered by provenance.json, never by the folder name
+    (CLAUDE.md). A scope level is therefore a deliberate contract change, not a
+    breakage — see DECISIONS 2026-09-08.
     """
-    path = ANALYSIS_DIR / event / question / output_type
+    path = ANALYSIS_DIR / event / question
+    if scope:
+        path = path / scope
+    path = path / output_type
     if view_scheme:
         path = path / view_scheme
     stamp = _run_stamp(timestamp)
@@ -599,6 +616,48 @@ def med_run_dir(output_type, run_name, question=MED_DEFAULT_QUESTION,
     return analysis_run_dir(question=question, output_type=output_type,
                             run_name=run_name, event=MED_EVENT,
                             timestamp=timestamp)
+
+
+# ============================================================================
+# PAIN STATE DECODING  —  level-2 question 'decoding'
+# ============================================================================
+# Opened deliberately (PLANNING.md, "Pain state decoding"). Replicates the
+# per-subject decoder of Prasad et al. 2025 on the discovery cohort. The one
+# question in this repo that uses `analysis_run_dir`'s optional SCOPE level,
+# because "at what scope is the model fitted" and "which model family" are two
+# independent axes and both belong in the path.
+
+DECODING_QUESTION = 'decoding'
+
+#: Level-3 scope. `individual_subject` is one model per subject-session, which is
+#: all of v1; `generalizable` (a model trained across subjects) is anticipated and
+#: is the reason this is a folder level rather than part of the output-type name.
+DECODING_SCOPE_INDIVIDUAL = 'individual_subject'
+DECODING_SCOPE_GENERALIZABLE = 'generalizable'
+
+#: Level-4 output types — one per model family. Separate folders rather than rows
+#: in one table because the three produce genuinely DIFFERENT SCHEMAS: regression
+#: reports R/R^2, classification AUC/accuracy, ordinal a per-threshold AUC. Rows
+#: are for axes that share a schema (cv_scheme, outcome_scaling), which stay
+#: inside each arm's results table per CLAUDE.md.
+DECODING_ARMS = ('regression', 'ordinal', 'classification')
+
+
+def decoding_run_dir(output_type, run_name, scope=DECODING_SCOPE_INDIVIDUAL,
+                     view_scheme=None, timestamp=None):
+    """Build (do not create) a decoding run directory.
+
+        analysis/pain/decoding/<scope>/<arm>/<view_scheme>/<run>_<timestamp>/
+
+    Thin wrapper over analysis_run_dir so no caller hand-assembles the scope
+    level. Validates the arm, because a typo would silently open a new
+    output_type folder rather than failing.
+    """
+    if output_type not in DECODING_ARMS:
+        raise ValueError(f'output_type={output_type!r} not one of {DECODING_ARMS}')
+    return analysis_run_dir(question=DECODING_QUESTION, output_type=output_type,
+                            run_name=run_name, view_scheme=view_scheme,
+                            scope=scope, timestamp=timestamp)
 
 
 # ============================================================================

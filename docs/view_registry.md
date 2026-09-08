@@ -77,9 +77,38 @@ both are free recomputes from the per-window cache.
 
 ## AXIS 5 — Frequency aggregation
 - `log_bins_50` (the stored 50 log-spaced bins, no aggregation)
-- `canonical_bands` (delta 1-4, theta 4-8, alpha 8-12, beta 15-25, gamma 25-70,
-  high_gamma 70-170) via bipolar_bands.aggregate_to_bands
-Notes: bands use linear-then-log aggregation (existing convention, avoids Jensen).
+- `canonical_bands` — THIS PROJECT'S eight bands, `config.CANONICAL_BANDS_HZ`:
+  delta 1-4, theta 4-8, alpha 8-12, beta 13-30, low_gamma 30-58,
+  high_gamma1 65-115, high_gamma2 125-175, high_gamma3 185-235. Gamma is split
+  finely and specifically so no band edge straddles a 60 Hz harmonic.
+- `paper_bands_6` — the DECODING REPLICATION's six bands,
+  `config.PAPER_BANDS_6_HZ`: delta 1-4, theta 4-8, alpha 8-12, beta 15-25,
+  gamma 25-70, high_gamma 70-170. Prasad et al. 2025's published edges, exactly.
+
+Selected by `axes.bands_for()` — ONE mapping from this vocabulary to actual
+edges, which raises on an unknown value rather than defaulting (a silent fall
+back to `canonical_bands` would produce a plausible table of a different
+quantity).
+
+**These two are alternatives, not versions.** Earlier revisions of this doc
+described `canonical_bands` using the six edges now called `paper_bands_6`,
+which is where the long-standing "DISCREPANCY" note in `psd_params.py` came
+from: the doc had the paper's edges and the code had ours. Both now exist under
+their own names and the note is settled — which set is *better* is an empirical
+P2.2 sweep axis, not a documentation bug.
+
+**`paper_bands_6` REQUIRES `drop_line_noise_bins=True`.** Its gamma (25-70) and
+high_gamma (70-170) straddle the 60 and 120 Hz harmonics — precisely what
+`canonical_bands` is shaped to avoid. And unlike
+`preprocessing.bipolar_bands.aggregate_to_bands`, which masks flagged bins
+inline, `views.axes.aggregate_bands` does NOT: it relies on the flag having
+already set them to NaN, and on `nanmean` skipping them. Without the flag, gamma
+silently absorbs the 58-62 Hz notch residue. Pinned by
+`tests/test_views.py:test_line_noise_bins_must_be_nan_before_band_aggregation`.
+
+Notes: bands use linear-then-log aggregation (existing convention, avoids
+Jensen) for raw log-power, and arithmetic aggregation for a difference of logs —
+`ViewConfig.is_difference` picks the branch.
 
 ## AXIS 6 — Region aggregation (channels -> region)
 - `none` (per-channel)

@@ -22,6 +22,44 @@ date, or figure that prompted it.
 
 ## This week
 
+### Pain state decoding (PLANNING "Pain state decoding", DECISIONS 2026-09-08)
+
+Replication of Prasad et al. 2025 on the discovery cohort. Locked: paper's 6
+bands · per-channel features, ROI as metadata only · raw log power, NO zero-pain
+baseline, standardized in-fold · Y=0.2/Z=0.5 cascade, residual cells imputed
+in-fold · 45 discovery subject-sessions at >=30 epochs, one model per session ·
+elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
+`-p ckeller1`.
+
+- [x] **Add `paper_bands_6` + the `<scope>` tree level** — done 2026-09-08.
+      `PAPER_BANDS_6_HZ`, `axes.bands_for()`, `analysis_run_dir(scope=)`,
+      `config.decoding_run_dir`; 7 tests, full suite 442 green. Also settled the
+      `psd_params.py` band DISCREPANCY. Delete this line at the next commit.
+      (→ DECISIONS 2026-09-08, docs/labnotebook/2026-09-08.md)
+- [ ] **Build the `chan-paper6-raw` view** across the 45 units.
+      `--normalization none --region none --freq paper_bands_6
+      --drop-line-noise-bins --roi-scheme roi_v2`. The line-noise flag is
+      REQUIRED, not cosmetic: the paper's gamma/high_gamma straddle 60/120 Hz and
+      `views.axes.aggregate_bands` does not exclude flagged bins itself.
+- [ ] **Implement `src/ieeg_ehr/decoding/`** — `features.py` (matrix assembly),
+      `cascade.py` (Y/Z + coverage-vs-artifact split for units 189/167),
+      `cv.py` (nested CV via sklearn `Pipeline` so in-fold fitting is structural,
+      + the time-blocked variant), `arms.py`, `run_decoder.py`, `aggregate.py`.
+- [ ] **Controls BEFORE any real run.** Inject a synthetic feature correlated
+      with pain and confirm recovery; run pure noise and confirm R~0 / AUC~0.5
+      with a calibrated permutation p. This is the gate — same role P1.5 played
+      for the cache refactor.
+- [ ] **Smoke-run one unit** end to end (sub-183: 95 epochs, 162 channels) and
+      `seff` it before sizing the array. `ckeller1` caps memory at 8 GB/core.
+- [ ] **Decide the ordinal arm's implementation** — Frank-Hall decomposition
+      (elastic-net logistic per threshold; no new dependency, penalty identical
+      across arms) vs `mord` (a true penalized ordinal model, needs a pip
+      install). Leaning Frank-Hall.
+- [ ] **Array run + aggregate** — `sbatch/decoder_array.sbatch`, `-p ckeller1`,
+      `--array=0-44%12`. Commit AND push first so the recorded hash matches.
+
+### Standing
+
 - [ ] **P0.1 Pin the QC mask.** Decide between `gross-std3_satmargin15_sw` and
       `gross-std3_satmargin15_sw_logz4`; record the choice in
       `config/paths.py:CANONICAL_MASK_LABEL` (currently `_sw_logz4` with a

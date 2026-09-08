@@ -91,6 +91,7 @@ A level-2 folder is opened DELIBERATELY and only for a question named here
 | Question | Folder | What it asks |
 |---|---|---|
 | PSD physiology | `psd_physiology` | Descriptive, pre-model: across the discovery cohort, what does the pain-related change in the power spectrum LOOK like per region — where is it (heatmaps) and what shape does it have (spectra)? Opened 2026-07-29. Deliberately not a hypothesis test: its output feeds P2.2's sweep axes and P2.6's frozen feature set, and nothing from it is a finding. |
+| Pain state decoding | `decoding` | Can each subject's pain score be predicted from their OWN 5-min pre-report spectro-spatial features, better than a label-shuffled null? Opened 2026-09-08. A replication of Prasad et al. 2025 (doi 10.1038/s41467-025-59756-5) on the discovery cohort at ~4x their n — same paradigm (0-10 nursing scores every ~2 h, 5-min pre-report window, sEEG), same feature construction (per-channel x 6 bands of log power), same model family (elastic net, nested CV, 100 bootstraps, shuffled-label null). PREDICTION, not inference: it asks whether a per-subject decoder works, and is a different object from Phase 3's confirmation GLMM. Uses the optional `<scope>` level (`individual_subject` now, `generalizable` anticipated) and one level-4 folder per model arm (`regression` / `ordinal` / `classification`). Output is NOMINATIONS — nothing from it is a finding before P2.6. Code: `src/ieeg_ehr/decoding/`. |
 
 ### Level-1 event `meds` — medication administration patterns
 

@@ -572,3 +572,126 @@ bar has to assign each assessment exactly one segment for the bar to mean 100%.
 **Where it lives:** `pain_link.session_bounds`,
 `pain_link.response_by_assessment`, `plot_pain_score_response.py`,
 `tests/test_med_pain_response.py` (12 tests).
+
+---
+
+## 2026-09-08 — A `<scope>` level in the analysis tree
+
+**`analysis_run_dir` gains an OPTIONAL sixth level between the question and the
+output type, used only by `decoding`.** The five-level scheme assumes each
+question has one taxonomic axis below it. `decoding` has two that are genuinely
+independent: the scope a model is fitted at (`individual_subject` now,
+`generalizable` anticipated) and the model family (`regression` / `ordinal` /
+`classification`). Encoding both in one folder name — `individual_regression` —
+is exactly what `view_registry.md` argues against for view schemes: unreadable,
+and still not a complete description.
+
+Verified safe before changing it: **nothing in the repo reads this tree by
+depth.** Every consumer builds paths through `analysis_run_dir` and passes them
+around; `med_state.py` hand-assembles one path but constructs rather than
+parses; and CLAUDE.md already forbids inferring run membership from a folder
+name ("read `provenance.json` `subjects[]`, NEVER the folder name"). The only
+thing pinning five levels was a test on the builder's own contract. So this is a
+deliberate contract change, not a breakage.
+
+Default is `None`, so every pre-existing path is byte-identical — pinned by
+`test_optional_scope_adds_a_sixth_level_and_defaults_off`.
+
+*Reverses if:* a second question wants a scope level for a reason that is really
+a sweep axis. A level is justified only when the two axes produce different
+output SCHEMAS; when they share one, they are rows (which is why `cv_scheme` and
+`outcome_scaling` stay inside the results table).
+
+**Where it lives:** `config/paths.py:analysis_run_dir` (`scope=`),
+`config.decoding_run_dir` + `DECODING_ARMS`, `tests/test_io_conventions.py`
+(2 tests), CLAUDE.md "analysis/ organization", `docs/architecture.md` PART 5.
+
+---
+
+## 2026-09-08 — `paper_bands_6`, and the settling of the band DISCREPANCY
+
+**The paper's six bands become their own frequency-axis value rather than
+replacing `CANONICAL_BANDS_HZ`.** `psd_params.py` has carried a "DISCREPANCY —
+unresolved" note since 2026-07-27: `docs/architecture.md` and
+`docs/view_registry.md` described the canonical bands as delta 1-4 / theta 4-8 /
+alpha 8-12 / **beta 15-25 / gamma 25-70 / high_gamma 70-170**, while the code
+used an eight-band set splitting gamma to avoid the 60 Hz harmonics. The docs
+were describing Prasad et al. 2025's edges; the code was describing this
+project's revision of them. Neither was wrong — they were two different band
+sets under one name.
+
+Both now exist under their own names, selected by `axes.bands_for()`, and the
+note is settled. **Which set is better is an empirical P2.2 sweep axis, not a
+documentation bug.**
+
+**`paper_bands_6` is only correct with `drop_line_noise_bins=True`.** Its gamma
+(25-70) and high_gamma (70-170) straddle 60 and 120 Hz. And the two band
+aggregators differ: `preprocessing.bipolar_bands.aggregate_to_bands` masks
+flagged bins inline, but `views.axes.aggregate_bands` — the one the view layer
+uses — does NOT, relying instead on the flag having already NaN'd them and on
+`nanmean` skipping them. Measured on synthetic input, a single un-dropped 60 Hz
+bin moves the gamma estimate by more than a full log unit. The 12-15 Hz gap
+between the paper's alpha and beta is reproduced deliberately, not closed.
+
+*Reverses if:* the P2.2 comparison shows one band set dominating, in which case
+the loser becomes historical rather than an option.
+
+**Where it lives:** `config/psd_params.py:PAPER_BANDS_6_HZ`,
+`views/axes.py:bands_for`, `views/view_config.py:FREQ_AGGS`,
+`views/build_pain_epoch_view.py`, `tests/test_views.py` (5 tests),
+`docs/view_registry.md` AXIS 5.
+
+---
+
+## 2026-09-08 — Channel/epoch eligibility for the decoder: Y=0.2, Z=0.5, impute the residue
+
+**Set on STRUCTURAL grounds from the missingness distribution, before looking at
+any pain relationship** (CLAUDE.md; `architecture.md` PART 7 left K/X/Y/Z as
+TODO). Measured over the 45 discovery subject-sessions with >=30 epochs under
+mask `std10_rv-gross-std3_satmargin15_sw_logz4`: a cohort-mean 2.4% of
+channel-epoch cells are mask-excluded at `max_excluded_frac=0.5` (worst subject
+9.3%).
+
+**Z = 0.5 because the epoch distribution has a GAP and the threshold therefore
+does no work.** Per-epoch bad-channel fraction: median 0, p95 = 0.067,
+p99 = 0.689. Essentially nothing lives between 7% and 69% — epochs are either
+nearly clean or almost entirely destroyed. Z anywhere in [0.2, 0.7] drops the
+same ~1% of epochs (1.45% -> 1.02%), so 0.5 sits in the middle of the empty gap
+and is maximally insensitive to the exact value. It also happens to be the
+existing `EPOCH_MAX_EXCLUDED_FRAC`, which is now structurally justified rather
+than merely conventional.
+
+**Y = 0.2 because channels are cheap and epochs are not.** The channel tail is
+smooth (p95 = 0.086, p99 = 0.283), so Y does real work: 0.2 drops 1.57% of
+channels, 0.5 drops 0.21%. For a per-subject decoder a dropped channel costs 6
+features of ~918 — the penalty barely notices — while a dropped epoch costs ~2%
+of a ~48-observation training set, and observation count is what decides whether
+the model is fittable. So buy cleanliness with channels. This asymmetry is
+specific to the decoder and is the opposite of what a group-level heatmap wants.
+
+Channels are judged FIRST, then epochs against the survivors, because a bad
+channel is a persistent property of the electrode and a bad epoch is a transient
+event; judging transients before removing persistent faults makes every epoch
+look bad. Result: 98.9% of epochs and 97.2% of channels retained, and **no unit
+falls below 30 epochs** (minimum 33), so the cohort survives QC intact.
+
+**Residual cells are IMPUTED, not dropped, and the numbers are lopsided enough
+that this is forced.** After both rules, 0.82% of cells remain bad — but they
+are scattered across 23.6% of epochs (up to 50% for one unit). Dropping rows to
+purge them would cost a quarter of the training data to remove under 1% of
+cells. So: channel median across retained epochs, **fitted inside the training
+fold only**, with the imputed count logged per unit. No unit has zero residual
+cells, so there is no clean-subset alternative.
+
+**Coverage is not artifact.** 2 of 45 units have montages that differ across
+runs (189: 120 of 230 channels absent from some runs; 167: 26 of 169) and their
+apparent channel loss is entirely that, not badness. Those get restricted to
+channels present in the runs contributing retained epochs, BEFORE Y applies — a
+channel that was never recorded must never be imputed.
+
+*Reverses if:* P0.1 pins a different raw-voltage mask. Every number above is
+conditional on `_sw_logz4`; re-measuring is a ~10-minute job.
+
+**Where it lives:** measured by scratch probes (not committed);
+`docs/labnotebook/2026-09-08.md`. Thresholds to be consumed by
+`src/ieeg_ehr/decoding/`.

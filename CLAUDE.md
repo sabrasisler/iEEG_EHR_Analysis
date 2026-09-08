@@ -27,6 +27,16 @@ area:
   travels without an effect size. Read before interpreting an outline on a heatmap
   or changing any parameter of the test.
 
+Onboarding / cross-project reference:
+
+- `docs/data_sop.md` — the SOP for anyone using the `iEEG_EHR` dataset on
+  Sherlock: the Oak map (raw, `badchan/`, `derivatives/`), access and env setup,
+  identity/time conventions, what already exists so it isn't recomputed, storage
+  hygiene, and a list of known landmines. Derivative of the docs above, not an
+  authority over them — but it is where verified on-disk paths and counts live.
+  Read it when a question is "where is X / does X already exist", and update it
+  when you find it stale.
+
 Background / historical detail (descriptive, not normative — the three docs
 above win on any conflict):
 
@@ -185,6 +195,12 @@ eye or a model. A view is a step; an analysis is a stop.
 - Levels 1-2 are opened DELIBERATELY (new domain / a named question that exists in
   the exploration log). Levels 3-5 are created freely per run. Never a
   folder-per-plot at levels 1-2.
+- An OPTIONAL `<scope>` level may sit between 2 and 3, and currently exists only
+  for `decoding` (`individual_subject` vs a future `generalizable`). Use it only
+  when a question genuinely has two independent taxonomic axes and both belong in
+  the path; it is off by default and every other question stays at five levels.
+  Build it with `config.decoding_run_dir` / `analysis_run_dir(scope=...)`, never by
+  hand. (DECISIONS 2026-09-08)
 - All combinatorial sweep pressure goes into ROWS in a `sweeps/` `results.parquet`,
   NEVER into folders.
 - Discovery vs confirmation is a COHORT REFERENCE in config, not a folder level.
