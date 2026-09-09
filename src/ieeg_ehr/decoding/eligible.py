@@ -16,10 +16,11 @@ THE CRITERIA
   a built view  a unit with no view table is not "ineligible", it is UNBUILT, and
                 the distinction matters when the array count comes up short
 
-The nonzero-median criterion is deliberately NOT applied here. It only affects
-the classification arm (a median split at 0 is degenerate), and run_decoder skips
-that arm per-unit rather than dropping the unit from the regression and ordinal
-arms it is perfectly usable for.
+The nonzero-median and pain-range criteria are NOT applied here, because they are
+ARM-SPECIFIC: they gate the classification arm only, and a subject that fails
+them is still perfectly usable for regression and ordinal. `classification_ok`
+below is that gate, and it is applied per-arm inside run_decoder and again in
+aggregate.
 """
 
 import argparse
@@ -35,6 +36,42 @@ from ieeg_ehr.config import cohorts
 logger = logging.getLogger(__name__)
 
 MIN_EPOCHS = 30
+
+#: The classification arm additionally requires the target paper's inclusion
+#: criteria 2 and 3. ONE definition, used by run_decoder (to skip the arm) and by
+#: aggregate (to filter results produced before the gate existed), so the two
+#: cannot drift.
+MIN_MEDIAN_PAIN = 0.0      # strictly greater than this
+MIN_PAIN_RANGE = 5.0       # >=50% of the 0-10 scale
+
+
+def classification_ok(median_pain, pain_range):
+    """Is a median split MEANINGFUL for this subject?  (reason, or None if ok)
+
+    WHY THE MEDIAN MUST BE NONZERO, and it is not a technicality. When a
+    subject's median pain is 0, the "median split" is literally `0 vs >0` -- a
+    PAIN vs NO-PAIN discrimination, not the LOW vs HIGH PAIN one the arm claims
+    to measure. That is a different and easier question, so including such
+    subjects makes the group AUC an average over two incomparable analyses.
+
+    Measured on the 2026-09-08 run: 10 of 44 classification subjects had a
+    median of 0, and the top TWO performers (sub-189 at AUC 0.814, sub-051 at
+    0.809) were both among them -- i.e. the headline was partly a pain-detector
+    result. Their class balance gives it away (median 0.28 vs 0.41 for the rest).
+    Group AUC barely moves without them (0.598 -> 0.597, Mann-Whitney p = 0.90);
+    the reason to exclude is interpretability, not effect size.
+
+    The range criterion is the paper's "at least 50% of the total possible pain
+    range", which on this cohort is nearly non-binding -- it removes exactly one
+    subject (sub-189, range 4), already excluded by the median rule.
+    """
+    if median_pain is None or pain_range is None:
+        return 'median/range unknown'
+    if not median_pain > MIN_MEDIAN_PAIN:
+        return f'median pain {median_pain:g} is not > {MIN_MEDIAN_PAIN:g}'
+    if pain_range < MIN_PAIN_RANGE:
+        return f'pain range {pain_range:g} < {MIN_PAIN_RANGE:g}'
+    return None
 
 
 def eligible_units(view_dir, split='discovery', min_epochs=MIN_EPOCHS):

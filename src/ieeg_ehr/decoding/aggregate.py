@@ -31,7 +31,7 @@ import pandas as pd
 
 from ieeg_ehr import io
 from ieeg_ehr.decoding import arms as arms_mod
-from ieeg_ehr.decoding import cv
+from ieeg_ehr.decoding import cv, eligible
 from ieeg_ehr.decoding.run_decoder import DEFAULT_VIEW_SCHEME, unit_dir
 
 logger = logging.getLogger(__name__)
@@ -107,8 +107,28 @@ def aggregate(run_timestamp, arms=arms_mod.ARMS, view_scheme=DEFAULT_VIEW_SCHEME
         if metrics.empty:
             logger.warning('%s: no per-unit metrics found', arm)
             continue
+
+        # Re-apply the classification arm's inclusion criteria HERE as well as in
+        # run_decoder. The gate was added after the 2026-09-08 run, so its
+        # per-unit files still contain 10 median-0 subjects; filtering at read
+        # time corrects them without re-running ~2 h/subject to delete a file.
+        if arm == 'classification' and 'pain_score_median' in metrics:
+            reasons = [eligible.classification_ok(r.pain_score_median,
+                                                  r.pain_score_max - r.pain_score_min)
+                       for r in metrics.itertuples()]
+            drop = metrics.loc[[r is not None for r in reasons], 'unit'].tolist()
+            if drop:
+                logger.warning('%s: excluding %d subject(s) that cannot support a '
+                               'median split: %s', arm, len(drop), ', '.join(drop))
+                metrics = metrics[[r is None for r in reasons]].reset_index(drop=True)
+
         boots, _ = _read_all(units, 'bootstraps')
         coefs, _ = _read_all(units, 'coefficients')
+        keep_units = set(metrics['unit'])
+        if not boots.empty and 'unit' in boots:
+            boots = boots[boots['unit'].isin(keep_units)]
+        if not coefs.empty and 'unit' in coefs:
+            coefs = coefs[coefs['unit'].isin(keep_units)]
 
         # Add FDR within this arm, so the q-value is visible beside its p.
         primary = cv.primary_metric(arm)

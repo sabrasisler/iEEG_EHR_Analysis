@@ -27,7 +27,7 @@ from sklearn.exceptions import ConvergenceWarning
 
 from ieeg_ehr import config, io
 from ieeg_ehr.decoding import arms as arms_mod
-from ieeg_ehr.decoding import cascade, cv, features
+from ieeg_ehr.decoding import cascade, cv, eligible, features
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +73,21 @@ def run_unit(subject, session, view_dir, run_timestamp, arms=arms_mod.ARMS,
     for arm in arms:
         y = cv.make_labels(y_raw, arm)
         if arm == 'classification':
+            # The paper's inclusion criteria 2 and 3, applied PER ARM: a subject
+            # that fails them is still fine for regression and ordinal. Skipping
+            # rather than failing, because "this subject cannot support a median
+            # split" is a result.
+            reason = eligible.classification_ok(
+                float(np.median(y_raw)), float(y_raw.max() - y_raw.min()))
+            if reason:
+                logger.warning('sub-%s ses-%s: skipping the classification arm '
+                               '(%s)', subject, session, reason)
+                continue
             balance = float(np.mean(y))
             if min(balance, 1 - balance) == 0:
-                logger.warning('sub-%s ses-%s: median split is degenerate '
-                               '(median=%.1f); skipping the classification arm',
-                               subject, session, np.median(y_raw))
+                logger.warning('sub-%s ses-%s: median split leaves an empty '
+                               'class; skipping the classification arm',
+                               subject, session)
                 continue
 
         run_dir, units = unit_dir(run_timestamp, arm, view_scheme, run_name)

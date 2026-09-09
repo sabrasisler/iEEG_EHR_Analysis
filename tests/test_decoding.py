@@ -106,6 +106,24 @@ def test_median_split_sends_ties_low():
     assert labels.tolist() == [0, 0, 0, 0, 1, 1]
 
 
+def test_classification_requires_a_meaningful_median_split():
+    """The paper's inclusion criteria 2 and 3, which gate the CLASSIFICATION arm
+    only -- a subject failing them is still fine for regression and ordinal.
+
+    The median rule is not a technicality: at median 0 the "median split" is
+    `0 vs >0`, i.e. PAIN vs NO PAIN rather than LOW vs HIGH pain. On the
+    2026-09-08 run that silently put 10 subjects -- including the top two
+    performers -- into a group mean that then averaged two different questions.
+    """
+    from ieeg_ehr.decoding import eligible
+
+    assert eligible.classification_ok(2.0, 8.0) is None       # ordinary subject
+    assert eligible.classification_ok(0.5, 5.0) is None       # exactly at range floor
+    assert 'not >' in eligible.classification_ok(0.0, 10.0)   # wide range cannot rescue
+    assert 'range' in eligible.classification_ok(3.0, 4.0)    # nonzero median, too narrow
+    assert eligible.classification_ok(None, None) is not None
+
+
 def test_regression_and_ordinal_keep_the_raw_score():
     y = np.array([0, 3, 7, 10], dtype=float)
     assert cv.make_labels(y, 'regression').tolist() == y.tolist()
