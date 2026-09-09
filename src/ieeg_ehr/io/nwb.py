@@ -125,3 +125,46 @@ def load_channels_subset(nwb_path, channel_names_wanted):
     data_v = series.data[:, idx_sorted].astype(np.float32) * np.float32(series.conversion)
     io.close()
     return data_v, channel_names, sfreq
+
+
+def load_window_with_electrodes(nwb_path, start_sec, dur_sec, series_name='ElectricalSeries_sEEG'):
+    """One TIME WINDOW of a run, without reading the rest of it.
+
+    The existing loaders do `series.data[:]`, which for a 5-min epoch out of a
+    2-5 hour run is 20-60x more I/O than needed. V1 raw NWB `.data` is chunked
+    (10000, n_channels) -- along TIME -- so an HDF5 slice touches only the ~15
+    chunks it overlaps even though the file is gzip-compressed. Measured: 0.22 s
+    for 40 ch @ 500 Hz, 2.1 s for 250 ch @ 1000 Hz, versus a 1.5 GB whole-run read.
+
+    V2 CAVEAT (docs/dataset_v2.md §4). `iEEG_EHR_V2` re-chunked to
+    (120 s x 1 CHANNEL), which inverts the tradeoff: whole-channel reads get much
+    faster and short full-width windows become the worst case. A 5-min window is
+    >=120 s so it stays reasonable there (~1.6x overhead, since it spans 3 chunks
+    per channel and is not chunk-aligned), but anything shorter would not, and a
+    caller wanting V2 should read chunk-aligned blocks or whole channels instead.
+    This function reads whichever tree the path points at and does not check.
+
+    Returns (data_v, channel_names, sfreq, elec_df, n_samples_total).
+    `data_v` is (n_samples, n_channels) float32 in volts. The window is CLIPPED
+    to the run, so a short tail returns fewer samples rather than raising --
+    callers check the length they got.
+    """
+    io = NWBHDF5IO(nwb_path, 'r')
+    nwb = io.read()
+    series = nwb.acquisition[series_name]
+    if series.unit != 'volts':
+        io.close()
+        raise ValueError(f"Unexpected unit '{series.unit}' (expected 'volts') in {nwb_path}")
+
+    sfreq = float(series.rate)
+    n_total = series.data.shape[0]
+    lo = max(0, int(round(start_sec * sfreq)))
+    hi = min(n_total, lo + int(round(dur_sec * sfreq)))
+
+    elec_indices = series.electrodes.data[:]
+    elec_df = nwb.electrodes.to_dataframe().iloc[elec_indices]
+    channel_names = list(elec_df['location'].values)
+
+    data_v = series.data[lo:hi, :].astype(np.float32) * np.float32(series.conversion)
+    io.close()
+    return data_v, channel_names, sfreq, elec_df, n_total

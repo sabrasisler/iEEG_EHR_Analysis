@@ -150,7 +150,13 @@ def build_subject_view(subject, session, view_config, epoch_minutes=None,
             block = axes.normalize(block, baseline_mean[base_rows],
                                    baseline_sd[base_rows], view_config.normalization)
 
-        values = axes.epoch_mean(block)                       # (n_pairs, n_bins)
+        # AXIS 4. 'mean' averages the current domain directly (on log input that
+        # is a GEOMETRIC mean); 'rms' averages linear power, which is what an RMS
+        # is. Not interchangeable, and the difference is invisible downstream.
+        if view_config.epoch_agg == 'rms':
+            values = axes.epoch_rms(block, domain=view_config.domain)
+        else:
+            values = axes.epoch_mean(block)                   # (n_pairs, n_bins)
         if drop_bins.size:
             values[:, drop_bins] = np.nan
 
@@ -159,7 +165,8 @@ def build_subject_view(subject, session, view_config, epoch_minutes=None,
             values, col_names = axes.aggregate_bands(
                 values, bin_table, bands=bands,
                 is_difference=view_config.is_difference,
-                domain=view_config.domain)
+                domain=view_config.domain,
+                weighting=view_config.band_weighting)
             col_index = col_names
         else:
             col_index = list(range(values.shape[1]))

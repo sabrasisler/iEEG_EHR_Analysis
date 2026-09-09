@@ -106,6 +106,26 @@ def test_median_split_sends_ties_low():
     assert labels.tolist() == [0, 0, 0, 0, 1, 1]
 
 
+def test_two_feature_sources_are_accepted_and_anything_else_refused():
+    """The decoder reads BOTH the bipolar PSD view and the Laplacian band-RMS
+    table, which is the whole point of giving them the same schema. But an
+    unknown source must be refused rather than read hopefully -- the 50-bin view
+    has identical file names and would pivot into a plausible 7,650-column
+    matrix, and a baseline-normalized view would leak labels into every score.
+    """
+    from ieeg_ehr.decoding import features
+
+    assert set(features.REQUIRED_AXES_BY_SOURCE) == {'psd_view',
+                                                     'laplacian_bandpass_rms'}
+    # The two contracts require DIFFERENT fields -- view axes are meaningless for
+    # a time-domain extraction, and line noise is notched rather than bin-dropped.
+    psd = features.REQUIRED_AXES_BY_SOURCE['psd_view']
+    lap = features.REQUIRED_AXES_BY_SOURCE['laplacian_bandpass_rms']
+    assert psd['drop_line_noise_bins'] is True
+    assert 'drop_line_noise_bins' not in lap
+    assert lap['reref'] == 'laplacian' and lap['statistic'] == 'log10_rms'
+
+
 def test_classification_requires_a_meaningful_median_split():
     """The paper's inclusion criteria 2 and 3, which gate the CLASSIFICATION arm
     only -- a subject failing them is still fine for regression and ordinal.

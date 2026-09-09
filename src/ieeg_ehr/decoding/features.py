@@ -42,15 +42,38 @@ from ieeg_ehr.views import cache_reader, channel_meta
 
 logger = logging.getLogger(__name__)
 
-#: What the decoder requires of the view it is pointed at. Checked by NAME with a
-#: specific message rather than only by config hash, so a mismatch says WHICH
-#: axis is wrong instead of "hash differs".
-REQUIRED_VIEW_AXES = {
-    'freq': 'paper_bands_6',
-    'normalization': 'none',
-    'region': 'none',
-    'drop_line_noise_bins': True,
+#: What the decoder requires of each accepted FEATURE SOURCE. Checked by NAME
+#: with a specific message rather than only by config hash, so a mismatch says
+#: WHICH axis is wrong instead of "hash differs".
+#:
+#: Two sources are legitimate and they are NOT interchangeable in their fields:
+#:
+#:  psd_view   the materialized view of the bipolar Welch-PSD cache. Bands come
+#:             from aggregating stored bins, so the line-noise flag matters.
+#:  laplacian_bandpass_rms
+#:             a fresh extraction off the raw time-domain signal (notch ->
+#:             Laplacian -> Butterworth -> RMS). It has no view axes at all --
+#:             `freq`/`normalization`/`region` are meaningless for it, and line
+#:             noise is handled by the notch rather than by dropping bins.
+#:
+#: Channel sets differ between them and can never be joined: Laplacian names a
+#: channel for its centre contact ('LA2'), bipolar names a pair ('LA1-LA2').
+REQUIRED_AXES_BY_SOURCE = {
+    'psd_view': {
+        'freq': 'paper_bands_6',
+        'normalization': 'none',
+        'region': 'none',
+        'drop_line_noise_bins': True,
+    },
+    'laplacian_bandpass_rms': {
+        'source': 'laplacian_bandpass_rms',
+        'reref': 'laplacian',
+        'statistic': 'log10_rms',
+    },
 }
+
+#: Kept for callers that still reference the single-source constant.
+REQUIRED_VIEW_AXES = REQUIRED_AXES_BY_SOURCE['psd_view']
 
 
 class ViewMismatchError(RuntimeError):
@@ -111,16 +134,28 @@ def verify_view(view_dir, epoch_path, on_stale='refuse'):
             f'{epoch_path} has no readable provenance sidecar, so there is no way '
             'to confirm which view it is. Refusing rather than assuming.')
 
-    wrong = {k: params.get(k) for k, want in REQUIRED_VIEW_AXES.items()
+    # The sidecar's own `source` decides which contract applies. Absent means the
+    # PSD view, which predates the field.
+    source = params.get('source', 'psd_view')
+    required = REQUIRED_AXES_BY_SOURCE.get(source)
+    if required is None:
+        raise ViewMismatchError(
+            f'{epoch_path} declares source={source!r}, which this analysis does '
+            f'not know how to consume. Known: {sorted(REQUIRED_AXES_BY_SOURCE)}')
+
+    wrong = {k: params.get(k) for k, want in required.items()
              if params.get(k) != want}
     if wrong:
+        hint = ('Build it with sbatch/build_paper6_view_array.sbatch. In particular '
+                'drop_line_noise_bins MUST be True: the paper bands straddle '
+                '60/120 Hz and views.axes.aggregate_bands does not exclude flagged '
+                'bins itself.') if source == 'psd_view' else (
+                'Build it with sbatch/build_laplacian_bandpass_array.sbatch.')
         raise ViewMismatchError(
-            f'{view_dir.name} is not the view this analysis is defined on.\n'
-            f'  required: {REQUIRED_VIEW_AXES}\n'
-            f'  found:    {wrong}\n'
-            'Build it with sbatch/build_paper6_view_array.sbatch. In particular '
-            'drop_line_noise_bins MUST be True: the paper bands straddle 60/120 Hz '
-            'and views.axes.aggregate_bands does not exclude flagged bins itself.')
+            f'{view_dir.name} is not a feature table this analysis is defined on.\n'
+            f'  source:   {source}\n'
+            f'  required: {required}\n'
+            f'  found:    {wrong}\n' + hint)
 
     io.assert_fresh(epoch_path, on_stale=on_stale)
     return params

@@ -27,8 +27,9 @@ from dataclasses import asdict, dataclass, field
 DOMAINS = ('log', 'linear')
 BASELINES = ('zero_pain_epochs', 'whole_session')
 NORMALIZATIONS = ('none', 'baseline_subtract', 'zscore_vs_baseline')
-EPOCH_AGGS = ('mean',)
+EPOCH_AGGS = ('mean', 'rms')
 FREQ_AGGS = ('log_bins_50', 'canonical_bands', 'paper_bands_6')
+BAND_WEIGHTINGS = ('uniform', 'width')
 REGION_AGGS = ('none', 'individual_dk')
 PAIN_BINS = ('absolute', 'subject_relative')
 MASK_LEVELS = ('bipolar', 'raw_voltage', 'none')
@@ -71,6 +72,18 @@ class ViewConfig:
     mask_level: str = 'bipolar'
     mask_label: str = None
 
+    # How bins are combined WITHIN a band (AXIS 5). 'uniform' is a plain mean over
+    # the band's bins; 'width' weights each bin by its bandwidth, which is what a
+    # band POWER actually is (an integral of PSD over frequency).
+    #
+    # Default stays 'uniform' so every pre-existing view keeps its meaning. The
+    # difference is not cosmetic on log-spaced bins: within gamma (25-70 Hz) our
+    # bin widths span 2.87-6.95 Hz, so a plain mean treats a 2.9 Hz bin the same
+    # as a 7 Hz one and drags the band value toward its low-frequency edge --
+    # where, given 1/f, the power already is. Measured centroid shift:
+    # gamma 42.1 -> 45.4 Hz, high_gamma 113.7 -> 122.8 Hz.
+    band_weighting: str = 'uniform'
+
     # ROI scheme name or path to a JSON scheme (config/roi_schemes.py). Only
     # meaningful when region != 'none'.
     roi_scheme: str = 'default'
@@ -96,6 +109,7 @@ class ViewConfig:
             (self.region, REGION_AGGS, 'region'),
             (self.pain_bins, PAIN_BINS, 'pain_bins'),
             (self.mask_level, MASK_LEVELS, 'mask_level'),
+            (self.band_weighting, BAND_WEIGHTINGS, 'band_weighting'),
         ):
             if value not in allowed:
                 raise ValueError(f'{name}={value!r} not one of {allowed}')
@@ -210,7 +224,13 @@ def add_view_arguments(parser):
     g.add_argument('--domain', choices=DOMAINS, default='log')
     g.add_argument('--baseline', choices=['zero_pain_epochs'], default='zero_pain_epochs')
     g.add_argument('--normalization', choices=NORMALIZATIONS, default='zscore_vs_baseline')
-    g.add_argument('--epoch-agg', choices=EPOCH_AGGS, default='mean')
+    g.add_argument('--epoch-agg', choices=EPOCH_AGGS, default='mean',
+                   help="'mean' averages log power over windows (a GEOMETRIC "
+                        "mean); 'rms' averages linear power then re-logs, which "
+                        "is what the target paper's RMS computes")
+    g.add_argument('--band-weighting', choices=BAND_WEIGHTINGS, default='uniform',
+                   help="'width' weights each bin by its bandwidth (a true band "
+                        'power integral); log-spaced bins make this matter')
     g.add_argument('--freq', choices=FREQ_AGGS, default='log_bins_50')
     g.add_argument('--region', choices=REGION_AGGS, default='individual_dk')
     g.add_argument('--pain-bins', choices=PAIN_BINS, default='subject_relative')
@@ -229,6 +249,7 @@ def from_args(args):
     return ViewConfig(
         domain=args.domain, baseline=args.baseline, normalization=args.normalization,
         epoch_agg=args.epoch_agg, freq=args.freq, region=args.region,
+        band_weighting=args.band_weighting,
         pain_bins=args.pain_bins, roi_scheme=args.roi_scheme,
         mask_level=args.mask_level, mask_label=args.mask_label,
         max_excluded_frac=args.max_excluded_frac,

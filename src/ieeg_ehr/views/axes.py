@@ -192,7 +192,45 @@ def bands_for(freq):
     raise ValueError(f'unknown freq axis value {freq!r}')
 
 
-def aggregate_bands(values, bin_table, bands=None, is_difference=True, domain='log'):
+def epoch_rms(block, domain='log'):
+    """Mean over windows in the LINEAR power domain, returned in `domain`.
+
+    THE JENSEN CHOICE, made the other way from `epoch_mean` (registry AXIS 4).
+    `epoch_mean` on log-domain input averages LOGS, which is a geometric mean: it
+    downweights bursty high-power windows. A root-mean-square is arithmetic in
+    power, so this exponentiates first, averages, and (for a log view) re-logs.
+
+    This is what the target paper's "log spectral power (root mean square)"
+    computes -- RMS^2 over a window IS the arithmetic mean of power, so
+    log(RMS) = 0.5 * log(mean power). The factor of 2 is absorbed by the
+    per-feature standardization the decoder applies, so matching the mean-power
+    quantity is sufficient.
+
+    Runs in CACHE_LINEAR_DOMAIN_DTYPE: the worst stored log-power is ~-36.8, one
+    decade above float32's smallest normal, so exponentiating narrow would
+    underflow to exactly zero (P0.6).
+
+    `domain` describes the block AS GIVEN, because `to_domain` has already run by
+    the time this is called. A 'linear' block is already power, so exponentiating
+    it again would square it -- silently, and the output would still look like a
+    plausible spectrum.
+    """
+    with np.errstate(invalid='ignore'):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message='Mean of empty slice')
+            if domain == 'linear':
+                return np.nanmean(block, axis=0,
+                                  dtype=config.CACHE_ACCUMULATE_DTYPE)
+            linear = np.power(10.0, block.astype(config.CACHE_LINEAR_DOMAIN_DTYPE))
+            mean_power = np.nanmean(linear, axis=0,
+                                    dtype=config.CACHE_ACCUMULATE_DTYPE)
+            with np.errstate(divide='ignore'):
+                return np.log10(mean_power)
+
+
+def aggregate_bands(values, bin_table, bands=None, is_difference=True, domain='log',
+                    weighting='uniform'):
     """(n_pairs, n_bins) -> (n_pairs, n_bands), plus the band names.
 
     A difference of logs (z-score / baseline-subtract) averages ARITHMETICALLY --
@@ -202,7 +240,10 @@ def aggregate_bands(values, bin_table, bands=None, is_difference=True, domain='l
     is why `is_difference` is threaded through rather than inferred here.
     """
     bands = bands or config.CANONICAL_BANDS_HZ
-    centers = np.sqrt(bin_table['bin_low_hz'].to_numpy() * bin_table['bin_high_hz'].to_numpy())
+    lo = bin_table['bin_low_hz'].to_numpy()
+    hi = bin_table['bin_high_hz'].to_numpy()
+    centers = np.sqrt(lo * hi)
+    widths = hi - lo
     names, cols = [], []
     for band, (fmin, fmax) in bands.items():
         idx = np.flatnonzero((centers >= fmin) & (centers < fmax))
@@ -211,19 +252,43 @@ def aggregate_bands(values, bin_table, bands=None, is_difference=True, domain='l
                            band, fmin, fmax)
             continue
         sub = values[:, idx]
+        # 'width': a band POWER is an integral of PSD over frequency, so each bin
+        # contributes in proportion to its bandwidth. On log-spaced bins that is
+        # not a rounding detail -- widths vary 2.4x inside gamma, and an
+        # unweighted mean drags the band toward its low-frequency edge where, by
+        # 1/f, the power already sits. 'uniform' is the historical behaviour and
+        # stays the default so existing views keep their meaning.
+        w = widths[idx] if weighting == 'width' else np.ones(idx.size)
         with np.errstate(invalid='ignore'):
             import warnings
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore', message='Mean of empty slice')
                 if is_difference or domain == 'linear':
-                    agg = np.nanmean(sub, axis=1, dtype=config.CACHE_ACCUMULATE_DTYPE)
+                    agg = _weighted_nanmean(sub, w)
                 else:
                     linear = np.power(10.0, sub.astype(config.CACHE_LINEAR_DOMAIN_DTYPE))
-                    agg = np.log10(np.nanmean(linear, axis=1,
-                                              dtype=config.CACHE_ACCUMULATE_DTYPE))
+                    with np.errstate(divide='ignore'):
+                        agg = np.log10(_weighted_nanmean(linear, w))
         names.append(band)
         cols.append(agg)
     return np.column_stack(cols) if cols else np.empty((values.shape[0], 0)), names
+
+
+def _weighted_nanmean(sub, w):
+    """Weighted mean along axis 1, ignoring NaN.
+
+    The weights must be renormalized over the SURVIVING bins per row, not over
+    all of them -- otherwise a channel whose high-frequency bins were masked out
+    would be divided by a denominator including weight it never received, and
+    its band power would read low for a reason that has nothing to do with the
+    brain.
+    """
+    ok = np.isfinite(sub)
+    wm = np.where(ok, w[None, :], 0.0)
+    total = wm.sum(axis=1)
+    num = np.nansum(np.where(ok, sub, 0.0) * wm, axis=1,
+                    dtype=config.CACHE_ACCUMULATE_DTYPE)
+    return np.where(total > 0, num / np.where(total > 0, total, 1.0), np.nan)
 
 
 # ---------------------------------------------------------------------------

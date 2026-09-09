@@ -619,6 +619,52 @@ def med_run_dir(output_type, run_name, question=MED_DEFAULT_QUESTION,
 
 
 # ============================================================================
+# LAPLACIAN BAND-RMS  —  a SECOND epoch feature source, off the time-domain signal
+# ============================================================================
+# A sibling of psd_epochs, not a view of it. Prasad et al. 2025 notch-filter,
+# LAPLACIAN re-reference, bandpass with 8th-order Butterworth and take the RMS;
+# everything in that chain except the re-reference is reproducible from the
+# stored PSD cache, but the bipolar trace was never persisted, so matching their
+# spatial filter needs a fresh read of the raw signal (DECISIONS 2026-09-09).
+#
+# Extracted on PAIN EPOCHS ONLY, deliberately: the continuous-family pattern
+# (whole run -> slice -> cache) would cost ~40x more I/O for a question that only
+# ever looks at 5-min pre-report windows. Raw NWB is chunked along time, so the
+# windowed read is cheap. That is a considered departure from architecture.md's
+# layer model, and it is why this is `bandpass_epochs`, not `preprocessed/`.
+
+BANDPASS_FEATURES_ROOT = FEATURES_ROOT / 'pain' / 'bandpass_epochs'
+
+#: Re-reference schemes this tree can hold. In the directory name because two
+#: schemes are two different CHANNEL SETS -- Laplacian names a channel for its
+#: centre contact ('LA2') where bipolar names a pair ('LA1-LA2'), so the two can
+#: never be joined and must not share a directory.
+BANDPASS_REREF_SCHEMES = ('laplacian',)
+
+
+def bandpass_unit_dir(reref='laplacian', minutes_before=None):
+    """Base unit for one (epoch definition, re-reference scheme)."""
+    if reref not in BANDPASS_REREF_SCHEMES:
+        raise ValueError(f'reref={reref!r} not one of {BANDPASS_REREF_SCHEMES}')
+    return BANDPASS_FEATURES_ROOT / f'{epoch_label(minutes_before)}_{reref}'
+
+
+def bandpass_table_path(subject, session, reref='laplacian', minutes_before=None):
+    """One subject-session's epoch x channel x band table.
+
+    Named `view_epochs_sub-XXX_ses-YY.parquet` to match what the psd view layer
+    emits, because the decoder reads BOTH through the same loader -- the point of
+    this artifact is to be swappable for the PSD view with nothing else changed.
+    """
+    return (bandpass_unit_dir(reref, minutes_before)
+            / f'view_epochs_sub-{subject}_ses-{session}.parquet')
+
+
+def bandpass_manifest_path(reref='laplacian', minutes_before=None):
+    return bandpass_unit_dir(reref, minutes_before) / 'manifest.json'
+
+
+# ============================================================================
 # PAIN STATE DECODING  —  level-2 question 'decoding'
 # ============================================================================
 # Opened deliberately (PLANNING.md, "Pain state decoding"). Replicates the

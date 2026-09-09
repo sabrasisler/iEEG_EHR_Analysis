@@ -421,6 +421,57 @@ def test_line_noise_bins_must_be_nan_before_band_aggregation():
     assert absorbed[0, 0] > clean[0, 0] + 1.0            # >1 log unit of notch residue
 
 
+def test_epoch_rms_is_arithmetic_in_power_not_geometric():
+    """AXIS 4's Jensen choice, and the one the target paper makes.
+
+    Two windows at log-power 1 and 3. A geometric mean (averaging logs) gives 2.
+    An RMS is arithmetic IN POWER: log10((10+1000)/2) = 2.70. The 0.7 log-unit
+    gap is exactly the bursty-window mass that a geometric mean discards -- which
+    is where high-frequency pain signal would live.
+    """
+    block = np.array([[[1.0]], [[3.0]]])          # (2 windows, 1 pair, 1 bin)
+    assert axes.epoch_mean(block)[0, 0] == pytest.approx(2.0)
+    assert axes.epoch_rms(block)[0, 0] == pytest.approx(
+        np.log10((10.0 ** 1 + 10.0 ** 3) / 2))
+
+
+def test_epoch_rms_does_not_re_exponentiate_a_linear_block():
+    """to_domain has already run by then; squaring the block would be silent."""
+    linear = np.array([[[10.0]], [[1000.0]]])
+    assert axes.epoch_rms(linear, domain='linear')[0, 0] == pytest.approx(505.0)
+
+
+def test_width_weighted_bands_integrate_rather_than_average():
+    """A band POWER is an integral of PSD over frequency, so a wide bin must
+    count for more than a narrow one. On log-spaced bins the two differ
+    materially; 'uniform' drags the value toward the low-frequency edge.
+    """
+    # Two bins in one band: 1 Hz wide at power 10, 3 Hz wide at power 100.
+    bin_table = _bin_table([10.0, 11.0, 14.0])
+    values = np.log10(np.array([[10.0, 100.0]]))
+
+    uni, _ = axes.aggregate_bands(values, bin_table, bands={'b': (1, 200)},
+                                  is_difference=False, domain='log',
+                                  weighting='uniform')
+    wid, _ = axes.aggregate_bands(values, bin_table, bands={'b': (1, 200)},
+                                  is_difference=False, domain='log',
+                                  weighting='width')
+    assert uni[0, 0] == pytest.approx(np.log10((10 + 100) / 2))          # 55
+    assert wid[0, 0] == pytest.approx(np.log10((10 * 1 + 100 * 3) / 4))  # 77.5
+    assert wid[0, 0] > uni[0, 0]
+
+
+def test_width_weights_renormalize_over_surviving_bins():
+    """A masked bin must not leave its weight in the denominator -- that would
+    read as low band power for a reason that is not the brain."""
+    bin_table = _bin_table([10.0, 11.0, 14.0])
+    values = np.log10(np.array([[10.0, np.nan]]))       # the wide bin is masked
+    out, _ = axes.aggregate_bands(values, bin_table, bands={'b': (1, 200)},
+                                  is_difference=False, domain='log',
+                                  weighting='width')
+    assert out[0, 0] == pytest.approx(np.log10(10.0))   # not 10*1/4
+
+
 def test_a_band_with_no_bins_is_skipped_not_zeroed():
     """Nothing falls in 70-170 Hz here, so the column must be absent entirely —
     a zero would read as 'measured, and flat'."""
