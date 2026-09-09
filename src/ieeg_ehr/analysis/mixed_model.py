@@ -120,6 +120,39 @@ MED_INTERACTION_TERM = 'NRS_within:med_state'
 # compared across levels.
 FORMULA_MATCHED = 'log10_power ~ C(NRS) + med_state'
 
+# The PAIRED CHANGE-SCORE model. Rows are (assessment pair x channel) and the
+# outcome is the CHANGE in log power across the pair.
+#
+#   d_pain              how power change tracks pain change
+#   med_between         does a dose shift power on top of that
+#   d_pain:med_between  does a dose alter the pain->power coupling
+#
+# `pain_1` IS NOT OPTIONAL. Regression to the mean dominates these pairs -- mean
+# change in pain runs from +2.12 at baseline 0 to -3.00 at baseline 10 -- and
+# medication is given BECAUSE pain is high, so exposure and baseline are
+# entangled. Without the baseline this model reports regression to the mean as a
+# drug effect. (Lord's paradox; the standard fix for a change-score model.)
+#
+# `gap_h` because both differences grow with the interval, and its interaction
+# with `med_between` is the cheap probe of whether the effect has any TIME
+# STRUCTURE -- a real pharmacological effect should attenuate with gap, a
+# confound has no reason to. That is the empirical precursor to a PK model.
+FORMULA_CHANGE = ('d_log10_power ~ d_pain * med_between + pain_1 + gap_h'
+                  ' + med_between:gap_h')
+
+VC_CHANGE = {
+    'subj_int': '1',
+    'subj_dpain': '0 + d_pain',
+    'channel': '0 + C(channel_uid)',
+}
+VC_CHANGE_REDUCED = {k: v for k, v in VC_CHANGE.items() if k != 'subj_dpain'}
+
+CHANGE_TERMS = (('d_pain', 'dpain'),
+                ('med_between', 'med'),
+                ('d_pain:med_between', 'med_ix'),
+                ('med_between:gap_h', 'med_gap'),
+                ('pain_1', 'baseline'))
+
 #: Per-subject medication effect, the matched model's analogue of `subj_slope`.
 VC_MATCHED = {
     'subj_int': '1',
