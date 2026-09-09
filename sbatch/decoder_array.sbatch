@@ -97,8 +97,16 @@ ARMS=${ARMS:-regression}
 N_BOOTSTRAPS=${N_BOOTSTRAPS:-100}
 MIN_EPOCHS=${MIN_EPOCHS:-30}
 
-mapfile -t UNITS < <(python -m ieeg_ehr.decoding.eligible \
-    --view-dir "${VIEW_DIR}" --min-epochs "${MIN_EPOCHS}")
+# UNITS_OVERRIDE re-runs a named subset (e.g. tasks that hit a walltime) with
+# the SAME RUN_TIMESTAMP, so the retries land in the original run directory
+# rather than opening a second one that nothing aggregates together. Space
+# separated, each "<subject>_<session>".
+if [ -n "${UNITS_OVERRIDE:-}" ]; then
+  read -r -a UNITS <<< "${UNITS_OVERRIDE}"
+else
+  mapfile -t UNITS < <(python -m ieeg_ehr.decoding.eligible \
+      --view-dir "${VIEW_DIR}" --min-epochs "${MIN_EPOCHS}")
+fi
 
 if [ "${SLURM_ARRAY_TASK_ID}" -ge "${#UNITS[@]}" ]; then
   echo "ERROR: array task ${SLURM_ARRAY_TASK_ID} >= ${#UNITS[@]} eligible units."
