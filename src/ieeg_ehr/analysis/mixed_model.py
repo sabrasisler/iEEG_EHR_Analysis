@@ -120,6 +120,44 @@ MED_INTERACTION_TERM = 'NRS_within:med_state'
 # compared across levels.
 FORMULA_MATCHED = 'log10_power ~ C(NRS) + med_state'
 
+# The DECOMPOSED medication model. `med_state` gets the same within/between split
+# that pain already gets, because it needs it for the same reason and the reason
+# is measurable: subject mean pain correlates +0.685 with subject proportion
+# medicated (p = 4e-06). Patients who hurt more are medicated more.
+#
+# With `med_state` entering raw, its single coefficient blends "when THIS patient
+# is medicated, what happens to their power" with "do heavily-medicated patients
+# differ from lightly-medicated ones" -- and at rho = 0.69 the second is largely a
+# pain difference wearing a medication label. Most medicated epochs come from
+# high-proportion patients and most unmedicated ones from low-proportion
+# patients, so the raw coefficient is partly a between-patient comparison.
+#
+#   med_within   the effect of interest, centred within each patient
+#   med_submean  absorbs the between-patient contamination
+FORMULA_MED_DECOMPOSED = ('log10_power ~ NRS_within + NRS_submean'
+                          ' + med_within + med_submean'
+                          ' + NRS_within:med_within')
+
+MED_DECOMPOSED_TERMS = (('med_within', 'medw'),
+                        ('med_submean', 'medb'),
+                        ('NRS_within:med_within', 'med_ix'))
+
+
+def add_med_components(df):
+    """Split `med_state` into within- and between-patient parts, on a copy.
+
+    Row-weighted, matching `add_nrs_components`: the mean is over the rows
+    actually entering this cell's model, so a patient who lost channels to
+    masking contributes proportionally less to their own centre. That is what
+    makes `med_within` orthogonal to the subject dummies in THIS design matrix,
+    which is the only property the decomposition has to have.
+    """
+    df = df.copy()
+    df['med_submean'] = df.groupby('subject')['med_state'].transform('mean')
+    df['med_within'] = df['med_state'] - df['med_submean']
+    return df
+
+
 # The PAIRED CHANGE-SCORE model. Rows are (assessment pair x channel) and the
 # outcome is the CHANGE in log power across the pair.
 #

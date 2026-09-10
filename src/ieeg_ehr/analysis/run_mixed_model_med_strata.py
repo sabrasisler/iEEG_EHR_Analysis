@@ -65,7 +65,7 @@ FDR_Q = 0.05
 
 #: Subdirectory per fit. Named `grid_cells.parquet` inside each so every existing
 #: plotting script works on them unchanged.
-STRATA = ('medpos', 'medneg', 'interaction', 'matched')
+STRATA = ('medpos', 'medneg', 'interaction', 'matched', 'decomposed')
 
 
 def stratum_dir(run_dir, name):
@@ -270,6 +270,59 @@ def fit_interaction(df, meta):
     return rec, blups
 
 
+def fit_decomposed(df, meta):
+    """The interaction model with `med_state` split within/between.
+
+    Same variance components as the undecomposed interaction fit, so the two are
+    directly comparable and the only thing that changed is what `med_state` is
+    allowed to absorb.
+    """
+    t0 = time.time()
+    df = mm.add_med_components(df)
+    if df['med_within'].std(ddof=0) == 0:
+        rec = mm.failed_record(meta['region'], meta['freq_bin_index'],
+                               meta['bin_low_hz'], meta['bin_high_hz'],
+                               'no within-patient medication variation', df=df)
+        rec['cell_index'] = meta['cell_index']
+        return rec, []
+    try:
+        res, warn_full = mm.fit_cell(df, mm.VC_FULL,
+                                     formula=mm.FORMULA_MED_DECOMPOSED)
+    except mm.CellFitError as exc:
+        rec = mm.failed_record(meta['region'], meta['freq_bin_index'],
+                               meta['bin_low_hz'], meta['bin_high_hz'],
+                               f'decomposed: {exc}', df=df,
+                               fit_seconds=time.time() - t0)
+        rec['cell_index'] = meta['cell_index']
+        return rec, []
+    t_full = time.time() - t0
+
+    try:
+        res_red, warn_red = mm.fit_cell(df, mm.VC_REDUCED,
+                                        formula=mm.FORMULA_MED_DECOMPOSED)
+    except mm.CellFitError as exc:
+        res_red, warn_red = None, [f'reduced failed: {exc}']
+
+    rec = mm.cell_record(res, res_red, df, region=meta['region'],
+                         freq_bin_index=meta['freq_bin_index'],
+                         bin_low_hz=meta['bin_low_hz'],
+                         bin_high_hz=meta['bin_high_hz'], fit_seconds=t_full,
+                         warnings_full=warn_full, warnings_reduced=warn_red,
+                         extra_terms=mm.MED_DECOMPOSED_TERMS)
+    rec['cell_index'] = meta['cell_index']
+    rec['group'] = 'decomposed'
+    # The patient-level proportion medicated, for reading medb against.
+    rec['med_submean_mean'] = float(df['med_submean'].mean())
+    blups = mm.blup_rows(res, df, region=meta['region'],
+                         freq_bin_index=meta['freq_bin_index'])
+    logger.info('%-18s bin %2d | med_WITHIN %+.5f p %.3g | med_BETWEEN %+.5f '
+                'p %.3g | ix %+.5f p %.3g',
+                meta['region'], meta['freq_bin_index'], rec['medw_beta'],
+                rec['medw_p'], rec['medb_beta'], rec['medb_p'],
+                rec['med_ix_beta'], rec['med_ix_p'])
+    return rec, blups
+
+
 def matched_subject_diffs(df):
     """Per subject: mean over NRS levels of (medicated power - unmedicated power).
 
@@ -436,7 +489,7 @@ def stage_fit(args):
         # the term `med_state[T.True]`, which MED_INTERACTION_TERM would miss.
         df['med_state'] = df['med_state'].astype(float)
 
-        for name, want in (() if args.matched_only
+        for name, want in (() if (args.matched_only or args.decomposed_only)
                            else (('medpos', 1.0), ('medneg', 0.0))):
             sub = df[df['med_state'] == want]
             # Re-centre WITHIN the stratum -- see the module docstring.
@@ -452,6 +505,12 @@ def stage_fit(args):
         if args.matched_only:
             records['matched'].append(fit_matched(df, meta))
             continue
+        if args.decomposed_only:
+            rec, bl = fit_decomposed(df, meta)
+            records['decomposed'].append(rec)
+            if bl:
+                blups['decomposed'].append(pd.DataFrame(bl))
+            continue
 
         rec, bl = fit_interaction(df, meta)
         rec['stratum'] = 'interaction'
@@ -459,6 +518,10 @@ def stage_fit(args):
         if bl:
             blups['interaction'].append(pd.DataFrame(bl))
         records['matched'].append(fit_matched(df, meta))
+        rec, bl = fit_decomposed(df, meta)
+        records['decomposed'].append(rec)
+        if bl:
+            blups['decomposed'].append(pd.DataFrame(bl))
 
     for name in STRATA:
         # Skip strata this task did not compute -- with --matched-only that is
@@ -544,6 +607,14 @@ def stage_collect(args):
             # uncorrected made the smaller effect the only one on the record.
             cells = add_fdr(cells, 'med_ix_p', 'med_ix')
             cells = add_fdr(cells, 'med_main_p', 'med_main')
+        if name == 'decomposed':
+            # Three families: the within-patient effect (what we want), the
+            # between-patient one (what was contaminating it), and the
+            # within-within interaction.
+            for col, pref in (('medw_p', 'medw'), ('medb_p', 'medb'),
+                              ('med_ix_p', 'med_ix')):
+                if col in cells.columns:
+                    cells = add_fdr(cells, col, pref)
 
         out = stratum_dir(run_dir, name)
         out.mkdir(parents=True, exist_ok=True)   # `matched` may postdate prepare
@@ -668,6 +739,9 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--allow-cohort-drift', action='store_true')
     ap.add_argument('--min-subjects', type=int, default=10)
+    ap.add_argument('--decomposed-only', action='store_true',
+                    help='Fit ONLY the decomposed-medication model, reusing an '
+                         "existing run's cohort, manifest and med state.")
     ap.add_argument('--matched-only', action='store_true',
                     help='Fit ONLY the matched-NRS model, reusing an existing '
                          "run's cohort, manifest and med state -- so the matched "
