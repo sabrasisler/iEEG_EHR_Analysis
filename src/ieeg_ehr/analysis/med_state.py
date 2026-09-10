@@ -56,9 +56,20 @@ DEFAULT_WINDOW_HOURS = 2.0
 
 #: Named drug sets. `analgesics` is every class in the table; `opioids` is the
 #: pharmacologically cleanest subset but costs a third of the medicated epochs.
+#:
+#: `non_opioid_analgesics` is the COMPLEMENT of `opioids` within `analgesics`,
+#: and exists so that "opioid" and "non-opioid" can be compared. Running
+#: `analgesics` beside `opioids` does NOT give that comparison: analgesics is a
+#: superset that CONTAINS opioids, so the two differ by the presence of
+#: acetaminophen and NSAIDs rather than by opioid exposure. Only this set makes
+#: the contrast a partition. It is also the arm where a central mechanism is
+#: least expected, which makes it the closer thing to a negative control for a
+#: broadband amplitude artifact.
 DRUG_SETS = {
     'analgesics': med_taxonomy.ANALGESIC_SUBCLASSES,
     'opioids': ('Opioids',),
+    'non_opioid_analgesics': tuple(s for s in med_taxonomy.ANALGESIC_SUBCLASSES
+                                   if s != 'Opioids'),
 }
 
 
