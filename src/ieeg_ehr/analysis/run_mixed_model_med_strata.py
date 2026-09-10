@@ -489,8 +489,14 @@ def stage_fit(args):
         # the term `med_state[T.True]`, which MED_INTERACTION_TERM would miss.
         df['med_state'] = df['med_state'].astype(float)
 
-        for name, want in (() if (args.matched_only or args.decomposed_only)
-                           else (('medpos', 1.0), ('medneg', 0.0))):
+        # OPT-IN, not default. The stratified pair costs two of the five fits
+        # per cell and answers nothing the other three do not answer better: the
+        # comparison question needs the interaction, and `medneg` is not an
+        # unmedicated map -- 58% of nominally-unmedicated intervals had a dose
+        # within the preceding hour. For a pain map uncontaminated by
+        # stratification, the unstratified grid has 51 subjects rather than 36.
+        for name, want in ((('medpos', 1.0), ('medneg', 0.0))
+                           if args.with_stratified else ()):
             sub = df[df['med_state'] == want]
             # Re-centre WITHIN the stratum -- see the module docstring.
             sub = mm.add_nrs_components(sub)
@@ -739,6 +745,11 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--allow-cohort-drift', action='store_true')
     ap.add_argument('--min-subjects', type=int, default=10)
+    ap.add_argument('--with-stratified', action='store_true',
+                    help='Also fit the medicated-only and unmedicated-only maps. '
+                         'Off by default: they cost 40%% of the compute and the '
+                         'interaction/decomposed fits answer the comparison '
+                         'question properly, which two separate maps cannot.')
     ap.add_argument('--decomposed-only', action='store_true',
                     help='Fit ONLY the decomposed-medication model, reusing an '
                          "existing run's cohort, manifest and med state.")
