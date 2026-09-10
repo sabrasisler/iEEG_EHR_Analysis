@@ -60,6 +60,26 @@ MED_COLOR = '#c1442f'
 UNMED_COLOR = '#2c6fad'
 
 
+def _grid(n, ncol, panel_w, panel_h):
+    """(fig, flat axes list). One row per `ncol` cells, unused panels hidden.
+
+    A single row stops being readable somewhere around six cells, and the point
+    of running 50 is to see how a shape CHANGES across frequency within a region
+    -- which needs them adjacent, not strung out.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    ncol = max(1, min(ncol, n))
+    nrow = int(np.ceil(n / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(panel_w * ncol, panel_h * nrow),
+                             squeeze=False)
+    flat = [ax for row in axes for ax in row]
+    for ax in flat[n:]:
+        ax.set_visible(False)
+    return fig, flat[:n]
+
+
 def load_cells(run_dir, cells, ref):
     """{(region, bin): model frame with med_state attached}. Refit-ready."""
     import json
@@ -123,16 +143,16 @@ def _subject_lines(ax, e, med_value, colour):
     return n
 
 
-def fig_spaghetti(cells_data, records, out_path):
+def fig_spaghetti(cells_data, records, out_path, ncol=4):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     items = list(cells_data.items())
-    fig, axes = plt.subplots(1, len(items), figsize=(5.0 * len(items), 5.2),
-                             squeeze=False)
+    fig, flat = _grid(len(items), ncol, 4.2, 3.6)
+    small = len(items) > 8
     for i, (cell, df) in enumerate(items):
-        ax = axes[0][i]
+        ax = flat[i]
         e = epoch_level(df)
         n_un = _subject_lines(ax, e, 0.0, UNMED_COLOR)
         n_med = _subject_lines(ax, e, 1.0, MED_COLOR)
@@ -163,11 +183,12 @@ def fig_spaghetti(cells_data, records, out_path):
         ax.set_title(f'{cell[0]}  bin {cell[1]}\n'
                      f'{n_un} unmedicated / {n_med} medicated subject lines',
                      fontsize=10)
-        ax.set_xlabel('pain relative to that subject\'s own mean', fontsize=9)
-        if i == 0:
-            ax.set_ylabel('log10 power relative to subject mean', fontsize=9)
-        ax.legend(fontsize=7, loc='upper left')
-        ax.tick_params(labelsize=8)
+        if not small or i % ncol == 0:
+            ax.set_ylabel('log10 power rel. subject mean', fontsize=8)
+        if not small:
+            ax.set_xlabel('pain relative to subject mean', fontsize=9)
+            ax.legend(fontsize=7, loc='upper left')
+        ax.tick_params(labelsize=7 if small else 8)
 
     fig.suptitle('Per-subject pain-power lines, split by medication state', fontsize=13)
     fig.tight_layout(rect=(0, 0.09, 1, 0.94))
@@ -184,17 +205,17 @@ def fig_spaghetti(cells_data, records, out_path):
     plt.close(fig)
 
 
-def fig_caterpillar(cells_data, fits, out_path):
+def fig_caterpillar(cells_data, fits, out_path, ncol=4):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from scipy import stats
 
     items = list(cells_data.items())
-    fig, axes = plt.subplots(1, len(items), figsize=(4.6 * len(items), 6.0),
-                             squeeze=False)
+    fig, flat = _grid(len(items), ncol, 3.8, 4.0)
+    small = len(items) > 8
     for i, (cell, df) in enumerate(items):
-        ax = axes[0][i]
+        ax = flat[i]
         e = epoch_level(df)
         rows = []
         for subject, g in e.groupby('subject'):
@@ -237,9 +258,10 @@ def fig_caterpillar(cells_data, fits, out_path):
         ax.axvline(0, color='0.75', lw=0.8, ls='--')
         ax.set_yticks([])
         ax.set_title(f'{cell[0]}  bin {cell[1]}\n{len(r)} subjects', fontsize=10)
-        ax.set_xlabel('pain slope', fontsize=9)
-        ax.legend(fontsize=7, loc='lower right')
-        ax.tick_params(labelsize=8)
+        if not small:
+            ax.set_xlabel('pain slope', fontsize=9)
+            ax.legend(fontsize=7, loc='lower right')
+        ax.tick_params(labelsize=7 if small else 8)
 
     fig.suptitle('Per-subject pain slopes, sorted: is between-subject spread real '
                  'or a few extreme subjects?', fontsize=12)
@@ -257,17 +279,17 @@ def fig_caterpillar(cells_data, fits, out_path):
     plt.close(fig)
 
 
-def fig_partial(cells_data, fits, out_path):
+def fig_partial(cells_data, fits, out_path, ncol=4):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from statsmodels.nonparametric.smoothers_lowess import lowess
 
     items = list(cells_data.items())
-    fig, axes = plt.subplots(1, len(items), figsize=(5.0 * len(items), 5.0),
-                             squeeze=False)
+    fig, flat = _grid(len(items), ncol, 4.2, 3.4)
+    small = len(items) > 8
     for i, (cell, df) in enumerate(items):
-        ax = axes[0][i]
+        ax = flat[i]
         res = fits.get(cell)
         if res is None:
             ax.set_visible(False)
@@ -301,11 +323,12 @@ def fig_partial(cells_data, fits, out_path):
 
         ax.axhline(0, color='0.85', lw=0.7)
         ax.set_title(f'{cell[0]}  bin {cell[1]}', fontsize=10)
-        ax.set_xlabel('pain relative to subject mean', fontsize=9)
-        if i == 0:
-            ax.set_ylabel('partial residual for NRS_within', fontsize=9)
-        ax.legend(fontsize=7, loc='upper left')
-        ax.tick_params(labelsize=8)
+        if not small:
+            ax.set_xlabel('pain relative to subject mean', fontsize=9)
+            ax.legend(fontsize=7, loc='upper left')
+        if not small or i % ncol == 0:
+            ax.set_ylabel('partial residual', fontsize=8)
+        ax.tick_params(labelsize=7 if small else 8)
 
     fig.suptitle('Partial residual vs pain, with loess: is a straight line the '
                  'right summary?', fontsize=12)
@@ -330,6 +353,13 @@ def main():
     ap.add_argument('--cells', default=None,
                     help='Semicolon-separated "Region:bin" pairs. Default: '
                          + '; '.join(f'{r}:{b}' for r, b in DEFAULT_CELLS))
+    ap.add_argument('--regions', default=None,
+                    help='Comma-separated regions, crossed with --bins. The way to '
+                         'ask for 50 cells without naming 50 pairs.')
+    ap.add_argument('--bins', default=None,
+                    help='Comma-separated freq bin indices, crossed with --regions.')
+    ap.add_argument('--ncol', type=int, default=4,
+                    help='Panels per row. Raise it for large cell counts.')
     ap.add_argument('--out-dir', default=None,
                     help='Default: <run-dir>/cell_diagnostics')
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
@@ -340,7 +370,14 @@ def main():
     io.warn_if_dirty()
 
     cells = DEFAULT_CELLS
-    if args.cells:
+    if args.regions and args.bins:
+        # Region x bin cross product, ordered region-major so a row of the figure
+        # is one region swept across frequency -- which is the comparison the
+        # layout exists to make.
+        regions = [r.strip() for r in args.regions.split(',') if r.strip()]
+        bins = [int(b) for b in args.bins.split(',') if b.strip()]
+        cells = tuple((r, b) for r in regions for b in bins)
+    elif args.cells:
         cells = tuple((c.rsplit(':', 1)[0], int(c.rsplit(':', 1)[1]))
                       for c in args.cells.split(';') if c.strip())
 
@@ -352,6 +389,9 @@ def main():
     data = load_cells(run_dir, cells, ref)
     if not data:
         raise SystemExit(f'no data for any of {cells}')
+    # Re-key in the ORDER REQUESTED. load_cell_frames returns whatever order the
+    # groupby produced, which would scramble a region-major sweep into noise.
+    data = {c: data[c] for c in cells if c in data}
     logger.info('loaded %d cell(s): %s', len(data), list(data))
 
     # Refit: the grid saves no model objects, and the BLUPs and partial residuals
@@ -372,11 +412,11 @@ def main():
         except mm.CellFitError as exc:
             logger.error('%s bin %d refit FAILED: %s', cell[0], cell[1], exc)
 
-    fig_spaghetti(data, records, out_dir / 'fig_spaghetti.png')
+    fig_spaghetti(data, records, out_dir / 'fig_spaghetti.png', ncol=args.ncol)
     logger.info('wrote %s', out_dir / 'fig_spaghetti.png')
-    fig_caterpillar(data, fits, out_dir / 'fig_caterpillar.png')
+    fig_caterpillar(data, fits, out_dir / 'fig_caterpillar.png', ncol=args.ncol)
     logger.info('wrote %s', out_dir / 'fig_caterpillar.png')
-    fig_partial(data, fits, out_dir / 'fig_partial_residual.png')
+    fig_partial(data, fits, out_dir / 'fig_partial_residual.png', ncol=args.ncol)
     logger.info('wrote %s', out_dir / 'fig_partial_residual.png')
 
     io.log_analysis('medication cell diagnostics: spaghetti, caterpillar and '
