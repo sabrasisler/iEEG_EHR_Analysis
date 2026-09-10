@@ -161,16 +161,56 @@ def verify_view(view_dir, epoch_path, on_stale='refuse'):
     return params
 
 
-def _recorded_matrix(subject, session, defs, channels, epoch_minutes=None):
+def _contacts_from_pairs(pair_names):
+    """{contact} from bipolar pair names: 'LA1-LA2' -> {'LA1', 'LA2'}.
+
+    channel_meta only ever reports the BIPOLAR montage, because that is what the
+    PSD derivative stored. The underlying contact set is recoverable from it, and
+    is what a Laplacian channel has to be checked against.
+    """
+    contacts = set()
+    for name in pair_names:
+        contacts.update(name.split('-'))
+    return contacts
+
+
+def _recorded_matrix(subject, session, defs, channels, epoch_minutes=None,
+                     source='psd_view'):
     """(n_epochs, n_channels) bool: was this channel in this epoch's run montage.
 
     Only 2 of 45 discovery units have run-varying montages, so this is all-True
     for most of the cohort -- but for those two it is the difference between
     dropping 60 channels as "bad" and correctly calling them uncovered.
+
+    MUST BE SOURCE-AWARE, and this is exactly where it was got wrong once. The
+    two feature sources name channels differently -- bipolar 'LAMY1-LAMY2' vs
+    Laplacian 'LAMY2' -- and `channel_meta` only ever reports the BIPOLAR names.
+    Looking a Laplacian channel up in that set matches NOTHING, so `recorded`
+    came out all-False, the coverage rule found no common channel, and all 45
+    subjects raised NoUsableDataError. Every task still exited 0.
     """
     runs = list(defs['run_id'].unique())
     meta = channel_meta.build(subject, session, runs, epoch_minutes)
-    per_run = {run: set(channel_meta.channels_for_run(meta, run)[0]) for run in runs}
+    per_run_pairs = {run: set(channel_meta.channels_for_run(meta, run)[0])
+                     for run in runs}
+
+    if source == 'psd_view':
+        per_run = per_run_pairs
+        def is_present(ch, present):
+            return ch in present
+    else:
+        # A Laplacian channel needs its CENTRE contact and BOTH shaft
+        # neighbours; that is how the extractor built it, so that is what
+        # "recorded" means here.
+        from ieeg_ehr.preprocessing.bipolar_reref import parse_electrode_shaft
+        per_run = {run: _contacts_from_pairs(pairs)
+                   for run, pairs in per_run_pairs.items()}
+
+        def is_present(ch, present):
+            shaft, num = parse_electrode_shaft(ch)
+            if shaft is None:
+                return False
+            return all(f'{shaft}{n}' in present for n in (num - 1, num, num + 1))
 
     index = {c: i for i, c in enumerate(channels)}
     recorded = np.zeros((len(defs), len(channels)), dtype=bool)
@@ -178,7 +218,7 @@ def _recorded_matrix(subject, session, defs, channels, epoch_minutes=None):
         present = per_run.get(run)
         if present is None:
             continue                                   # no metadata -> nothing recorded
-        cols = [index[c] for c in present if c in index]
+        cols = [index[c] for c in channels if is_present(c, present)]
         recorded[i, cols] = True
     return recorded
 
@@ -230,7 +270,8 @@ def build_matrix(subject, session, view_dir, epoch_minutes=None,
     # A channel-epoch is BAD when it was recorded but has no finite value; the
     # view drops the whole channel-epoch at once, so any-NaN and all-NaN coincide
     # in practice. `any` is the conservative reading.
-    recorded = _recorded_matrix(subject, session, defs, channels, epoch_minutes)
+    recorded = _recorded_matrix(subject, session, defs, channels, epoch_minutes,
+                                source=view_params.get('source', 'psd_view'))
     bad = recorded & ~np.isfinite(grid).all(axis=2)
 
     result = cascade.apply_cascade(
@@ -250,6 +291,7 @@ def build_matrix(subject, session, view_dir, epoch_minutes=None,
         'bands': bands, 'bands_absent': missing_bands,
         'p_over_n': X.shape[1] / max(X.shape[0], 1),
         'view_dir': str(view_dir), 'view_config_hash': view_params.get('config_hash'),
+        'source': view_params.get('source', 'psd_view'),
         'mask_label': view_params.get('mask_label'),
         'pain_score_min': float(y.min()), 'pain_score_max': float(y.max()),
         'pain_score_median': float(np.median(y)),

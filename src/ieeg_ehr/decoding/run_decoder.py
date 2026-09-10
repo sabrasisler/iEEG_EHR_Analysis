@@ -33,6 +33,17 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_VIEW_SCHEME = 'chan-paper6-raw'
 
+#: The level-5 view_scheme FOLDER, derived from the feature source rather than
+#: passed by hand. Two sources must never share a run directory -- they hold
+#: different channel sets and different preprocessing -- and relying on a CLI
+#: flag to keep them apart failed immediately: the first Laplacian run wrote into
+#: `chan-paper6-raw/`, the bipolar view's folder, because --view-scheme simply
+#: defaulted. Deriving it means the mistake is not available.
+SCHEME_BY_SOURCE = {
+    'psd_view': 'chan-paper6-raw',
+    'laplacian_bandpass_rms': 'perchannel-laplacian-bandrms',
+}
+
 
 def unit_dir(run_timestamp, arm, view_scheme=DEFAULT_VIEW_SCHEME, run_name='per_subject'):
     """The shared run directory for one arm, plus its per-unit subfolder."""
@@ -69,6 +80,12 @@ def run_unit(subject, session, view_dir, run_timestamp, arms=arms_mod.ARMS,
     fm = features.build_matrix(subject, session, view_dir, min_epochs=min_epochs)
     X, y_raw = fm.X, fm.y
     written = []
+
+    # The folder follows the FEATURE SOURCE unless the caller overrode it.
+    if view_scheme in (None, DEFAULT_VIEW_SCHEME):
+        source = fm.report.get('source', 'psd_view')
+        view_scheme = SCHEME_BY_SOURCE.get(source, view_scheme or DEFAULT_VIEW_SCHEME)
+        logger.info('view_scheme resolved to %r from source %r', view_scheme, source)
 
     for arm in arms:
         y = cv.make_labels(y_raw, arm)

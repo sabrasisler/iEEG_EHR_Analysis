@@ -389,3 +389,46 @@ def test_positive_control_classification():
 if __name__ == '__main__':
     import sys
     sys.exit(pytest.main([__file__, '-v']))
+
+
+def test_coverage_check_is_source_aware():
+    """The two feature sources name channels DIFFERENTLY, and channel_meta only
+    ever reports the bipolar names.
+
+    Looking a Laplacian channel ('LAMY2') up in a set of bipolar pair names
+    ('LAMY1-LAMY2') matches nothing, so `recorded` came out all-False, the
+    coverage rule found no common channel, and ALL 45 subjects raised
+    NoUsableDataError -- while every array task still exited 0. features.py's own
+    docstring said these sets "can never be joined"; the coverage check joined
+    them anyway.
+    """
+    from ieeg_ehr.decoding import features
+
+    pairs = ['LAMY1-LAMY2', 'LAMY2-LAMY3', 'LAMY3-LAMY4']
+    contacts = features._contacts_from_pairs(pairs)
+    assert contacts == {'LAMY1', 'LAMY2', 'LAMY3', 'LAMY4'}
+
+    # A Laplacian channel is recorded only when its centre AND both shaft
+    # neighbours are present -- that is how the extractor built it.
+    from ieeg_ehr.preprocessing.bipolar_reref import parse_electrode_shaft
+    def present(ch):
+        shaft, num = parse_electrode_shaft(ch)
+        return all(f'{shaft}{n}' in contacts for n in (num - 1, num, num + 1))
+
+    assert present('LAMY2') and present('LAMY3')     # have both neighbours
+    assert not present('LAMY1')                      # no LAMY0
+    assert not present('LAMY4')                      # no LAMY5
+
+
+def test_aggregate_refuses_a_run_that_produced_nothing():
+    """A run with zero units must RAISE, not return quietly.
+
+    Both array failures on 2026-09-10 read as clean successes -- every task
+    exited 0, sacct showed 135 COMPLETED -- because run_decoder deliberately
+    treats "not decodable" as a result. Correct for one thin subject; useless
+    when the cause is shared by all 45 and nothing downstream complains.
+    """
+    from ieeg_ehr.decoding import aggregate
+
+    with pytest.raises(RuntimeError, match='produced any units'):
+        aggregate.aggregate('no-such-run-timestamp', arms=('regression',))

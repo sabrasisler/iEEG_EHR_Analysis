@@ -159,6 +159,17 @@ def aggregate(run_timestamp, arms=arms_mod.ARMS, view_scheme=DEFAULT_VIEW_SCHEME
         written.append(run_dir)
         logger.info('%s: %d units -> %s', arm, metrics['unit'].nunique(), run_dir)
 
+    if not written:
+        # A run that produced NOTHING must not exit 0. Both array failures on
+        # 2026-09-10 looked like clean successes -- 135 tasks COMPLETED, sacct
+        # perfectly green -- because run_decoder treats "not decodable" as a
+        # result rather than a crash. That is right for ONE thin subject and
+        # plainly wrong for all 45, and nothing downstream noticed.
+        raise RuntimeError(
+            f'no arm of run {run_timestamp} produced any units. Every task can '
+            'still have exited 0: "not decodable" is deliberately not a crash. '
+            'Check the task logs for a shared cause before re-running.')
+
     if group_rows:
         # The cross-arm summary lands beside the FIRST arm's run directory rather
         # than in a new folder: it describes this run, and a folder-per-summary is
