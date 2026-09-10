@@ -56,6 +56,11 @@ DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
 #: Phase 1 pilot and is the control.
 DEFAULT_CELLS = (('M1', 21), ('S1', 21), ('lOFC', 3), ('Insula', 30))
 
+#: Both axes are deviations from the SAME subject's own average, but of DIFFERENT
+#: quantities, and a label saying only "rel. subject mean" does not say which.
+XLABEL = 'pain score  -  that subject\'s mean pain   (points)'
+YLABEL = 'log10 power  -  that subject\'s mean log10 power'
+
 MED_COLOR = '#c1442f'
 UNMED_COLOR = '#2c6fad'
 
@@ -195,16 +200,25 @@ def fig_spaghetti(cells_data, records, out_path, ncol=4):
         ax.set_title(f'{cell[0]}  bin {cell[1]}\n'
                      f'{n_un} unmedicated / {n_med} medicated subject lines',
                      fontsize=10)
-        if not small or i % ncol == 0:
-            ax.set_ylabel('log10 power rel. subject mean', fontsize=8)
+        # Label the LEFT column and the BOTTOM row -- "no panel below me" also
+        # covers a partial final row, which `i // ncol == last` does not.
+        if i % ncol == 0:
+            ax.set_ylabel(YLABEL, fontsize=7 if small else 9)
+        if i + ncol >= len(items):
+            ax.set_xlabel(XLABEL, fontsize=7 if small else 9)
         if not small:
-            ax.set_xlabel('pain relative to subject mean', fontsize=9)
             ax.legend(fontsize=7, loc='upper left')
         ax.tick_params(labelsize=7 if small else 8)
 
     fig.suptitle('Per-subject pain-power lines, split by medication state', fontsize=13)
     fig.tight_layout(rect=(0, 0.09, 1, 0.94))
     fig.text(0.01, 0.01,
+             'BOTH AXES ARE DEVIATIONS FROM THAT SUBJECT\'S OWN AVERAGE, of '
+             'different quantities: x is their pain score minus their mean pain, y '
+             'is that epoch\'s mean log10 power across the ROI\'s contacts minus '
+             'their mean log10 power. Centring both is what makes subjects with '
+             'different baseline pain and different absolute power comparable, and '
+             'is why the lines all pass near the origin. '
              'Thin lines are each subject\'s own unpooled fit within one medication '
              'state; bold lines are the model\'s group effect for that state. The '
              'RUG along the bottom shows where the pain values actually are -- this '
@@ -270,8 +284,12 @@ def fig_caterpillar(cells_data, fits, out_path, ncol=4):
         ax.axvline(0, color='0.75', lw=0.8, ls='--')
         ax.set_yticks([])
         ax.set_title(f'{cell[0]}  bin {cell[1]}\n{len(r)} subjects', fontsize=10)
+        if i + ncol >= len(items):
+            ax.set_xlabel('pain slope  (d log10 power per pain point)',
+                          fontsize=7 if small else 9)
+        if i % ncol == 0:
+            ax.set_ylabel('subjects, sorted', fontsize=7 if small else 9)
         if not small:
-            ax.set_xlabel('pain slope', fontsize=9)
             ax.legend(fontsize=7, loc='lower right')
         ax.tick_params(labelsize=7 if small else 8)
 
@@ -335,11 +353,13 @@ def fig_partial(cells_data, fits, out_path, ncol=4):
 
         ax.axhline(0, color='0.85', lw=0.7)
         ax.set_title(f'{cell[0]}  bin {cell[1]}', fontsize=10)
+        if i + ncol >= len(items):
+            ax.set_xlabel(XLABEL, fontsize=7 if small else 9)
+        if i % ncol == 0:
+            ax.set_ylabel('partial residual for NRS_within',
+                          fontsize=7 if small else 9)
         if not small:
-            ax.set_xlabel('pain relative to subject mean', fontsize=9)
             ax.legend(fontsize=7, loc='upper left')
-        if not small or i % ncol == 0:
-            ax.set_ylabel('partial residual', fontsize=8)
         ax.tick_params(labelsize=7 if small else 8)
 
     fig.suptitle('Partial residual vs pain, with loess: is a straight line the '
