@@ -467,7 +467,9 @@ def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5,
         ax.set_title(f"{region}  (n={int(d['n_subjects'].max())})", fontsize=9)
         ax.tick_params(labelsize=7)
         if i % ncol == 0:
-            ax.set_ylabel(value_label, fontsize=8)
+            # First line only: `value_label` may be a two-line figure title, and
+            # repeating that on every left-hand axis overlaps the panels above.
+            ax.set_ylabel(value_label.split('\n')[0], fontsize=8)
         if i // ncol == nrow - 1:
             ax.set_xlabel('frequency (Hz)', fontsize=8)
 
