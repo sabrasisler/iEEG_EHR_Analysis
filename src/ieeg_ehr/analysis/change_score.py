@@ -62,11 +62,30 @@ SLOW_ROUTES = ('Oral', 'Feeding Tube')
 
 
 def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
-                max_gap_min=DEFAULT_MAX_GAP_MIN):
+                max_gap_min=DEFAULT_MAX_GAP_MIN, exclude_admin=None):
     """CONSECUTIVE assessment pairs within a session, with what fell between them.
 
     Consecutive, not all-pairs: a pair that skips an assessment has that
     assessment's dose history inside it while pretending to be a clean interval.
+
+    `admin` is expected PRE-FILTERED to the drug set under test, which means
+    `med_between` is blind to every OTHER drug class by construction. Left alone
+    that silently poisons a subset arm: measured 2026-09-10 on the 30-240 min
+    pairs, 22.3% of the `non_opioid_analgesics` control pairs had an OPIOID
+    administered between the two assessments, so the weakest analgesic was being
+    contrasted against a control group containing the strongest one.
+
+    `exclude_admin` is the escape hatch: administrations that DISQUALIFY a pair
+    outright if they fall between it. Pass the complementary classes for a subset
+    arm. Note this drops from BOTH groups, not only the controls -- 74 pairs had
+    an opioid AND a non-opioid between, and leaving those in the exposed group
+    would let an opioid effect be reported as a non-opioid one. What remains is a
+    true partition: "this class and nothing else" vs "no analgesic at all".
+
+    Deliberately NOT applied symmetrically by default. Leaving acetaminophen and
+    NSAIDs inside the opioid arm's controls is a weak drug contaminating a strong
+    drug's control group, which biases toward zero rather than toward a false
+    positive; the reverse is not, and only the reverse is corrected here.
 
     Returns one row per pair with `subject_id` in the prefixed form the view
     tables use, so it joins to a cell frame without further translation.
@@ -75,6 +94,9 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
     for (subject, session), g in defs.groupby(['subject', 'session'], sort=False):
         g = g.sort_values('pain_time')
         a = admin[(admin['subject'] == subject) & (admin['session'] == session)]
+        x = (None if exclude_admin is None else
+             exclude_admin[(exclude_admin['subject'] == subject)
+                           & (exclude_admin['session'] == session)])
         t = g['pain_time'].to_numpy()
         p = g['pain_score'].to_numpy(dtype=float)
         e = g['epoch_id'].to_numpy()
@@ -83,6 +105,9 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
             if not (min_gap_min <= gap <= max_gap_min):
                 continue
             between = a[(a['taken_dt'] > t[i]) & (a['taken_dt'] <= t[i + 1])]
+            n_excl = (0 if x is None else
+                      int(((x['taken_dt'] > t[i])
+                           & (x['taken_dt'] <= t[i + 1])).sum()))
             # CARRYOVER. A dose given before this pair is still pharmacologically
             # active during it, so "no dose between" does NOT mean unmedicated.
             # Measured on this cohort it is not a minor contamination: 58% of
@@ -91,7 +116,13 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
             # exposed pairs -- the controls are the MORE recently dosed group.
             # Recorded so a model can adjust for it, a clean subset can be
             # defined, or the exposure can be respecified as time-since-dose.
+            # Carryover is measured over the UNION of the tested and excluded
+            # classes, not just the tested one. In a subset arm the nearest prior
+            # dose is often from the other class, and a `h_since_prior` blind to
+            # it would report a pair as long-unmedicated when it is not.
             before = a.loc[a['taken_dt'] <= t[i], 'taken_dt']
+            if x is not None:
+                before = pd.concat([before, x.loc[x['taken_dt'] <= t[i], 'taken_dt']])
             h_prior = (np.nan if before.empty
                        else (t[i] - before.max()) / np.timedelta64(1, 'h'))
             rows.append({
@@ -103,12 +134,26 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
                 'd_pain': float(p[i + 1] - p[i]),
                 'n_med': int(len(between)),
                 'med_between': float(len(between) > 0),
+                'n_excl_between': n_excl,
                 'n_fast': int(between['route'].isin(FAST_ROUTES).sum()),
                 'n_slow': int(between['route'].isin(SLOW_ROUTES).sum()),
             })
     pairs = pd.DataFrame(rows)
     if pairs.empty:
         raise ValueError(f'no assessment pairs in [{min_gap_min}, {max_gap_min}] min')
+
+    if exclude_admin is not None:
+        drop = pairs['n_excl_between'] > 0
+        logger.info('CO-EXPOSURE: dropping %d of %d pairs (%.1f%%) with an '
+                    'excluded-class dose between -- %d of them were controls, '
+                    '%d were also exposed to the tested class',
+                    int(drop.sum()), len(pairs), 100 * drop.mean(),
+                    int((drop & (pairs['med_between'] == 0)).sum()),
+                    int((drop & (pairs['med_between'] == 1)).sum()))
+        pairs = pairs[~drop].reset_index(drop=True)
+        if pairs.empty:
+            raise ValueError('every pair had an excluded-class dose between')
+
     pairs.insert(0, 'pair_id', range(len(pairs)))
     logger.info('pairs: %d in [%g, %g] min | %d subjects | %d with a dose between '
                 '(%.1f%%) | %d with d_pain != 0',

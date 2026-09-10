@@ -65,8 +65,30 @@ def stage_prepare(args):
 
     subclasses = med_state.DRUG_SETS[args.drug_set]
     admin = med_state.load_admin_table(subclasses=subclasses)
+
+    # A subset arm's `med_between` is blind to the classes it excludes, so
+    # without this its control group contains them. Opt-in and per-run rather
+    # than a property of the drug set, because the correct answer is asymmetric
+    # (see change_score.build_pairs) and an asymmetry belongs in the recorded
+    # params where it can be read off, not buried in a lookup table.
+    exclude_admin, excluded_subclasses = None, []
+    if args.exclude_coexposure:
+        excluded_subclasses = [s for s in med_state.DRUG_SETS['analgesics']
+                               if s not in subclasses]
+        if not excluded_subclasses:
+            raise SystemExit(
+                f'--exclude-coexposure is meaningless for --drug-set '
+                f'{args.drug_set}: it already covers every analgesic subclass, '
+                f'so there is no other class to exclude.')
+        logger.info('CO-EXPOSURE EXCLUSION ON: a pair is dropped if any of %s '
+                    'was administered between its two assessments',
+                    excluded_subclasses)
+        exclude_admin = med_state.load_admin_table(subclasses=excluded_subclasses)
+
     defs = med_state.load_epoch_defs(subjects=subjects)
-    pairs = change_score.build_pairs(defs, admin, args.min_gap_min, args.max_gap_min)
+    pairs = change_score.build_pairs(defs, admin, args.min_gap_min,
+                                     args.max_gap_min,
+                                     exclude_admin=exclude_admin)
     summary = change_score.pair_summary(pairs)
     logger.info('\n%s', summary.to_string(index=False))
 
@@ -99,15 +121,22 @@ def stage_prepare(args):
     run_dir = config.analysis_run_dir(
         question=args.question, output_type=OUTPUT_TYPE,
         view_scheme=args.view_scheme,
-        run_name=f'{args.run_name}_{args.drug_set}_min{int(args.min_gap_min)}')
+        run_name=(f'{args.run_name}_{args.drug_set}_min{int(args.min_gap_min)}'
+                  + ('_noco' if args.exclude_coexposure else '')))
     (run_dir / 'cells').mkdir(parents=True, exist_ok=True)
 
     params = {'drug_set': args.drug_set, 'subclasses': list(subclasses),
               'min_gap_min': args.min_gap_min, 'max_gap_min': args.max_gap_min,
               'min_subjects': args.min_subjects,
+              'exclude_coexposure': bool(args.exclude_coexposure),
+              'excluded_subclasses': excluded_subclasses,
               'unresolvable_bins_removed': unresolvable,
               'line_noise_bins_removed': line_noise, 'roi_scheme': roi_scheme,
-              'formula': mm.FORMULA_CHANGE}
+              'formula': mm.FORMULA_CHANGE,
+              # Recorded because it CHANGED on 2026-09-10: the channel component
+              # was dropped as unidentifiable after differencing, so a run's
+              # random-effects spec can no longer be inferred from the formula.
+              'vc': sorted(mm.VC_CHANGE)}
 
     io.write_table(pairs, run_dir / 'pair_index.parquet', params=params,
                    parents=[str(med_state.ADMIN_TABLE)], subjects=sorted(cohort),
@@ -133,6 +162,25 @@ def stage_prepare(args):
         subjects=sorted(cohort),
         extra={'status': 'EXPLORATORY paired change-score grid, NOT a finding',
                'subjects_without_roi': sorted(no_roi),
+               'coexposure_note': (
+                   '## Co-exposure\n\n'
+                   f'Pairs with a dose of {excluded_subclasses} between their two '
+                   'assessments are DROPPED, from both the exposed and the control '
+                   'group. Without this the arm is not a partition: measured '
+                   '2026-09-10, 22.3% of `non_opioid_analgesics` control pairs had '
+                   'an opioid administered between, so the weakest analgesic was '
+                   'being contrasted against a control group containing the '
+                   'strongest one. Dropping from the exposed group too removes the '
+                   '74 doubly-exposed pairs, which would otherwise let an opioid '
+                   'effect be reported as a non-opioid one. `h_since_prior` is '
+                   'measured over the UNION of both class sets for the same reason.'
+                   if args.exclude_coexposure else
+                   '## Co-exposure\n\n'
+                   'NOT excluded in this run. `med_between` is computed only from '
+                   f'{list(subclasses)}, so for a SUBSET drug set the control group '
+                   'still contains doses of the other analgesic classes. Harmless '
+                   'for `--drug-set analgesics`, which covers every class; for a '
+                   'subset arm see --exclude-coexposure.'),
                'regression_to_the_mean':
                    'Mean change in pain runs from +2.12 at baseline 0 to -3.00 at '
                    'baseline 10 on this cohort, and medication is given BECAUSE '
@@ -336,12 +384,24 @@ assessments is the exposure.
 ```
 {p.get('formula')}
 ```
-with `(d_pain || subject) + (1 | subject:channel)`. {p.get('n_pairs')} pairs,
-{len(cells)} cells.
+with random effects `{' + '.join(p.get('vc') or ['?'])}` (i.e.
+`(d_pain || subject)`). {p.get('n_pairs')} pairs, {len(cells)} cells.
+
+**There is no `(1 | subject:channel)` term, deliberately.** A channel's own
+baseline power cancels in `y2 - y1`, so the differenced outcome retains almost no
+channel-to-channel variance for it to estimate -- 2e-04 against a 3e-02 residual,
+where the LEVEL grids put it at 1.8e-01 against 3.4e-02. Asking for a variance
+the design set to ~zero flattens the likelihood and the optimizer never settles,
+which made the WHOLE fit report `converged=False` even though the fixed effects
+were fine: 3/10 cells converged with the term, 10/10 without it, at 1/24th the
+fit time, with `med_between` agreeing to 4e-04. Dropping the random SLOPE instead
+was strictly worse (0/10), so `subj_dpain` is load-bearing and stays.
 
 ```
 {summary.to_string(index=False)}
 ```
+
+{extra.get('coexposure_note', '')}
 
 ## Why differences
 
@@ -384,6 +444,12 @@ def main():
     ap.add_argument('--max-gap-min', type=float,
                     default=change_score.DEFAULT_MAX_GAP_MIN)
     ap.add_argument('--min-subjects', type=int, default=10)
+    ap.add_argument('--exclude-coexposure', action='store_true',
+                    help='Drop any pair with a dose from a NON-tested analgesic '
+                         'subclass between its two assessments. Required for a '
+                         'subset drug set to mean anything: 22.3%% of the '
+                         'non_opioid_analgesics control pairs had an opioid '
+                         'between. Meaningless for --drug-set analgesics.')
     ap.add_argument('--view-dir', default=None)
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--allow-cohort-drift', action='store_true')

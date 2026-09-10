@@ -178,11 +178,32 @@ def add_med_components(df):
 FORMULA_CHANGE = ('d_log10_power ~ d_pain * med_between + pain_1 + gap_h'
                   ' + med_between:gap_h')
 
+# THERE IS DELIBERATELY NO `channel` COMPONENT HERE, unlike every level model in
+# this module. A channel's own baseline power appears in BOTH terms of
+# `y2 - y1` and cancels exactly, so the differenced outcome has almost no
+# channel-to-channel variance left for `(1 | subject:channel)` to estimate: the
+# level grids put it at 1.8e-01 against a 3.4e-02 residual, the change grids at
+# 2e-04 against 3e-02 -- from 5x the residual down to 1/150th of it.
+#
+# Asking for a variance the design set to ~zero flattens the likelihood in that
+# direction and the optimizer never settles, so the WHOLE fit reports
+# converged=False even though the fixed effects are fine. Measured on Insula,
+# 10 bins (2026-09-10): with the channel component 3/10 cells converged, without
+# it 10/10, at 1/24th the fit time, and `med_between` agreed to 4e-04 median /
+# 5e-04 max wherever both converged. More iterations changed nothing (identical
+# to 0e+00 at 15x maxiter), which is what distinguishes a flat likelihood from a
+# truncated search.
+#
+# Dropping the RANDOM SLOPE instead was tried and is strictly worse -- 0/10
+# converged -- so `subj_dpain` is load-bearing and stays.
 VC_CHANGE = {
     'subj_int': '1',
     'subj_dpain': '0 + d_pain',
-    'channel': '0 + C(channel_uid)',
 }
+#: The LRT null: drop the random `d_pain` slope, keep the subject intercept.
+#: Converges 9/10 on the same test now that the channel component is gone; while
+#: it was present this reduced spec converged on 0/10, which silently made
+#: `p_lrt_mixture` meaningless.
 VC_CHANGE_REDUCED = {k: v for k, v in VC_CHANGE.items() if k != 'subj_dpain'}
 
 CHANGE_TERMS = (('d_pain', 'dpain'),

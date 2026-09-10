@@ -132,3 +132,71 @@ def test_pair_summary_exposes_the_baseline_imbalance():
     dosed = s.set_index('stratum').loc['dose between']
     undosed = s.set_index('stratum').loc['no dose between']
     assert dosed['pain_1_mean'] > undosed['pain_1_mean']
+
+
+# ----------------------------------------------------------------------------
+# CO-EXPOSURE. `admin` arrives pre-filtered to the drug set under test, so
+# without an explicit exclusion a subset arm's CONTROL group silently contains
+# the classes it excluded -- measured at 22.3% opioid contamination for
+# non_opioid_analgesics on the real cohort.
+# ----------------------------------------------------------------------------
+
+def test_excluded_class_between_drops_the_pair_from_the_control_group():
+    """The pair has no tested-class dose, so it would otherwise be a CONTROL."""
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00'], [6, 3])
+    other = _admin(['2000-01-01 12:30'])
+    with pytest.raises(ValueError, match='excluded-class'):
+        cs.build_pairs(defs, _admin([]), 30, 240, exclude_admin=other)
+
+
+def test_excluded_class_between_drops_the_pair_from_the_exposed_group_too():
+    """A doubly-exposed pair must not stay in: it would let the excluded class's
+    effect be reported as the tested class's."""
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00',
+                  '2000-01-01 18:00', '2000-01-01 19:00'], [6, 3, 5, 4])
+    tested = _admin(['2000-01-01 12:30', '2000-01-01 18:30'])
+    other = _admin(['2000-01-01 12:40'])          # only inside the FIRST pair
+    p = cs.build_pairs(defs, tested, 30, 240, exclude_admin=other)
+    assert len(p) == 1
+    assert p.iloc[0]['e1'] == 2                    # the first pair is gone
+    assert p.iloc[0]['med_between'] == 1.0
+
+
+def test_excluded_class_outside_the_interval_does_not_drop_the_pair():
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00'], [6, 3])
+    other = _admin(['2000-01-01 11:00'])           # BEFORE the pair, not between
+    p = cs.build_pairs(defs, _admin([]), 30, 240, exclude_admin=other)
+    assert len(p) == 1
+    assert p.iloc[0]['n_excl_between'] == 0
+
+
+def test_h_since_prior_counts_the_excluded_class_too():
+    """A carryover measure blind to the other class would call this pair
+    long-unmedicated when the nearest prior dose was 1 h before."""
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00'], [6, 3])
+    tested = _admin(['2000-01-01 04:00'])          # 8 h before
+    other = _admin(['2000-01-01 11:00'])           # 1 h before
+    p = cs.build_pairs(defs, tested, 30, 240, exclude_admin=other)
+    assert p.iloc[0]['h_since_prior'] == pytest.approx(1.0)
+
+    bare = cs.build_pairs(defs, tested, 30, 240)
+    assert bare.iloc[0]['h_since_prior'] == pytest.approx(8.0)
+
+
+def test_pair_ids_are_contiguous_after_a_coexposure_drop():
+    """pair_id is assigned AFTER the drop; a gap here would break the join in
+    build_change_frame for every pair past the first exclusion."""
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00',
+                  '2000-01-01 18:00', '2000-01-01 19:00',
+                  '2000-01-02 08:00', '2000-01-02 09:00'], [6, 3, 5, 4, 7, 2])
+    other = _admin(['2000-01-01 12:30'])
+    p = cs.build_pairs(defs, _admin([]), 30, 240, exclude_admin=other)
+    assert list(p['pair_id']) == list(range(len(p)))
+    assert len(p) == 2
+
+
+def test_no_exclude_admin_leaves_behaviour_unchanged():
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00'], [6, 3])
+    p = cs.build_pairs(defs, _admin(['2000-01-01 12:30']), 30, 240)
+    assert len(p) == 1 and p.iloc[0]['med_between'] == 1.0
+    assert p.iloc[0]['n_excl_between'] == 0

@@ -129,5 +129,18 @@ def test_stratum_summary_reports_both_strata_and_the_nrs_gap():
 
 
 def test_drug_sets_are_named_and_opioids_is_a_subset():
-    assert set(med_state.DRUG_SETS) == {'analgesics', 'opioids'}
+    assert set(med_state.DRUG_SETS) == {'analgesics', 'opioids',
+                                        'non_opioid_analgesics'}
     assert set(med_state.DRUG_SETS['opioids']) < set(med_state.DRUG_SETS['analgesics'])
+
+
+def test_opioid_and_non_opioid_sets_partition_the_analgesics():
+    """The reason `non_opioid_analgesics` exists. Running `analgesics` beside
+    `opioids` is a SUPERSET against its own subset, not a contrast -- the two
+    differ by the presence of acetaminophen and NSAIDs rather than by opioid
+    exposure. Only a partition makes "opioid vs non-opioid" answerable."""
+    op = set(med_state.DRUG_SETS['opioids'])
+    non = set(med_state.DRUG_SETS['non_opioid_analgesics'])
+    assert op.isdisjoint(non)
+    assert op | non == set(med_state.DRUG_SETS['analgesics'])
+    assert 'Opioids' not in non
