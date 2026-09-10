@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=mm_changescore_collect
 #SBATCH --partition=normal
-#SBATCH --time=00:30:00
+#SBATCH --time=00:20:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=16GB
+#SBATCH --mem=4GB
 #SBATCH --output=logs/mm_changescore_collect_%j.out
 #
 # Paired change-score grid, stage `collect`: concatenate the per-region output,
@@ -17,6 +17,12 @@
 # Four families, not one pooled correction: `med_gap` is the term that asks
 # whether the effect has TIME STRUCTURE, which is the empirical precursor to a
 # PK model, and pooling it with the main effect would bury it.
+#
+# 4 GB because this concatenates 21 region tables totalling ~800 rows and runs BH
+# over them. The 16 GB it originally asked for was copied from the stratified
+# grid's collect and was never justified by anything this stage does; on
+# `ckeller1`, where mem/core is capped at 8 GB, that padding is the difference
+# between running and being rejected.
 
 set -euo pipefail
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=mm_changescore
 #SBATCH --partition=normal
-#SBATCH --time=01:30:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=24GB
+#SBATCH --time=01:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4GB
 #SBATCH --output=logs/mm_changescore_%A_%a.out
 #SBATCH --array=0-20
 #
@@ -22,11 +22,21 @@
 # cancels rather than being absorbed into the medication main effect.
 #
 # TWO FITS PER CELL: the full model and the VC_CHANGE_REDUCED variant, whose LRT
-# is the mixture-corrected test on the random d_pain slope. Fewer than the
-# stratified grid's three, so the 24 GB / 90 min envelope measured there (Insula,
-# 502 contacts, 38 bins x 3 fits in ~80 s inside 16 GB) is the ceiling here too.
-# Not padded further: an earlier job in this project sat unschedulable behind an
-# 80k-core backlog purely because it asked for 48 GB it never used.
+# is the mixture-corrected test on the random d_pain slope.
+#
+# RESOURCES ARE MEASURED HERE, not inherited. This file first carried the
+# stratified grid's 24 GB / 90 min; the run of 2026-09-10 then measured the fit
+# stage at MaxRSS 0.41-1.09 GB across 10 completed region tasks (median 0.91 GB),
+# so 24 GB was ~22x oversized. That padding is not free -- it is what got a
+# diagnostic rejected outright by QOSMaxMemoryPerUser on `dev` that same day, and
+# an earlier job in this project sat unschedulable behind an 80k-core backlog
+# purely because it asked for 48 GB it never used. 4 GB is ~4x the observed peak.
+#
+# 1 CPU, not 2: OMP/OPENBLAS/MKL are all pinned to one thread below, so the
+# second core was never used, and 1 core packs 21 array tasks onto the 24-core
+# ckeller1 node. Walltime 1 h is generous -- those same tasks took 35 min WITH
+# the channel variance component, which was ~13 s/cell; without it a cell fits in
+# ~0.55 s, so the grid is minutes now (see mixed_model.VC_CHANGE).
 #
 # Per region, not per cell: a region's bins share one Lustre read of the subject
 # view tables, which is the expensive part. Same reasoning as the other grids.
