@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8GB
 #SBATCH --output=logs/lap_bandpass_%A_%a.out
-#SBATCH --array=0-44%20
+#SBATCH --array=0-64%20
 #
 # LAPLACIAN BAND-RMS extraction -- the paper's feature pipeline off the RAW
 # time-domain signal, one array task per subject-session.
@@ -48,7 +48,9 @@
 # (120 s, 1 channel), which makes the short full-width window this reads the SLOW
 # direction. See docs/dataset_v2.md §1 and §4.
 #
-# Array bound must match the runnable count. Recompute with:
+# Array bound must match the RUNNABLE count (65), NOT the decoder-eligible count
+# (45). Getting this wrong once already skipped 20 subjects, 14 of them
+# decoder-eligible, and the run looked like a clean success. Recompute with:
 #   python -m ieeg_ehr.config.cohorts --runnable discovery 2>/dev/null | wc -l
 
 set -euo pipefail
