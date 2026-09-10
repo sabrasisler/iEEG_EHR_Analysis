@@ -168,6 +168,18 @@ def fig_spaghetti(cells_data, records, out_path, ncol=4):
         if np.isfinite(base) and np.isfinite(delta):
             ax.plot(xs, (base + delta) * xs, color=MED_COLOR, lw=3, zorder=5,
                     label=f'group, medicated ({base + delta:+.4f})')
+        if not np.isfinite(base):
+            # SAY SO. The subject lines still draw from the cell frame, so a
+            # panel with no group effect looks identical to one whose effect is
+            # zero. A cell can be absent from the fitted table because it fell
+            # below the coverage floor -- M1 does exactly this in the opioid run,
+            # where the cohort is 28 -- and that must not be silent.
+            ax.text(0.5, 0.5, 'NO FITTED GROUP EFFECT\ncell absent from the '
+                              'model table\n(below the coverage floor?)',
+                    transform=ax.transAxes, ha='center', va='center', fontsize=8,
+                    color=MED_COLOR, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.4', fc='white',
+                              ec=MED_COLOR, alpha=0.9))
 
         # THE RUG. Where the data actually is -- a fitted line across a range
         # nobody occupies is an extrapolation wearing a fit's clothes.
