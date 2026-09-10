@@ -426,7 +426,17 @@ def _seq_cmap(plt):
     return cm
 
 
-def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5):
+def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5,
+                     value_column='beta_nrs_within', se_column='se',
+                     reject_column='p_bh_reject', value_label='beta'):
+    """Per-region spectrum of any coefficient.
+
+    Parameterised because the frequency PROFILE is the most useful artifact test
+    available for the medication terms: a level shift that is flat across all
+    frequencies points at a global or non-neural driver, whereas a band-limited
+    one is the shape physiology would produce. A heatmap cannot show that; this
+    can.
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -436,20 +446,20 @@ def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5):
                              squeeze=False, sharex=True)
 
     ymax = float(np.nanmax(np.abs(
-        np.concatenate([(cells['beta_nrs_within'] + 1.96 * cells['se']).to_numpy(),
-                        (cells['beta_nrs_within'] - 1.96 * cells['se']).to_numpy()]))))
+        np.concatenate([(cells[value_column] + 1.96 * cells[se_column]).to_numpy(),
+                        (cells[value_column] - 1.96 * cells[se_column]).to_numpy()]))))
 
     for i, region in enumerate(regions):
         ax = axes[i // ncol][i % ncol]
         d = cells[cells['region'] == region].sort_values('freq_bin_index')
         hz = np.sqrt(d['freq_bin_low'].to_numpy() * d['freq_bin_high'].to_numpy())
-        b = d['beta_nrs_within'].to_numpy(dtype=float)
-        se = d['se'].to_numpy(dtype=float)
+        b = d[value_column].to_numpy(dtype=float)
+        se = d[se_column].to_numpy(dtype=float)
 
         ax.fill_between(hz, b - 1.96 * se, b + 1.96 * se, color='0.75', alpha=0.45,
                         lw=0)
         ax.plot(hz, b, color='black', lw=1.3)
-        star = d['p_bh_reject'].fillna(False).to_numpy(dtype=bool)
+        star = d[reject_column].fillna(False).to_numpy(dtype=bool)
         ax.scatter(hz[star], b[star], s=14, color='#c1442f', zorder=4)
         ax.axhline(0, color='0.6', lw=0.8, ls='--')
         ax.set_xscale('log')
@@ -457,15 +467,15 @@ def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5):
         ax.set_title(f"{region}  (n={int(d['n_subjects'].max())})", fontsize=9)
         ax.tick_params(labelsize=7)
         if i % ncol == 0:
-            ax.set_ylabel('beta', fontsize=8)
+            ax.set_ylabel(value_label, fontsize=8)
         if i // ncol == nrow - 1:
             ax.set_xlabel('frequency (Hz)', fontsize=8)
 
     for j in range(len(regions), nrow * ncol):
         axes[j // ncol][j % ncol].set_visible(False)
 
-    fig.suptitle('Pain fixed effect vs frequency, per region\n'
-                 'black = beta, band = 95% CI, red dots = BH-significant across the grid',
+    fig.suptitle(f'{value_label} vs frequency, per region\n'
+                 'black = estimate, band = 95% CI, red dots = BH-significant',
                  fontsize=12)
     fig.tight_layout(rect=(0, 0.045, 1, 0.94))
     fig.text(0.01, 0.005,
@@ -500,6 +510,9 @@ def main():
     ap.add_argument('--reject-column', default='p_bh_reject',
                     help='Which BH-rejection column outlines panel 1. Must match '
                          "--value-column's own family, e.g. med_ix_bh_reject.")
+    ap.add_argument('--se-column', default='se',
+                    help="Standard-error column matching --value-column, for the "
+                         'spectra figure\'s confidence band.')
     ap.add_argument('--value-label', default=None,
                     help='Title for panel 1 when mapping a non-default column.')
     ap.add_argument('--het-mode', choices=['raw', 'normalized', 'none'],
@@ -549,7 +562,10 @@ def main():
                  het_mode=args.het_mode, value_column=args.value_column,
                  value_label=args.value_label, reject_column=args.reject_column)
     logger.info('wrote %s', map_path)
-    fig_grid_spectra(cells, regions, bin_labels, spec_path)
+    fig_grid_spectra(cells, regions, bin_labels, spec_path,
+                     value_column=args.value_column, se_column=args.se_column,
+                     reject_column=args.reject_column,
+                     value_label=args.value_label or 'pain fixed effect')
     logger.info('wrote %s', spec_path)
 
     io.log_analysis('mixed-model grid overview figures: region x frequency map and '

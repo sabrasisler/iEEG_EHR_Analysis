@@ -537,7 +537,13 @@ def stage_collect(args):
         cells = add_fdr(cells, 'p', 'p')
         cells = add_fdr(cells, 'p_lrt_mixture', 'p_lrt')
         if name == 'interaction':
+            # BOTH medication terms get their own family. The main effect is the
+            # power LEVEL difference at average pain; the interaction is the
+            # change in the pain slope. They answer different questions and the
+            # main effect turns out to be the larger of the two, so leaving it
+            # uncorrected made the smaller effect the only one on the record.
             cells = add_fdr(cells, 'med_ix_p', 'med_ix')
+            cells = add_fdr(cells, 'med_main_p', 'med_main')
 
         out = stratum_dir(run_dir, name)
         out.mkdir(parents=True, exist_ok=True)   # `matched` may postdate prepare
