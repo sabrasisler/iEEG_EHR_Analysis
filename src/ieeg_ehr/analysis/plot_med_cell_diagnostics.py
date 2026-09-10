@@ -62,13 +62,25 @@ UNMED_COLOR = '#2c6fad'
 
 def load_cells(run_dir, cells, ref):
     """{(region, bin): model frame with med_state attached}. Refit-ready."""
+    import json
     run_dir = Path(run_dir)
     state = io.read_table(run_dir / 'epoch_med_state.parquet', on_stale='warn')
-    import json
     cohort = set(json.loads((run_dir / 'provenance.json').read_text())['subjects'])
 
-    view_dir = resolve_view_dir(None, mask_label=ref.view_params.get('mask_label'),
-                                roi_scheme=ref.view_params.get('roi_scheme', 'roi_v2'))
+    # READ the view the run recorded, do not re-resolve it. Re-deriving the hash
+    # from the reference run's params reproduces it only while every input to
+    # `io.config_hash` is unchanged, and one of them drifted -- the recomputed
+    # hash pointed at a directory that does not exist. The run wrote down which
+    # view it used; that is the answer, and it cannot go stale.
+    prov = json.loads((run_dir / 'provenance.json').read_text())
+    view_dir = prov.get('params', {}).get('view_dir')
+    if not view_dir or not Path(view_dir).exists():
+        logger.warning('run provenance has no usable view_dir (%s); falling back '
+                       'to re-resolving it by hash', view_dir)
+        view_dir = resolve_view_dir(
+            None, mask_label=ref.view_params.get('mask_label'),
+            roi_scheme=ref.view_params.get('roi_scheme', 'roi_v2'))
+    logger.info('per-channel view: %s', view_dir)
     paths = view_subject_paths(view_dir)
     roi_by_subject, _ = roi_maps(paths, cohort,
                                  ref.view_params.get('roi_scheme', 'roi_v2'))
