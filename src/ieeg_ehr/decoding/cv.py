@@ -53,6 +53,7 @@ import logging
 import warnings
 
 import numpy as np
+import pandas as pd
 from scipy import stats
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.metrics import (accuracy_score, balanced_accuracy_score,
@@ -155,7 +156,7 @@ def _fit_one_split(arm, X, y, train, test, inner_k, seed):
     return pred, prob, pipe, alpha, l1_ratio
 
 
-def run_one_bootstrap(arm, X, y, scheme, seed, inner_k=None):
+def run_one_bootstrap(arm, X, y, scheme, seed, inner_k=None, coef_store=None):
     """One full outer CV pass. Returns out-of-fold predictions and metrics."""
     n = len(y)
     k = fold_count(n)
@@ -169,8 +170,10 @@ def run_one_bootstrap(arm, X, y, scheme, seed, inner_k=None):
     prob = np.full(n, np.nan)
     alphas, ratios = [], []
     for train, test in splitter.split(*split_args):
-        p, pr, _, alpha, ratio = _fit_one_split(arm, X, y, train, test,
-                                                inner_k, seed)
+        p, pr, fitted, alpha, ratio = _fit_one_split(arm, X, y, train, test,
+                                                     inner_k, seed)
+        if coef_store is not None:
+            accumulate_coefficients(coef_store, fitted, X.shape[1])
         pred[test] = p
         if pr is not None:
             prob[test] = pr
@@ -188,8 +191,49 @@ def run_one_bootstrap(arm, X, y, scheme, seed, inner_k=None):
     return {'predictions': pred, 'probabilities': prob, 'metrics': metrics}
 
 
+def accumulate_coefficients(store, pipe, n_features):
+    """Running sum / sum-of-squares / nonzero-count of a fold's coefficients.
+
+    WHY A RUNNING SUMMARY AND NOT THE RAW COEFFICIENTS. The paper's notion of a
+    "significant feature" needs two things this used to throw away: how OFTEN a
+    feature survives across bootstraps (stability), and how its coefficient
+    distribution compares to the PERMUTED models. Keeping every fold's vector
+    would be 100 bootstraps x 2 schemes x 2 (real + null) x ~900 features x 45
+    subjects ~ 16M rows; mean, SD and selection frequency answer both questions
+    in ~900 rows per unit per condition.
+
+    Selection FREQUENCY is the statistic to trust over magnitude: under
+    collinearity elastic net picks one of a correlated group somewhat
+    arbitrarily, so a feature that is chosen in 90 of 100 runs is saying
+    something a single large coefficient is not.
+    """
+    from ieeg_ehr.decoding import arms as _arms
+    coef = _arms.coefficients(pipe)
+    if coef.shape[0] != n_features:
+        return                       # a fold that could not fit; skip silently
+    store['sum'] += coef
+    store['sumsq'] += coef ** 2
+    store['nonzero'] += (np.abs(coef) > 0).astype(np.int64)
+    store['n'] += 1
+
+
+def new_coefficient_store(n_features):
+    return {'sum': np.zeros(n_features), 'sumsq': np.zeros(n_features),
+            'nonzero': np.zeros(n_features, dtype=np.int64), 'n': 0}
+
+
+def finalize_coefficients(store):
+    """{mean, sd, selection_frequency, n_fits} from the running store."""
+    n = max(store['n'], 1)
+    mean = store['sum'] / n
+    var = np.maximum(store['sumsq'] / n - mean ** 2, 0.0)
+    return {'coef_mean': mean, 'coef_sd': np.sqrt(var),
+            'selection_frequency': store['nonzero'] / n, 'n_fits': store['n']}
+
+
 def run_bootstraps(arm, X, y, scheme, n_bootstraps=N_BOOTSTRAPS, shuffle_labels=False,
-                   base_seed=0, progress_every=25):
+                   base_seed=0, progress_every=25, collect=None,
+                   predictions=None):
     """`n_bootstraps` outer CV passes, re-randomizing the fold assignment each time.
 
     This IS the paper's "random selection of cross-validation indices each time".
@@ -203,7 +247,8 @@ def run_bootstraps(arm, X, y, scheme, n_bootstraps=N_BOOTSTRAPS, shuffle_labels=
     for b in range(n_bootstraps):
         yb = rng.permutation(y) if shuffle_labels else y
         try:
-            result = run_one_bootstrap(arm, X, yb, scheme, seed=base_seed + b)
+            result = run_one_bootstrap(arm, X, yb, scheme, seed=base_seed + b,
+                                       coef_store=collect)
         except (arms_mod.NotFittableError, ValueError) as exc:
             logger.warning('bootstrap %d (%s, shuffled=%s) failed: %s',
                            b, scheme, shuffle_labels, exc)
@@ -212,6 +257,16 @@ def run_bootstraps(arm, X, y, scheme, n_bootstraps=N_BOOTSTRAPS, shuffle_labels=
         row.update({'bootstrap': b, 'cv_scheme': scheme, 'arm': arm,
                     'shuffled': bool(shuffle_labels)})
         rows.append(row)
+        if predictions is not None:
+            # Out-of-fold predictions, kept so a ROC can be reconstructed later.
+            # Every epoch appears exactly once per bootstrap, predicted by a
+            # model that never saw it.
+            predictions.append(pd.DataFrame({
+                'bootstrap': b, 'cv_scheme': scheme, 'arm': arm,
+                'shuffled': bool(shuffle_labels),
+                'epoch_index': np.arange(len(yb)), 'y_true': yb,
+                'y_pred': result['predictions'],
+                'y_prob': result['probabilities']}))
         if progress_every and (b + 1) % progress_every == 0:
             logger.info('  %s/%s%s: %d/%d bootstraps', arm, scheme,
                         ' [null]' if shuffle_labels else '', b + 1, n_bootstraps)

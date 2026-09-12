@@ -116,17 +116,39 @@ def run_unit(subject, session, view_dir, run_timestamp, arms=arms_mod.ARMS,
         if arm == 'classification':
             summary_row['class_balance_high'] = balance
 
+        coef_rows, pred_frames = [], []
         for scheme in schemes:
+            # Per-feature coefficient SUMMARIES for the real and permuted runs.
+            # Both are needed: the paper's "significant feature" is one whose
+            # coefficient distribution differs from the permuted models, which
+            # cannot be asked of the real run alone.
+            store_obs = cv.new_coefficient_store(X.shape[1])
+            store_null = cv.new_coefficient_store(X.shape[1])
+            preds = []
             try:
                 obs = cv.run_bootstraps(arm, X, y, scheme, n_bootstraps,
-                                        shuffle_labels=False, base_seed=0)
+                                        shuffle_labels=False, base_seed=0,
+                                        collect=store_obs, predictions=preds)
                 null = cv.run_bootstraps(arm, X, y, scheme, n_bootstraps,
-                                         shuffle_labels=True, base_seed=10_000)
+                                         shuffle_labels=True, base_seed=10_000,
+                                         collect=store_null, predictions=preds)
             except arms_mod.NotFittableError as exc:
                 logger.warning('sub-%s %s/%s: %s', subject, arm, scheme, exc)
                 continue
             boot_rows.extend(obs)
             boot_rows.extend(null)
+            pred_frames.extend(preds)
+
+            for shuffled, store in ((False, store_obs), (True, store_null)):
+                stats_ = cv.finalize_coefficients(store)
+                coef_rows.append(pd.DataFrame({
+                    'unit': fm.unit, 'arm': arm, 'cv_scheme': scheme,
+                    'shuffled': shuffled, 'feature': fm.feature_names,
+                    'channel': [f.split('|')[0] for f in fm.feature_names],
+                    'band': [f.split('|')[1] for f in fm.feature_names],
+                    'coef_mean': stats_['coef_mean'], 'coef_sd': stats_['coef_sd'],
+                    'selection_frequency': stats_['selection_frequency'],
+                    'n_fits': stats_['n_fits']}))
 
             metrics = [k for k in obs[0]
                        if k not in ('bootstrap', 'cv_scheme', 'arm', 'shuffled')]
@@ -145,6 +167,21 @@ def run_unit(subject, session, view_dir, run_timestamp, arms=arms_mod.ARMS,
         io.write_table(pd.DataFrame(boot_rows), units / f'{stem}_bootstraps.csv',
                        params={'arm': arm, 'n_bootstraps': n_bootstraps},
                        subjects=[f'sub-{subject}'])
+
+        # Feature STABILITY across bootstraps, real and permuted. This is what
+        # makes "significant feature" mean what the paper means rather than
+        # "nonzero in one index fit".
+        if coef_rows:
+            io.write_table(pd.concat(coef_rows, ignore_index=True),
+                           units / f'{stem}_coef_stability.csv',
+                           params={'arm': arm, 'n_bootstraps': n_bootstraps},
+                           subjects=[f'sub-{subject}'])
+        # Out-of-fold predictions, so an ROC can be built without re-running.
+        if pred_frames:
+            io.write_table(pd.concat(pred_frames, ignore_index=True),
+                           units / f'{stem}_predictions.csv',
+                           params={'arm': arm, 'n_bootstraps': n_bootstraps},
+                           subjects=[f'sub-{subject}'])
 
         # Coefficients: one index-model fit at the modal penalty, plus the
         # SELECTION FREQUENCY that is the more trustworthy statistic under

@@ -106,6 +106,30 @@ def test_median_split_sends_ties_low():
     assert labels.tolist() == [0, 0, 0, 0, 1, 1]
 
 
+def test_coefficient_store_gives_mean_sd_and_selection_frequency():
+    """Feature STABILITY is the statistic the paper's 'significant feature'
+    rests on, and it cannot be recovered from a single index fit.
+
+    Selection FREQUENCY matters more than magnitude here: under collinearity the
+    elastic net picks one of a correlated group somewhat arbitrarily, so a
+    feature chosen in 90 of 100 runs says something a single large coefficient
+    does not.
+    """
+    store = cv.new_coefficient_store(3)
+    # Feature 0 always selected, feature 1 selected half the time, feature 2 never.
+    for coef in ([2.0, 4.0, 0.0], [2.0, 0.0, 0.0], [2.0, 4.0, 0.0], [2.0, 0.0, 0.0]):
+        store['sum'] += np.array(coef)
+        store['sumsq'] += np.array(coef) ** 2
+        store['nonzero'] += (np.abs(np.array(coef)) > 0).astype(int)
+        store['n'] += 1
+    out = cv.finalize_coefficients(store)
+    assert out['selection_frequency'].tolist() == [1.0, 0.5, 0.0]
+    assert out['coef_mean'].tolist() == [2.0, 2.0, 0.0]
+    assert out['coef_sd'][0] == pytest.approx(0.0)     # constant
+    assert out['coef_sd'][1] == pytest.approx(2.0)     # +/-2 about a mean of 2
+    assert out['n_fits'] == 4
+
+
 def test_two_feature_sources_are_accepted_and_anything_else_refused():
     """The decoder reads BOTH the bipolar PSD view and the Laplacian band-RMS
     table, which is the whole point of giving them the same schema. But an
