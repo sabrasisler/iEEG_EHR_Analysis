@@ -32,11 +32,21 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ieeg_ehr import io
+from ieeg_ehr import config, io
 from ieeg_ehr.analysis import cluster_permutation as cp
 from ieeg_ehr.analysis import view_tables
 
 logger = logging.getLogger(__name__)
+
+#: Level-3 output type. DELIBERATELY NOT `univariate_analysis`: this is a
+#: different inference, not another view of the univariate one. The whole reason
+#: it exists is that the mass-univariate family is wrong for a correlated grid,
+#: so filing its output inside that tree would bury the distinction exactly where
+#: a reader is most likely to conflate the two. The source run is recorded as a
+#: provenance parent instead.
+OUTPUT_TYPE = 'cluster_permutation'
+QUESTION = 'psd_physiology'
+VIEW_SCHEME = 'med_change_score'
 
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Cluster inference localises to a CLUSTER, never to a bin.')
@@ -117,6 +127,10 @@ def main():
     ap.add_argument('--alpha', type=float, default=0.05)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--statistic', choices=['t', 'yuen'], default='t')
+    ap.add_argument('--question', default=QUESTION)
+    ap.add_argument('--view-scheme', default=VIEW_SCHEME)
+    ap.add_argument('--run-name', default=None,
+                    help='defaults to cluster_<source run dir name>')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -156,22 +170,46 @@ def main():
               'min_subjects': args.min_subjects, 'alpha': args.alpha,
               'seed': args.seed, 'statistic': args.statistic,
               'n_subjects': len(subjects), 'n_regions': len(regions),
-              'n_bins': len(bins)}
-    io.write_table(table, run_dir / 'clusters.csv', params=params,
-                   parents=[str(run_dir / 'subject_slopes')],
+              'n_bins': len(bins), 'source_run': run_dir.name}
+
+    # Its OWN level-3 output type, never inside `univariate_analysis`. The source
+    # run is a provenance parent, not a parent directory.
+    out_dir = config.analysis_run_dir(
+        question=args.question, output_type=OUTPUT_TYPE,
+        view_scheme=args.view_scheme,
+        run_name=args.run_name or f'cluster_{run_dir.name}')
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    io.write_table(table, out_dir / 'clusters.csv', params=params,
+                   parents=[str(run_dir / 'subject_slopes'),
+                            str(run_dir / 'provenance.json')],
                    subjects=sorted(subjects),
                    script='ieeg_ehr/analysis/run_change_score_cluster.py')
 
     # The per-subject mean map is the effect-size substrate the outlines sit on.
     mean_map = pd.DataFrame(np.nanmean(x, axis=0), index=regions, columns=bins)
     mean_map.index.name = 'region'
-    io.write_table(mean_map.reset_index(), run_dir / 'subject_mean_med_beta.csv',
+    io.write_table(mean_map.reset_index(), out_dir / 'subject_mean_med_beta.csv',
                    params=params,
                    script='ieeg_ehr/analysis/run_change_score_cluster.py')
 
+    io.write_run_provenance(
+        out_dir, script='ieeg_ehr/analysis/run_change_score_cluster.py',
+        params=params, subjects=sorted(subjects),
+        parents=[str(run_dir / 'provenance.json')],
+        extra={'status': 'EXPLORATORY cluster permutation, NOT a finding',
+               'licenses': 'A significant cluster means the effect differs from '
+                           'zero SOMEWHERE inside it. Cluster extent is NOT a '
+                           'localisation claim and no single bin inside it is '
+                           'thereby significant.',
+               'why_not_univariate': 'The 798-cell BH family is wrong for this '
+                                     'grid: log-spaced bins come from one FFT '
+                                     'and regions share subjects and channels. '
+                                     'Measured symptom: 22-38% of cells under '
+                                     'p=.05 where a global null expects 5%.'})
     io.log_analysis('change-score cluster permutation over frequency on the '
-                    'per-subject med_between map (EXPLORATORY)', run_dir)
-    print(run_dir / 'clusters.csv')
+                    'per-subject med_between map (EXPLORATORY)', out_dir)
+    print(out_dir)
 
 
 if __name__ == '__main__':
