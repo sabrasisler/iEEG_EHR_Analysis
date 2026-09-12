@@ -314,6 +314,82 @@ def stage_fit(args):
 
 # ============================================================================
 
+def stage_subjects(args):
+    """Per-SUBJECT `med_between` coefficients, one array task per region.
+
+    Exists because the group grid's 798 cells are not 798 independent tests --
+    log-spaced bins come from one FFT and regions share subjects and channels --
+    so BH across them is the wrong family. The right inference is a cluster
+    permutation over frequency (docs/cluster_permutation.md), and that test wants
+    one value PER SUBJECT per cell. This stage produces exactly that, and the same
+    table also feeds the sign-consistency panel, the spaghetti figure and the
+    leave-one-subject-out check, none of which the group fit can supply.
+    """
+    ref = reference_run.load(args.reference_run)
+    run_dir = Path(args.run_dir)
+    manifest = io.read_table(run_dir / 'grid_cell_manifest.parquet', on_stale='warn')
+    region_index = io.read_table(run_dir / 'region_index.parquet', on_stale='warn')
+    pairs = io.read_table(run_dir / 'pair_index.parquet', on_stale='warn')
+
+    match = region_index[region_index['region_index'] == args.region_index]
+    if match.empty:
+        raise SystemExit(f'--region-index {args.region_index} out of range')
+    region = str(match['region'].iloc[0])
+    todo = manifest[(manifest['region'] == region)
+                    & manifest['above_coverage_floor']].sort_values('freq_bin_index')
+
+    cohort = set(run_provenance(run_dir).get('subjects') or [])
+    view_dir = resolve_view_dir(args.view_dir,
+                                mask_label=ref.view_params.get('mask_label'),
+                                roi_scheme=ref.view_params.get('roi_scheme', 'roi_v2'))
+    view_paths = view_subject_paths(view_dir)
+    roi_by_subject, _ = roi_maps(view_paths, cohort,
+                                 ref.view_params.get('roi_scheme', 'roi_v2'))
+
+    out_dir = run_dir / 'subject_slopes'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f'region_{args.region_index:03d}.parquet'
+
+    if todo.empty:
+        io.write_table(pd.DataFrame(columns=['region', 'freq_bin_index', 'subject']),
+                       out_path, params={'region': region, 'n_cells': 0},
+                       script='ieeg_ehr/analysis/run_change_score_grid.py')
+        return
+
+    wanted = {(region, int(b)) for b in todo['freq_bin_index']}
+    frames = load_cell_frames(view_paths, cohort, wanted, roi_by_subject)
+
+    records = []
+    for row in todo.itertuples():
+        b = int(row.freq_bin_index)
+        cell = frames.get((region, b))
+        if cell is None or cell.empty:
+            continue
+        df = change_score.build_change_frame(cell, pairs)
+        per = change_score.subject_med_coefficients(df)
+        if per.empty:
+            continue
+        per['region'] = region
+        per['freq_bin_index'] = b
+        per['freq_bin_low'] = float(row.bin_low_hz)
+        per['freq_bin_high'] = float(row.bin_high_hz)
+        records.append(per)
+        logger.info('%-18s bin %2d | %d/%d subjects estimable',
+                    region, b, int(per['ok'].sum()), len(per))
+
+    out = (pd.concat(records, ignore_index=True) if records
+           else pd.DataFrame(columns=['region', 'freq_bin_index', 'subject']))
+    io.write_table(out, out_path,
+                   params={'region': region,
+                           'formula': change_score.SUBJECT_FORMULA,
+                           'min_pairs_per_state': change_score.MIN_PAIRS_PER_STATE},
+                   parents=[str(run_dir / 'grid_cell_manifest.parquet')],
+                   script='ieeg_ehr/analysis/run_change_score_grid.py')
+    logger.info('%s: %d rows', region, len(out))
+
+
+# ============================================================================
+
 def stage_collect(args):
     run_dir = Path(args.run_dir)
     region_index = io.read_table(run_dir / 'region_index.parquet', on_stale='warn')
@@ -434,7 +510,9 @@ and badly unevenly sampled here.
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--stage', choices=['prepare', 'fit', 'collect'], required=True)
+    ap.add_argument('--stage',
+                    choices=['prepare', 'fit', 'subjects', 'collect'],
+                    required=True)
     ap.add_argument('--run-dir', default=None)
     ap.add_argument('--region-index', type=int, default=None)
     ap.add_argument('--drug-set', choices=sorted(med_state.DRUG_SETS),
@@ -468,6 +546,10 @@ def main():
         if not args.run_dir or args.region_index is None:
             raise SystemExit('--stage fit needs --run-dir and --region-index')
         stage_fit(args)
+    elif args.stage == 'subjects':
+        if not args.run_dir or args.region_index is None:
+            raise SystemExit('--stage subjects needs --run-dir and --region-index')
+        stage_subjects(args)
     else:
         if not args.run_dir:
             raise SystemExit('--stage collect needs --run-dir')

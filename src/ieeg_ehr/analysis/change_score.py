@@ -204,3 +204,83 @@ def pair_summary(pairs):
             'frac_d_pain_zero': float((g['d_pain'] == 0).mean()),
         })
     return pd.DataFrame(rows).sort_values('stratum').reset_index(drop=True)
+
+
+# ============================================================================
+# PER-SUBJECT COEFFICIENTS
+# ============================================================================
+# The group mixed-model grid treats 798 region x frequency cells as 798 tests,
+# which they are not: log-spaced bins come from the same FFT, and regions share
+# subjects and channels. The principled inference is a CLUSTER PERMUTATION test
+# over frequency (docs/cluster_permutation.md), and that test wants ONE VALUE PER
+# SUBJECT per region per bin -- not a group coefficient.
+#
+# The naive per-subject value, a dosed-minus-undosed difference of mean
+# d_log10_power, would be WRONG here. It drops `pain_1`, and regression to the
+# mean is the dominant signal in these pairs (mean change in pain runs +2.12 at
+# baseline 0 to -3.00 at baseline 10) while medication is given BECAUSE pain is
+# high. That difference would report regression to the mean as a drug effect --
+# the same Lord's-paradox trap the group formula exists to avoid. So each subject
+# gets their own small OLS carrying the same covariates, and what travels upward
+# is their `med_between` coefficient.
+
+#: Per-subject design. No random effects: within ONE subject there is no subject
+#: grouping left, and the channel level already cancelled in the differencing.
+SUBJECT_FORMULA = 'd_log10_power ~ d_pain + med_between + pain_1 + gap_h'
+
+#: A subject needs enough pairs in BOTH exposure states for `med_between` to be
+#: estimable at all. Below this the coefficient is noise dressed as data.
+MIN_PAIRS_PER_STATE = 2
+
+
+def subject_med_coefficients(df, formula=SUBJECT_FORMULA,
+                             min_pairs_per_state=MIN_PAIRS_PER_STATE):
+    """Per-subject `med_between` coefficient for ONE cell.
+
+    `df` is a change frame (one row per pair x channel) for a single region and
+    frequency bin. Returns one row per subject with the coefficient, its SE, and
+    the counts behind it, so a caller can drop thin subjects without refitting.
+
+    Channels are POOLED within a subject rather than averaged first: averaging
+    would discard the unequal channel counts that make some subjects' estimates
+    genuinely better than others, and this coefficient is a per-subject summary,
+    not a test -- its uncertainty is handled upstream by the permutation.
+    """
+    import statsmodels.formula.api as smf
+
+    rows = []
+    for subject, g in df.groupby('subject', sort=True):
+        n_dosed = int((g['med_between'] == 1).sum())
+        n_undosed = int((g['med_between'] == 0).sum())
+        n_pairs_dosed = int(g.loc[g['med_between'] == 1, 'pair_id'].nunique())
+        n_pairs_undosed = int(g.loc[g['med_between'] == 0, 'pair_id'].nunique())
+        rec = {'subject': subject, 'n_rows': len(g),
+               'n_channels': int(g['channel_uid'].nunique()),
+               'n_pairs_dosed': n_pairs_dosed,
+               'n_pairs_undosed': n_pairs_undosed,
+               'med_beta': np.nan, 'med_se': np.nan, 'ok': False, 'why': ''}
+        if min(n_pairs_dosed, n_pairs_undosed) < min_pairs_per_state:
+            rec['why'] = 'too few pairs in one exposure state'
+            rows.append(rec)
+            continue
+        if n_dosed == 0 or n_undosed == 0 or g['d_log10_power'].std(ddof=0) == 0:
+            rec['why'] = 'no exposure contrast or no outcome variance'
+            rows.append(rec)
+            continue
+        try:
+            res = smf.ols(formula, data=g).fit()
+        except Exception as exc:                             # noqa: BLE001
+            rec['why'] = f'{type(exc).__name__}: {exc}'[:80]
+            rows.append(rec)
+            continue
+        if 'med_between' not in res.params.index:
+            rec['why'] = 'med_between dropped from the design'
+            rows.append(rec)
+            continue
+        beta = float(res.params['med_between'])
+        rec.update(med_beta=beta, med_se=float(res.bse['med_between']),
+                   ok=bool(np.isfinite(beta)))
+        if not rec['ok']:
+            rec['why'] = 'non-finite coefficient'
+        rows.append(rec)
+    return pd.DataFrame(rows)

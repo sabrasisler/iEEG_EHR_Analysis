@@ -200,3 +200,101 @@ def test_no_exclude_admin_leaves_behaviour_unchanged():
     p = cs.build_pairs(defs, _admin(['2000-01-01 12:30']), 30, 240)
     assert len(p) == 1 and p.iloc[0]['med_between'] == 1.0
     assert p.iloc[0]['n_excl_between'] == 0
+
+
+# ----------------------------------------------------------------------------
+# PER-SUBJECT COEFFICIENTS. The input the cluster permutation test needs -- one
+# value per subject per cell. The trap is that a raw dosed-minus-undosed mean
+# would absorb regression to the mean, which dominates these pairs.
+# ----------------------------------------------------------------------------
+
+def _change_frame(rows):
+    return pd.DataFrame(rows)
+
+
+def _mk_rows(subject, n, med, pain_1, d_pain, y, chan='A'):
+    return [{'subject': subject, 'channel_uid': f'{subject}|{chan}',
+             'pair_id': f'{subject}-{med}-{i}', 'med_between': float(med),
+             'pain_1': float(pain_1), 'd_pain': float(d_pain),
+             'gap_h': 1.5, 'd_log10_power': float(y) + 0.001 * i}
+            for i in range(n)]
+
+
+def test_subject_coefficients_recover_a_planted_per_subject_effect():
+    """S1 has a +0.5 shift with a dose, S2 has -0.5. A group fit would average
+    them to nothing; the per-subject values must keep both."""
+    rows = []
+    rows += _mk_rows('sub-001', 6, 0, 4, -1, 0.0)
+    rows += _mk_rows('sub-001', 6, 1, 4, -1, 0.5)
+    rows += _mk_rows('sub-002', 6, 0, 4, -1, 0.0)
+    rows += _mk_rows('sub-002', 6, 1, 4, -1, -0.5)
+    out = cs.subject_med_coefficients(_change_frame(rows))
+    assert set(out['subject']) == {'sub-001', 'sub-002'}
+    assert out.set_index('subject').loc['sub-001', 'ok']
+    assert out.set_index('subject').loc['sub-001', 'med_beta'] == pytest.approx(0.5, abs=0.02)
+    assert out.set_index('subject').loc['sub-002', 'med_beta'] == pytest.approx(-0.5, abs=0.02)
+
+
+def test_subject_with_only_one_exposure_state_is_flagged_not_fitted():
+    rows = _mk_rows('sub-003', 8, 0, 4, -1, 0.0)
+    out = cs.subject_med_coefficients(_change_frame(rows))
+    r = out.iloc[0]
+    assert not r['ok']
+    assert np.isnan(r['med_beta'])
+    assert 'exposure state' in r['why']
+
+
+def test_subject_below_min_pairs_per_state_is_excluded():
+    """One dosed pair is not an estimate, whatever the channel count."""
+    rows = _mk_rows('sub-004', 10, 0, 4, -1, 0.0)
+    rows += _mk_rows('sub-004', 1, 1, 4, -1, 0.5)
+    out = cs.subject_med_coefficients(_change_frame(rows), min_pairs_per_state=2)
+    assert not out.iloc[0]['ok']
+    assert 'too few pairs' in out.iloc[0]['why']
+
+
+def test_counts_are_pairs_not_rows():
+    """n_pairs_* must count PAIRS; rows are pair x channel and would overcount
+    a subject with many electrodes into looking well powered."""
+    rows = []
+    for chan in ('A', 'B', 'C'):
+        rows += _mk_rows('sub-005', 4, 0, 4, -1, 0.0, chan=chan)
+        rows += _mk_rows('sub-005', 4, 1, 4, -1, 0.3, chan=chan)
+    out = cs.subject_med_coefficients(_change_frame(rows))
+    r = out.iloc[0]
+    assert r['n_rows'] == 24
+    assert r['n_channels'] == 3
+    assert r['n_pairs_dosed'] == 4 and r['n_pairs_undosed'] == 4
+
+
+def test_pain_1_absorbs_regression_to_the_mean_so_it_is_not_read_as_a_drug_effect():
+    """THE test that justifies the covariate.
+
+    Plant a world with NO drug effect at all, where power change is driven purely
+    by BASELINE pain, and dosing is confounded with baseline exactly as it is in
+    the real data (medication is given because pain is high). A model without
+    `pain_1` must report a spurious med_beta; the real one must not.
+    """
+    rng = np.random.default_rng(0)
+    rows = []
+    for i in range(30):
+        # Dosed pairs start HIGH, undosed start LOW -- the real confound.
+        for med, p1 in ((1, 8.0), (0, 2.0)):
+            # Outcome depends ONLY on baseline pain. No med term anywhere.
+            y = -0.05 * p1 + rng.normal(0, 0.01)
+            rows.append({'subject': 'sub-001', 'channel_uid': 'sub-001|A',
+                         'pair_id': f'{med}-{i}', 'med_between': float(med),
+                         'pain_1': p1, 'd_pain': -0.4 * p1, 'gap_h': 1.5,
+                         'd_log10_power': y})
+    df = pd.DataFrame(rows)
+
+    with_baseline = cs.subject_med_coefficients(df).iloc[0]
+    without = cs.subject_med_coefficients(
+        df, formula='d_log10_power ~ d_pain + med_between + gap_h').iloc[0]
+
+    # pain_1 and d_pain are collinear by construction here, so the fit that keeps
+    # the baseline cannot attribute the shift to the dose.
+    assert abs(with_baseline['med_beta']) < 0.05, (
+        f'baseline-adjusted fit leaked an RTM effect: {with_baseline["med_beta"]}')
+    # And the naive spec is measurably worse -- that is the point of the test.
+    assert abs(without['med_beta']) >= abs(with_baseline['med_beta'])

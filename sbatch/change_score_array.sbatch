@@ -57,11 +57,17 @@ export MKL_NUM_THREADS=1
 : "${RUN_DIR:?set RUN_DIR to the directory printed by --stage prepare}"
 EXTRA=${EXTRA:-}
 
-echo "=== change score | region ${SLURM_ARRAY_TASK_ID} | $(date) ==="
+# `fit` is the group mixed model per cell; `subjects` is the per-SUBJECT
+# med_between coefficient the cluster permutation test needs (798 cells are not
+# 798 independent tests -- see docs/cluster_permutation.md). Same region
+# parallelism and the same Lustre read either way, so one file serves both.
+STAGE=${STAGE:-fit}
+
+echo "=== change score | stage ${STAGE} | region ${SLURM_ARRAY_TASK_ID} | $(date) ==="
 echo "    run: ${RUN_DIR}"
 
 python -m ieeg_ehr.analysis.run_change_score_grid \
-    --stage fit \
+    --stage "${STAGE}" \
     --run-dir "${RUN_DIR}" \
     --region-index "${SLURM_ARRAY_TASK_ID}" \
     ${EXTRA}
