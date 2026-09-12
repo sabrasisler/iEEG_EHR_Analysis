@@ -77,6 +77,20 @@ def sign_consistency(run_dir, cells, blups, regions, bins):
                           values='frac_sign_consistent')
         return p.reindex(index=regions, columns=bins), 'unpooled per-subject fits'
 
+    # NEITHER source exists. The paired change-score grid is the case: its fit
+    # stage writes no BLUP table and no unpooled per-subject slopes, and its
+    # coefficient is `dpain_beta`, not the `beta_nrs_within` the BLUP fallback
+    # joins on. Return an EMPTY panel that says so, rather than raising -- the
+    # other three panels are perfectly readable without this one, and a design
+    # that cannot compute sign consistency should say that on the figure instead
+    # of being unable to produce a figure at all.
+    if blups is None or 'beta_nrs_within' not in cells.columns:
+        logger.warning('no sign_consistency.parquet and no usable BLUPs; the '
+                       'sign-consistency panel will be blank. This design does '
+                       'not write per-subject unpooled fits.')
+        empty = pd.DataFrame(np.nan, index=regions, columns=bins)
+        return empty, 'NOT AVAILABLE for this design (no per-subject fits)'
+
     logger.warning('no sign_consistency.parquet; falling back to BLUPs, which are '
                    'shrunk toward the group and will look far more consistent than '
                    'the data is. Run compute_subject_slopes_grid for the real thing.')
@@ -555,7 +569,11 @@ def main():
                         'and the implied medicated slope (EXPLORATORY)', run_dir)
         return
 
-    blups = io.read_table(run_dir / 'grid_blups.parquet', on_stale='warn')
+    # Optional: only the level-model grids write it. Absent for the paired
+    # change-score design, which is a missing PANEL, not a missing figure.
+    blups_path = run_dir / 'grid_blups.parquet'
+    blups = (io.read_table(blups_path, on_stale='warn') if blups_path.exists()
+             else None)
     map_path = run_dir / f'fig_grid_map{args.suffix}.png'
     spec_path = run_dir / f'fig_grid_spectra{args.suffix}.png'
 
