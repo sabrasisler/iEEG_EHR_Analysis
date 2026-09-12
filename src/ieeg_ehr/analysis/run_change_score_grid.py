@@ -343,8 +343,19 @@ def stage_subjects(args):
                                 mask_label=ref.view_params.get('mask_label'),
                                 roi_scheme=ref.view_params.get('roi_scheme', 'roi_v2'))
     view_paths = view_subject_paths(view_dir)
+
+    # TIMED AND LOGGED because this phase dominates and used to be invisible: on
+    # 2026-09-12 twenty concurrent array tasks sat 25 minutes here with no output
+    # at all, and the only way to tell loading from hanging was that the
+    # `subject_slopes/` directory below had not been created yet. Lustre
+    # serialises on metadata when every task opens the same ~51 subject files at
+    # once, so THROTTLE THE ARRAY (--array=0-20%6) rather than running all 21.
+    t0 = time.time()
+    logger.info('region %d: reading ROI maps for %d subjects from %s',
+                args.region_index, len(cohort), view_dir)
     roi_by_subject, _ = roi_maps(view_paths, cohort,
                                  ref.view_params.get('roi_scheme', 'roi_v2'))
+    logger.info('roi_maps done in %.1fs', time.time() - t0)
 
     out_dir = run_dir / 'subject_slopes'
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -357,7 +368,11 @@ def stage_subjects(args):
         return
 
     wanted = {(region, int(b)) for b in todo['freq_bin_index']}
+    t1 = time.time()
+    logger.info('loading %d cell frames for %s', len(wanted), region)
     frames = load_cell_frames(view_paths, cohort, wanted, roi_by_subject)
+    logger.info('loaded %d frame(s) in %.1fs -- fitting now',
+                len(frames), time.time() - t1)
 
     records = []
     for row in todo.itertuples():
