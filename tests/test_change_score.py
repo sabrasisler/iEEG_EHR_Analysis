@@ -279,21 +279,30 @@ def test_pain_1_absorbs_regression_to_the_mean_so_it_is_not_read_as_a_drug_effec
     rows = []
     for i in range(30):
         # Dosed pairs start HIGH, undosed start LOW -- the real confound.
-        for med, p1 in ((1, 8.0), (0, 2.0)):
+        #
+        # The baseline is JITTERED so the two groups OVERLAP. Amended 2026-09-12:
+        # originally pain_1 took exactly 8.0 or 2.0, which makes it an affine
+        # function of med_between, and then no estimator can separate the two --
+        # the med coefficient is not identified rather than zero, so the test
+        # could not be satisfied by any correct implementation. It passed only
+        # because statsmodels' pinv happened to spread a rank-deficient solution
+        # across the collinear columns. Real baselines overlap; with overlap the
+        # estimand exists and the test discriminates properly.
+        for med, base in ((1, 8.0), (0, 2.0)):
+            p1 = base + rng.normal(0, 1.5)
             # Outcome depends ONLY on baseline pain. No med term anywhere.
             y = -0.05 * p1 + rng.normal(0, 0.01)
             rows.append({'subject': 'sub-001', 'channel_uid': 'sub-001|A',
                          'pair_id': f'{med}-{i}', 'med_between': float(med),
-                         'pain_1': p1, 'd_pain': -0.4 * p1, 'gap_h': 1.5,
-                         'd_log10_power': y})
+                         'pain_1': p1, 'd_pain': -0.4 * p1 + rng.normal(0, 0.5),
+                         'gap_h': 1.5, 'd_log10_power': y})
     df = pd.DataFrame(rows)
 
     with_baseline = cs.subject_med_coefficients(df).iloc[0]
     without = cs.subject_med_coefficients(
         df, formula='d_log10_power ~ d_pain + med_between + gap_h').iloc[0]
 
-    # pain_1 and d_pain are collinear by construction here, so the fit that keeps
-    # the baseline cannot attribute the shift to the dose.
+    assert with_baseline['ok'], with_baseline['why']
     assert abs(with_baseline['med_beta']) < 0.05, (
         f'baseline-adjusted fit leaked an RTM effect: {with_baseline["med_beta"]}')
     # And the naive spec is measurably worse -- that is the point of the test.

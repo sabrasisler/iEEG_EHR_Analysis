@@ -226,7 +226,17 @@ def pair_summary(pairs):
 
 #: Per-subject design. No random effects: within ONE subject there is no subject
 #: grouping left, and the channel level already cancelled in the differencing.
+#:
+#: Recorded as a string for provenance, but NOT evaluated by patsy -- see
+#: `subject_med_coefficients`. The design is built directly from these columns,
+#: in this order, with an intercept prepended.
 SUBJECT_FORMULA = 'd_log10_power ~ d_pain + med_between + pain_1 + gap_h'
+
+#: The design columns, in the order `SUBJECT_FORMULA` implies.
+SUBJECT_TERMS = ('d_pain', 'med_between', 'pain_1', 'gap_h')
+
+#: Index of `med_between` in the solved coefficient vector (0 is the intercept).
+_MED_IX = 1 + SUBJECT_TERMS.index('med_between')
 
 #: A subject needs enough pairs in BOTH exposure states for `med_between` to be
 #: estimable at all. Below this the coefficient is noise dressed as data.
@@ -245,8 +255,19 @@ def subject_med_coefficients(df, formula=SUBJECT_FORMULA,
     would discard the unequal channel counts that make some subjects' estimates
     genuinely better than others, and this coefficient is a per-subject summary,
     not a test -- its uncertainty is handled upstream by the permutation.
+
+    SOLVED WITH numpy, NOT `smf.ols`. This is called once per subject per cell --
+    ~1,500 times per region -- and patsy re-parses the formula and rebuilds the
+    design matrix on every call, which scales with the frame. Measured
+    2026-09-12: with the formula API, small regions finished a region in 31 s
+    while large ones (Lateral Temporal, 801 contacts, tens of thousands of rows
+    per subject per cell) ran past a THREE HOUR walltime and were killed --
+    a >350x spread for the same arithmetic. lstsq on a prebuilt design is
+    identical OLS and removes the pathology entirely.
     """
-    import statsmodels.formula.api as smf
+    terms = parse_simple_formula(formula)
+    if 'med_between' not in terms:
+        raise ValueError(f'{formula!r} has no med_between term to report')
 
     rows = []
     for subject, g in df.groupby('subject', sort=True):
@@ -267,20 +288,92 @@ def subject_med_coefficients(df, formula=SUBJECT_FORMULA,
             rec['why'] = 'no exposure contrast or no outcome variance'
             rows.append(rec)
             continue
+        y_all = g['d_log10_power'].to_numpy(dtype=np.float64)
+        cols_all = {t: g[t].to_numpy(dtype=np.float64) for t in terms}
+        finite = np.isfinite(y_all)
+        for v in cols_all.values():
+            finite &= np.isfinite(v)
+        y = y_all[finite]
+        cols = {t: v[finite] for t, v in cols_all.items()}
+
+        X, kept, dropped = _identifiable_design(cols, terms)
+        rec['terms_dropped'] = ','.join(dropped)
+        if 'med_between' not in kept:
+            rec['why'] = 'med_between is collinear with the covariates'
+            rows.append(rec)
+            continue
+        # A residual variance needs strictly more rows than parameters.
+        if len(y) <= X.shape[1]:
+            rec['why'] = f'only {len(y)} rows for {X.shape[1]} parameters'
+            rows.append(rec)
+            continue
+
+        med_ix = 1 + kept.index('med_between')
+        coef, _r, _rank, _sv = np.linalg.lstsq(X, y, rcond=None)
+        beta = float(coef[med_ix])
+        resid = y - X @ coef
+        dof = len(y) - X.shape[1]
+        sigma2 = float(resid @ resid) / dof
         try:
-            res = smf.ols(formula, data=g).fit()
-        except Exception as exc:                             # noqa: BLE001
-            rec['why'] = f'{type(exc).__name__}: {exc}'[:80]
-            rows.append(rec)
-            continue
-        if 'med_between' not in res.params.index:
-            rec['why'] = 'med_between dropped from the design'
-            rows.append(rec)
-            continue
-        beta = float(res.params['med_between'])
-        rec.update(med_beta=beta, med_se=float(res.bse['med_between']),
-                   ok=bool(np.isfinite(beta)))
+            xtx_inv = np.linalg.inv(X.T @ X)
+            se = float(np.sqrt(sigma2 * xtx_inv[med_ix, med_ix]))
+        except np.linalg.LinAlgError:
+            se = np.nan
+        rec.update(med_beta=beta, med_se=se, ok=bool(np.isfinite(beta)))
         if not rec['ok']:
             rec['why'] = 'non-finite coefficient'
         rows.append(rec)
     return pd.DataFrame(rows)
+
+
+def parse_simple_formula(formula):
+    """['d_pain', 'med_between', ...] from 'y ~ a + b + c'.
+
+    Deliberately NOT patsy. Only `+`-separated bare column names are supported,
+    which is all this design uses, and doing it here keeps the ~1,500 fits per
+    region off patsy's formula machinery -- the thing that made large regions
+    exceed a three-hour walltime.
+    """
+    if '~' not in formula:
+        raise ValueError(f'{formula!r} is not a formula')
+    rhs = formula.split('~', 1)[1]
+    terms = [t.strip() for t in rhs.split('+') if t.strip()]
+    bad = [t for t in terms if not t.isidentifier()]
+    if bad:
+        raise ValueError(
+            f'only bare column names joined by + are supported; got {bad}. '
+            f'This is not patsy -- no transforms, interactions or intercept '
+            f'suppression.')
+    return terms
+
+
+def _identifiable_design(cols, terms):
+    """(design with intercept, kept term names, dropped term names).
+
+    THE COVARIATES GO IN FIRST AND `med_between` LAST. That ordering is the whole
+    point and it is counter-intuitive, so: admitting `med_between` first would
+    "protect" it from being dropped, and a subject whose baseline pain perfectly
+    predicts whether they were dosed would then have the ENTIRE baseline effect
+    attributed to the drug. That is Lord's paradox arriving silently through a
+    linear-algebra tie-break. Putting it last means that when `med_between` is
+    collinear with the covariates its coefficient is correctly reported as NOT
+    IDENTIFIED rather than as a large drug effect.
+
+    Constant and redundant COVARIATES are still dropped rather than failing the
+    fit: a subject whose pairs all start at the same NRS has a constant
+    `pain_1`, which carries no information and is absorbed by the intercept, and
+    refusing that subject would shrink the cohort for a non-reason.
+    """
+    n = len(next(iter(cols.values()))) if cols else 0
+    X = np.ones((n, 1))
+    kept, dropped = [], []
+    ordered = ([t for t in terms if t != 'med_between'] + ['med_between'])
+    for t in ordered:
+        v = cols[t].reshape(-1, 1)
+        cand = np.hstack([X, v])
+        if np.linalg.matrix_rank(cand) > np.linalg.matrix_rank(X):
+            X = cand
+            kept.append(t)
+        else:
+            dropped.append(t)
+    return X, kept, dropped
