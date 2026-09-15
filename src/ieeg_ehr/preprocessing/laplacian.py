@@ -1,7 +1,7 @@
 """Laplacian montage and the target paper's band-RMS extraction.
 
 This is the SECOND re-referencing scheme in the project, and it exists to test
-one specific hypothesis: that the gap between our decoding results and Prasad et
+one specific hypothesis: that the gap between our decoding results and Huang et
 al. 2025's comes from the spatial filter rather than from the spectral estimator.
 Everything else about the paper's feature pipeline is reproducible from the
 stored PSD cache (see DECISIONS 2026-09-09); the re-reference is not, because

@@ -2,7 +2,7 @@
 
     python -m ieeg_ehr.features.build_pain_epoch_bandpass --subjects 183
 
-Reproduces Prasad et al. 2025's feature pipeline directly off the raw
+Reproduces Huang et al. 2025's feature pipeline directly off the raw
 time-domain signal: notch -> Laplacian re-reference -> six 8th-order zero-phase
 Butterworth bandpass filters -> RMS over the 5-min window -> log10. See
 `preprocessing/laplacian.py` for the method and the two deliberate departures.

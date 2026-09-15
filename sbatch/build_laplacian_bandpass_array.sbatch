@@ -2,7 +2,7 @@
 #SBATCH --job-name=lap_bandpass
 #SBATCH --partition=normal
 #SBATCH --time=02:00:00
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=8GB
 #SBATCH --output=logs/lap_bandpass_%A_%a.out
 #SBATCH --array=0-64%20
@@ -14,7 +14,7 @@
 #   sbatch sbatch/build_laplacian_bandpass_array.sbatch
 #   SUBJECTS_OVERRIDE=019 sbatch --array=0 sbatch/build_laplacian_bandpass_array.sbatch
 #
-# WHY THIS EXISTS. Every other difference between our decoder and Prasad et al.
+# WHY THIS EXISTS. Every other difference between our decoder and Huang et al.
 # 2025's is reproducible from the stored PSD cache -- band edges, the
 # RMS-vs-geometric-mean epoch collapse, band-power weighting. The RE-REFERENCE is
 # not: run_pipeline_bipolar.py never persisted the bipolar trace, so matching

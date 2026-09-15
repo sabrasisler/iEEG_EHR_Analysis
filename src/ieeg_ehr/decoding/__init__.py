@@ -1,6 +1,6 @@
 """Per-subject pain state decoding (PLANNING "Pain state decoding").
 
-A replication of Prasad et al. 2025 (doi 10.1038/s41467-025-59756-5) on the
+A replication of Huang et al. 2025 (doi 10.1038/s41467-025-59756-5) on the
 discovery cohort at ~4x their n: one model per subject-session, predicting that
 subject's own reported pain score from the 5-min pre-report spectro-spatial
 feature set.

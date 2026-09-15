@@ -83,7 +83,7 @@ both are free recomputes from the per-window cache.
   finely and specifically so no band edge straddles a 60 Hz harmonic.
 - `paper_bands_6` — the DECODING REPLICATION's six bands,
   `config.PAPER_BANDS_6_HZ`: delta 1-4, theta 4-8, alpha 8-12, beta 15-25,
-  gamma 25-70, high_gamma 70-170. Prasad et al. 2025's published edges, exactly.
+  gamma 25-70, high_gamma 70-170. Huang et al. 2025's published edges, exactly.
 
 Selected by `axes.bands_for()` — ONE mapping from this vocabulary to actual
 edges, which raises on an unknown value rather than defaulting (a silent fall

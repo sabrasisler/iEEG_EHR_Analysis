@@ -695,3 +695,46 @@ conditional on `_sw_logz4`; re-measuring is a ~10-minute job.
 **Where it lives:** measured by scratch probes (not committed);
 `docs/labnotebook/2026-09-08.md`. Thresholds to be consumed by
 `src/ieeg_ehr/decoding/`.
+
+---
+
+## 2026-09-15 — CORRECTION: the target paper is Huang et al., not "Prasad et al."
+
+**Every earlier entry in this file that cites the decoding replication's source
+paper as "Prasad et al. 2025" is WRONG. The correct citation is Huang et al.
+2025**, *Naturalistic acute pain states decoded from neural and facial
+dynamics*, Nat Commun 16:4371, doi 10.1038/s41467-025-59756-5 — Yuhao Huang
+first author, Corey Keller last author. It is a lab paper.
+
+Appended rather than corrected in place, per this file's append-only rule: the
+earlier entries record what was believed at the time, and the DOI in them was
+correct throughout, so the analysis they describe is unaffected. The error
+appears to have come from misreading "Persad, Amit" in the author list. The wrong
+name was fixed in place in code, sbatch headers, TASKS.md, PLANNING.md and
+docs/view_registry.md, where there is no append-only rule and a stale name would
+simply mislead.
+
+**Also settled while checking this: the paper does NOT specify its inner-fold
+count, and does not use leave-one-out anywhere.** Its methods say only "as a part
+of the inner-fold CV scheme, we optimized the regularization strength"; the
+k = 5-or-10 rule is attached explicitly to the OUTER loop ("repeated k times as
+a part of the outer k-fold CV scheme"). So `arms.INNER_CV = 3` (regression) /
+`INNER_CV_LOGISTIC = 2` are OUR choices filling a gap in their methods, not a
+match to them, and should be described that way. The reasoning stands on its own
+— an inner split taken from a ~38-epoch training fold leaves ~7 observations per
+fold at k=5, so the selected alpha would be noise on top of noise — but it is
+inference, not replication.
+
+**And a find that strengthens the blocked-CV addition.** The paper DOES use a
+time-blocked scheme, just not for the neural decoder: for the facial/momentary-
+pain analysis it used "a conservative sequential 5-fold cross-validation scheme
+to account for the temporal dependency of behavioral timepoints occurring close
+together, which could artificially increase model performance." That is exactly
+the concern our `blocked` scheme addresses, stated by the authors themselves and
+applied elsewhere in the same paper but NOT to the self-report neural decoder.
+So running it is applying their own standard consistently rather than
+second-guessing their design — worth saying that way in any write-up, given the
+blocked scheme roughly halves every arm.
+
+**Where it lives:** `src/ieeg_ehr/decoding/`, `src/ieeg_ehr/preprocessing/laplacian.py`,
+`sbatch/build_laplacian_bandpass_array.sbatch`, `docs/view_registry.md`.

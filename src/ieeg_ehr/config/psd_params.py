@@ -30,6 +30,52 @@ PSD_FREQ_MAX_HZ = 250.0        # Nyquist-safe ceiling given rare 500 Hz-sampled 
 PSD_LINE_NOISE_FREQS_HZ = (60.0, 120.0, 180.0, 240.0)
 PSD_LINE_NOISE_GUARD_HZ = 2.0  # +/- band around each harmonic flagged contains_line_noise
 
+# ============================================================================
+# FULL-RESOLUTION EPOCH PSD  —  features/pain/psd_epochs_fullres/
+# ============================================================================
+# The NATIVE FFT grid, stored instead of the 50 log bins above. Same window, same
+# hop, same range; the only difference is that no reduction happens.
+#
+# WHY. The log-bin reduction is irreversible and wrong at both ends of the
+# spectrum. At high frequency a bin is far wider than the line noise it must
+# exclude (bins 36+37 span 53.3-66.4 Hz, so dropping 60 Hz costs 13.2 Hz where
+# the contamination is ~4 Hz). Below ~4.7 Hz a bin is NARROWER than the window's
+# own resolution, so `_band_average_linear`'s fallback fills it with a copy of a
+# neighbour and the 44 usable bins carry only 38 distinct values. And ~2 samples
+# per oscillatory peak is unfittable, which is what blocked specparam (BG.3).
+# Storing the native grid makes every binning scheme a view. DECISIONS 2026-09-15.
+#
+# THE RESOLUTION IS NOT A FREE PARAMETER. df = sfreq/nperseg = 1/PSD_WINDOW_SEC,
+# so 2s windows give 0.5 Hz at 500, 1000 AND 2000 Hz sampling — the grid is
+# identical across the cohort without resampling anything, which is the whole
+# reason a fixed frequency axis is possible at all. The constant below is an
+# ASSERTION target, not an input: the extractor computes df from the run's own
+# sfreq and refuses if it disagrees. Changing PSD_WINDOW_SEC changes this.
+PSD_FULLRES_DF_HZ = 1.0 / PSD_WINDOW_SEC        # 0.5 Hz — asserted, never assumed
+PSD_FULLRES_FREQ_MIN_HZ = 1.0
+PSD_FULLRES_FREQ_MAX_HZ = 250.0                 # inclusive; same Nyquist-safe ceiling
+                                                # as PSD_FREQ_MAX_HZ, and chosen to keep
+                                                # CANONICAL_BANDS_HZ's high_gamma3 (185-235)
+                                                # and SLOPE_FIT_HI_HZ (250) valid unchanged
+# 1.0, 1.5, ... 250.0 inclusive. Derived here so a reader can size a table
+# without opening a manifest, but the MANIFEST's freqs_hz is the source of truth
+# for any stored artifact — see config.fullres_epoch_manifest_path.
+PSD_FULLRES_N_FREQS = int(round((PSD_FULLRES_FREQ_MAX_HZ - PSD_FULLRES_FREQ_MIN_HZ)
+                                / PSD_FULLRES_DF_HZ)) + 1        # 499
+
+# The view-time notch half-width, applied to PSD_LINE_NOISE_FREQS_HZ. SEPARATE
+# from PSD_LINE_NOISE_GUARD_HZ even though both are 2.0 Hz today, because they
+# are different kinds of thing: the guard is baked into a stored artifact's
+# contains_line_noise flags and cannot be changed without a rebuild, whereas this
+# is a view parameter and is free to sweep. Collapsing them into one constant
+# would make a sweepable choice look like a frozen one.
+#
+# 2.0 Hz is a structural floor, not a tuned value: a 2s Hann window's main lobe
+# is 2/T = 1.0 Hz wide (+/- 0.5 Hz), and mains frequency itself drifts by a few
+# tenths, so +/-2.0 Hz clears the lobe with margin. Cost is 4 Hz per harmonic —
+# 8 bins of 499, versus 6 bins of 50 on the log axis.
+PSD_NOTCH_HALF_WIDTH_HZ = 2.0
+
 # HDF5 chunking: default is uncapped (whole run's time axis in one chunk per
 # channel). PSD rows are spaced by the hop (~1s by default) — ~60x denser than
 # the old 60s scheme, but a channel's entire run is still only single-digit MB
@@ -92,7 +138,7 @@ CANONICAL_BANDS_HZ = {
 }
 
 # ----------------------------------------------------------------------------
-# THE DECODING REPLICATION'S BANDS  (Prasad et al. 2025, doi 10/nat.s41467-025-59756-5)
+# THE DECODING REPLICATION'S BANDS  (Huang et al. 2025, doi 10/nat.s41467-025-59756-5)
 # ----------------------------------------------------------------------------
 # The six bands the per-subject pain decoder replicates. A SEPARATE constant
 # rather than a replacement for CANONICAL_BANDS_HZ, because the two answer

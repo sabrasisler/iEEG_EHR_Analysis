@@ -24,7 +24,7 @@ date, or figure that prompted it.
 
 ### Pain state decoding (PLANNING "Pain state decoding", DECISIONS 2026-09-08)
 
-Replication of Prasad et al. 2025 on the discovery cohort. Locked: paper's 6
+Replication of Huang et al. 2025 on the discovery cohort. Locked: paper's 6
 bands · per-channel features, ROI as metadata only · raw log power, NO zero-pain
 baseline, standardized in-fold · Y=0.2/Z=0.5 cascade, residual cells imputed
 in-fold · 45 discovery subject-sessions at >=30 epochs, one model per session ·
@@ -183,6 +183,18 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       Only `backfill_epoch_defs_timing.sbatch` has it. Without it a job submitted
       from a worktree silently runs the main checkout's code under a commit hash
       that claims otherwise. (→ docs/labnotebook/2026-07-28.md 12:45)
+- [ ] **Stop an additive provenance field from orphaning every materialized
+      view.** Adding `band_weighting` to `ViewConfig.provenance()` changed the
+      hashed dict, so `resolve_view_dir()` now computes
+      `chan-raw-relpain-roiv2_9fc9da6f9f41` while the view on Oak is
+      `..._ee045610cb8f`. All 14 other view parameters are byte-identical, so the
+      view is NOT stale in content — only the provenance SCHEMA grew a field. Any
+      grid driver called without `--view-dir` therefore dies with "no
+      view_epochs_*.parquet … build the per-channel view first", which reads as
+      missing data rather than a hash drift and invites a pointless 51-subject
+      rebuild. Fix: exclude default-valued/additive keys from the hash, or version
+      the schema so a no-op field cannot invalidate existing directories.
+      (→ docs/labnotebook/2026-09-10.md)
 
 - [ ] **Re-run the PSD for the 24 60s-hop runs** (sub-247: 13 runs, sub-257: 11
       runs) under the current 2s/50% scheme, then delete the exclusion gate below.
@@ -263,6 +275,26 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
 
 ## Next
 
+- [ ] **Settle the scalp-EEG channel rule before the V2 re-conversion, and
+      validate the remaining `{C3,C4}` subjects.** 14 of the 45 V1 subjects with
+      a `scalp_EEG` series have a montage of exactly two channels, always `C3`
+      and `C4` — an amplifier default, not a montage. 5 checked so far
+      (2026-09-09): `sub-206` is a constant (2 unique values, 99.9% flat),
+      `sub-099` and `sub-122` are exact duplicates of an intracranial or `REF`
+      channel (|corr| 0.997-1.0000), and all five sit at 205-3023 µV against
+      4-16 µV for `sub-270`'s real 8-channel montage. So V2 reclassifying them to
+      `misc` looks correct. **To do:** run the same check over the other 9
+      (`sub-090 106 107 111 124 127 165 191 207` — note `sub-106` is ECoG-only,
+      so the "vs intracranial" comparison reads `ElectricalSeries_ECoG`), and
+      re-confirm the two ambiguous ones, `sub-088` and `sub-190`, which showed no
+      exact duplicate and a plausible 1/f slope and fail only on amplitude. Then
+      decide the rule — constants + exact-duplicate + amplitude, NOT name
+      pattern-matching, since the labels mix `FP1`/`Fp1`, `FZ`/`Fz` and old
+      10-20 `T3/T4/T5/T6` with 10-10 `T7/T8/P7/P8` — and apply it in the
+      conversion before the remaining ~250 subjects are written. Reusable
+      starting point: `c3c4_deep.py` /`validate_scalp.py` in
+      `$OAK/…/analysis/scratch/v2_nwb_audit_2026-09-09/`. No impact on the pain
+      project, which selects `group_name == 'sEEG'`. (→ docs/dataset_v2.md §5)
 - [ ] **Build a raw-NWB span manifest, so "recorded iEEG hours" means recorded.**
       `sherlock_file_registry.csv` only timestamps runs that have a PREPROCESSED
       file (every one of its 2,136 null-`start_datetime` rows has

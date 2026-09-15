@@ -528,6 +528,113 @@ def pain_epoch_views_dir(view_label, config_hash, minutes_before=None):
 
 
 # ============================================================================
+# FULL-RESOLUTION PSD EPOCHS  —  a SIBLING of psd_epochs, not a view of it
+# ============================================================================
+# Same epochs, same 2s/1s grid, same bipolar pairs as psd_epochs — but the
+# frequency axis is the NATIVE FFT grid (0.5 Hz, 1-250 Hz, 499 bins) instead of
+# 50 log-spaced bins. It exists because the log-bin reduction is irreversible and
+# wrong at both ends of the spectrum (DECISIONS 2026-09-15):
+#
+#   - At high frequency a log bin is far WIDER than the line noise it has to
+#     exclude. Bins 36+37 span 53.3-66.4 Hz, so dropping 60 Hz costs 13.2 Hz of
+#     real spectrum where the contamination is ~4 Hz. Six of 50 bins are flagged.
+#   - Below ~4.7 Hz a log bin is NARROWER than the 2s window's 0.5 Hz resolution,
+#     so `bipolar_reref._band_average_linear`'s nearest-frequency fallback fills
+#     it with a copy of a neighbour. Bins {1,2,4,5,7,10} are exact duplicates:
+#     the 44 non-line-noise bins carry only 38 distinct values
+#     (views/cache_reader.unresolvable_bins).
+#   - ~2 samples per oscillatory peak is unfittable, which is what blocked
+#     specparam (BG.3) and left the 1/f number a broadband tilt.
+#
+# Storing the native grid moves EVERY frequency scheme — log_bins_50,
+# canonical_bands, paper_bands_6, any notch half-width — into the view layer as a
+# free recompute. Nothing is baked in that a view could have decided.
+#
+# Extracted on PAIN EPOCHS ONLY, the same considered departure as
+# BANDPASS_FEATURES_ROOT above and for the same reason: re-running the continuous
+# family at 499 bins would be ~10x of an 835 GB tree, while V1 raw NWB is chunked
+# along time `(10000, n_channels)` so a 5-min full-width read is the FAST
+# direction. Source is therefore the RAW signal, NOT preprocessed/bipolar_fft —
+# the full-resolution PSD exists nowhere on disk and cannot be recovered from the
+# stored log bins.
+#
+# KNOWN LIMITATION, recorded here because a path builder is where someone looks:
+# view AXIS 2's `whole_session` baseline is UNAVAILABLE in this unit — an
+# epoch-only cache has no non-epoch windows. The default `zero_pain_epochs`
+# baseline is unaffected, since 0-pain epochs are epochs. Use psd_epochs for
+# `whole_session`.
+
+FULLRES_FEATURES_ROOT = FEATURES_ROOT / 'pain' / 'psd_epochs_fullres'
+
+
+def fullres_epoch_unit_dir(minutes_before=None):
+    """Base unit for one epoch definition, e.g. 'epoch-5min-pre'.
+
+    Keyed on the epoch definition ALONE, exactly like pain_epoch_unit_dir: the
+    QC mask is a view-time join and the frequency axis is no longer a choice, so
+    neither can force a rebuild. The spectral parameters (window, overlap,
+    resolution, range) ARE baked in, but they are pinned in psd_params and
+    recorded in the manifest rather than spelled into the directory name — if
+    they ever change, that is a new unit and it needs a new name, not a new
+    suffix on this one."""
+    return FULLRES_FEATURES_ROOT / epoch_label(minutes_before)
+
+
+def fullres_epoch_manifest_path(minutes_before=None):
+    """The unit's self-description. `extra.freqs_hz` (499 floats) is the SINGLE
+    SOURCE OF TRUTH for the frequency axis — readers derive n_freqs from its
+    length and never from a config constant, so an older unit stays readable
+    after psd_params moves. This is the one thing psd_epochs got wrong:
+    views/build_pain_epoch_view.py takes n_bins from config.PSD_N_LOG_BINS, so
+    moving that constant makes every existing cache raise CacheLayoutError."""
+    return fullres_epoch_unit_dir(minutes_before) / 'manifest.json'
+
+
+def fullres_epoch_cache_path(subject, session, minutes_before=None):
+    """One subject-session's per-window full-resolution log-power.
+
+    WIDE, unlike psd_epochs' long format: one row per
+    (epoch_id, window_idx, channel), with the frequency axis as 499 float32
+    columns f000..f498. Long format would be ~75 billion rows cohort-wide, and
+    would also overflow psd_epochs' `bin: int8` column (a 127-value ceiling)."""
+    return (fullres_epoch_unit_dir(minutes_before) / CACHE_SUBDIR
+            / f'sub-{subject}_ses-{session}_epochs.parquet')
+
+
+def fullres_epoch_defs_path(subject, session, minutes_before=None):
+    """The epoch index, COPIED from the psd_epochs unit rather than recomputed.
+
+    Copied (not referenced) so the unit is self-describing and readable on its
+    own; the psd_epochs manifest is recorded as a parent in the sidecar so the
+    two stay provably linked. The builder asserts the copy matches its source."""
+    return (fullres_epoch_unit_dir(minutes_before) / EPOCH_DEFS_SUBDIR
+            / f'sub-{subject}_ses-{session}_defs.parquet')
+
+
+def fullres_epoch_channel_meta_path(subject, session, minutes_before=None):
+    """Pair order + DK labels, same role as pain_epoch_channel_meta_path.
+
+    Also the CROSS-CHECK the builder asserts against: pairs here come from
+    `bipolar_reref.build_bipolar_pairs` on the raw file, while psd_epochs' came
+    from the PSD NWB's electrodes table. Same function, same input, so they must
+    agree — and some runs carry `pairs_diverged_from_session_first_run`, which is
+    exactly the case a silent mismatch would mislabel every channel."""
+    return (fullres_epoch_unit_dir(minutes_before) / CHANNEL_META_SUBDIR
+            / f'sub-{subject}_ses-{session}_channels.parquet')
+
+
+def fullres_epoch_views_dir(view_label, config_hash, minutes_before=None):
+    """Where a MATERIALIZED view of this unit lands — disposable, deletable.
+
+    Materializing is the default-off case (architecture.md PART 2), but the
+    epoch-MEAN full-res spectrum is the genuine exception: it is ~1.2 GB against
+    the per-window cache's ~300 GB, and a specparam parameter sweep would
+    otherwise re-read all 300 GB per arm."""
+    return (fullres_epoch_unit_dir(minutes_before) / VIEWS_SUBDIR
+            / f'{view_label}_{config_hash}')
+
+
+# ============================================================================
 # ANALYSIS RUN DIRECTORIES — the 5-level scheme
 # ============================================================================
 # 1 <event>/  2 <question>/  3 <output_type>/  4 <view_scheme>/(optional)
@@ -621,7 +728,7 @@ def med_run_dir(output_type, run_name, question=MED_DEFAULT_QUESTION,
 # ============================================================================
 # LAPLACIAN BAND-RMS  —  a SECOND epoch feature source, off the time-domain signal
 # ============================================================================
-# A sibling of psd_epochs, not a view of it. Prasad et al. 2025 notch-filter,
+# A sibling of psd_epochs, not a view of it. Huang et al. 2025 notch-filter,
 # LAPLACIAN re-reference, bandpass with 8th-order Butterworth and take the RMS;
 # everything in that chain except the re-reference is reproducible from the
 # stored PSD cache, but the bipolar trace was never persisted, so matching their
@@ -668,7 +775,7 @@ def bandpass_manifest_path(reref='laplacian', minutes_before=None):
 # PAIN STATE DECODING  —  level-2 question 'decoding'
 # ============================================================================
 # Opened deliberately (PLANNING.md, "Pain state decoding"). Replicates the
-# per-subject decoder of Prasad et al. 2025 on the discovery cohort. The one
+# per-subject decoder of Huang et al. 2025 on the discovery cohort. The one
 # question in this repo that uses `analysis_run_dir`'s optional SCOPE level,
 # because "at what scope is the model fitted" and "which model family" are two
 # independent axes and both belong in the path.
