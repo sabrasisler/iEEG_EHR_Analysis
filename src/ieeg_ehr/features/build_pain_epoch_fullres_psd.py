@@ -602,12 +602,26 @@ def main(argv=None):
                     freqs_hz = result[1]
 
     if args.write_manifest:
-        if freqs_hz is None:
-            logger.error('--write-manifest given but nothing was built, so the '
-                         'frequency axis is unknown. Refusing to write a manifest '
-                         'that would describe the unit without having measured it.')
-            return 1
         unit = config.fullres_epoch_unit_dir(epoch_minutes)
+        if freqs_hz is None:
+            # Nothing was built this run -- normally because the subject already
+            # existed and was skipped. That is fine IF the unit is already
+            # described; it is only an error if the unit has no manifest, since
+            # the frequency axis would then be unrecoverable (the cache columns
+            # are positional). Task 0 of an array hits this the moment its own
+            # subject is re-run, which is not a reason to fail the task.
+            existing = io.read_manifest(unit)
+            if existing and existing.get('freqs_hz'):
+                logger.info('nothing built this run; unit manifest already present '
+                            'with %d frequencies -> %s',
+                            len(existing['freqs_hz']), unit / 'manifest.json')
+                return 0
+            logger.error('--write-manifest given, nothing was built, and there is '
+                         'no existing manifest at %s. The frequency axis is '
+                         'therefore unknown, and a manifest describing a unit '
+                         'nobody measured is worse than none. Re-run with '
+                         '--overwrite on a subject that has epoch_defs.', unit)
+            return 1
         io.write_manifest(
             unit, script=SCRIPT, params=_unit_params(epoch_minutes, freqs_hz),
             extra={'freqs_hz': [float(x) for x in freqs_hz],
