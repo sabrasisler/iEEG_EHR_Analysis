@@ -246,9 +246,14 @@ def process_session(subject, session, runs, window_sec, overlap_frac,
             if df is not None:
                 config.append_table(df, metrics_out_path)
 
+        # window_fn passed explicitly (2026-09-15): PSD_WINDOW_FN used to be
+        # RECORDED in welch_params while bipolar_reref hardcoded 'hann', so
+        # changing the constant would have produced wrong provenance for
+        # unchanged output. Numerically inert -- the constant IS 'hann'.
         psd_result = bipolar_reref.compute_welch_log_bins(
             bipolar_v, sfreq, window_sec, overlap_frac, bin_edges, guard_hz,
-            line_freqs=config.PSD_LINE_NOISE_FREQS_HZ, n_workers=n_workers)
+            line_freqs=config.PSD_LINE_NOISE_FREQS_HZ, n_workers=n_workers,
+            window_fn=config.PSD_WINDOW_FN)
         del bipolar_v
 
         if psd_result['log_power'].shape[0] == 0:
@@ -265,6 +270,10 @@ def process_session(subject, session, runs, window_sec, overlap_frac,
         welch_params = {
             'window_sec': window_sec, 'overlap_frac': overlap_frac,
             'window_function': config.PSD_WINDOW_FN,
+            # Recorded 2026-09-15. Was scipy's default all along, so this changes
+            # no stored value -- but every spectrum in this project has had its
+            # per-window mean removed and nothing said so.
+            'detrend': bipolar_reref.DEFAULT_PSD_DETREND,
             'scaling': 'density', 'psd_chunk_max_hours': psd_chunk_max_hours,
         }
         sidecar_extra = {

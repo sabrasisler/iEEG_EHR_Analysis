@@ -175,6 +175,13 @@ derivatives/sisler/                          # ROOT = /oak/.../iEEG_EHR/derivati
     feature_level/                            # NEW: choice-independent channel-quality facts (PART 7)
   features/
     pain/
+      psd_epochs_fullres/                    # NATIVE 0.5 Hz FFT grid (2026-09-15)
+        epoch-5min-pre/                       # BASE UNIT = epoch def (mask is a view)
+          cache/        sub-XXX_ses-YY_epochs.parquet   # WIDE: 499 float32 freq COLUMNS
+          epoch_defs/   sub-XXX_ses-YY_defs.parquet     # copied from psd_epochs
+          channel_meta/ sub-XXX_ses-YY_channels.parquet
+          manifest.json                       # freqs_hz IS the frequency axis
+          views/
       psd_epochs/
         epoch-5min-pre_mask-<label>/          # BASE UNIT = epoch def + QC mask
           cache/        sub-XXX_ses-YY_epochs.parquet   # per-window log-power, masked, PRE-norm
@@ -282,6 +289,58 @@ epoch-across-channel exclusion is also global here since it's on raw power.
 Store as flags/exclusions parallel to raw-voltage QC. (For features that
 genuinely require normalized values, a per-analysis exception — but FFT power is
 the clean choice-independent case.)
+
+---
+
+## PART 7.5 — The full-resolution epoch PSD (added 2026-09-15)
+
+A SECOND base unit alongside `psd_epochs`, `features/pain/psd_epochs_fullres/`,
+holding the same 3,710 epochs on the **native FFT frequency grid** — 0.5 Hz,
+1–250 Hz, 499 bins — instead of 50 log-spaced bins. Full reasoning and the
+measured gate numbers: DECISIONS 2026-09-15. The short version:
+
+**The log-bin reduction was irreversible and wrong at both ends.** Near 60 Hz a
+bin spans 53.3–66.4 Hz, so excluding line noise cost 13.2 Hz of real spectrum to
+remove ~4 Hz of contamination. Below ~4.7 Hz a bin is *narrower* than the 2 s
+window's own 0.5 Hz resolution, so the nearest-frequency fallback filled it with
+a copy of a neighbour — the 44 usable bins carried only 38 distinct values. And
+~2 samples per oscillatory peak made specparam (BG.3) impossible.
+
+**This is the layer model working, not an exception to it.** Frequency binning is
+a cheap deterministic transform of stored data, so by PART 3 it is a VIEW — and
+the old design had it baked into the expensive stored layer, where it could never
+be revisited. Moving it out is what PART 3 prescribes.
+
+**Two deliberate departures, both mirroring `bandpass_epochs`:**
+
+1. **Source is the RAW signal, not `preprocessed/bipolar_fft`.** The
+   full-resolution PSD is computed inside `bipolar_reref._welch_one_channel`
+   (`nfft` is never passed, so `nfft = nperseg`) and discarded by the binning
+   step. It exists nowhere on disk.
+2. **Extracted on PAIN EPOCHS ONLY**, not continuously over whole runs. Re-running
+   the continuous family at 499 bins would be ~10x of an 835 GB tree; V1 raw NWB
+   is chunked along time, so a 301 s full-width read is the fast direction.
+
+**What that costs, stated so it is not rediscovered as a bug:** AXIS 2's
+`whole_session` baseline is unavailable here — an epoch-only cache has no
+non-epoch windows. `zero_pain_epochs` (the default) is unaffected.
+
+**What it does NOT cost.** The epoch definitions, the raw-voltage QC masks and
+the feature-level QC flags all transfer unchanged, because the 2 s/1 s grid and
+the bipolar pairs are identical and every one of those artifacts is keyed on
+`(epoch_id, window_idx, channel)` or `(run, channel, 60 s bin)`. Masking NaNs
+whole (window, channel) cells, which broadcasts over a frequency axis of any
+length. All seven view axes, band aggregation and the slope fit are likewise
+reused with no changes.
+
+**The gate.** `features/fullres_psd_audit.py` re-bins the new output through the
+real `log_bin_edges` + `_band_average_linear` and must reproduce the on-disk
+50-bin cache BIT-EXACTLY — measured 0 ulp, sub-019, 3/3 epochs. That single
+comparison proves the read length, the epoch offset, the pair ordering,
+`detrend`, `scaling` and the log transform at once. It is only possible because
+the extractor matches production's per-channel float32 call rather than batching
+the FFT or upcasting, which would both be marginally more accurate and would both
+make the gate approximate.
 
 ---
 

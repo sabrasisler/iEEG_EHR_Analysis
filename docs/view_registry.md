@@ -76,7 +76,13 @@ Notes: this is the log-vs-linear averaging decision, made a VIEW precisely so
 both are free recomputes from the per-window cache.
 
 ## AXIS 5 — Frequency aggregation
-- `log_bins_50` (the stored 50 log-spaced bins, no aggregation)
+- `log_bins_50` (the stored 50 log-spaced bins of `psd_epochs`, no aggregation)
+- `fullres` (the stored NATIVE 0.5 Hz FFT grid of `psd_epochs_fullres`, 1–250 Hz,
+  499 bins, no aggregation). Added 2026-09-15 with that unit. Kept DISTINCT from
+  `log_bins_50` even though both mean "no aggregation", because the two name the
+  stored axes of different caches: a shared `none` would leave a view config
+  unable to say which cache it read, and both emit `freq_bin_index` columns that
+  differ only in count. See DECISIONS 2026-09-15.
 - `canonical_bands` — THIS PROJECT'S eight bands, `config.CANONICAL_BANDS_HZ`:
   delta 1-4, theta 4-8, alpha 8-12, beta 13-30, low_gamma 30-58,
   high_gamma1 65-115, high_gamma2 125-175, high_gamma3 185-235. Gamma is split
@@ -109,6 +115,27 @@ silently absorbs the 58-62 Hz notch residue. Pinned by
 Notes: bands use linear-then-log aggregation (existing convention, avoids
 Jensen) for raw log-power, and arithmetic aggregation for a difference of logs —
 `ViewConfig.is_difference` picks the branch.
+
+**`canonical_bands` and `paper_bands_6` work on EITHER cache with no code
+changes.** `aggregate_bands` selects by geometric bin centre from a `bin_table`
+of `(bin_low_hz, bin_high_hz)`, and `fullres_reader.freq_table()` supplies
+exactly that shape — each native frequency `f` as a bin `[f - df/2, f + df/2)`.
+Half-width rather than zero-width deliberately: a degenerate `lo == hi` would
+give the right centre but a width of 0, silently zeroing every weight under
+`band_weighting='width'`. Pinned by
+`tests/test_fullres_psd.py:test_aggregate_bands_consumes_the_fullres_table_unchanged`.
+
+**On the full-res axis the line-noise notch is a VIEW PARAMETER, not a stored
+flag.** `psd_epochs` bakes `contains_line_noise` into its manifest at the ±2 Hz
+guard it was built with; `psd_epochs_fullres` stores nothing and
+`fullres_reader.notch_freqs(half_width_hz)` computes it on demand
+(`config.PSD_NOTCH_HALF_WIDTH_HZ` by default). That is the whole point of the
+unit: the notch costs 4.0 Hz per harmonic (8 bins of 499) instead of 13.2 Hz
+(bins 36+37 span 53.3–66.4 Hz), and the width is free to sweep.
+
+**AXIS 2 caveat for `psd_epochs_fullres`:** `whole_session` baselines are
+UNAVAILABLE there — an epoch-only cache has no non-epoch windows. `zero_pain_epochs`
+(the default) is unaffected, since 0-pain epochs are epochs.
 
 ## AXIS 6 — Region aggregation (channels -> region)
 - `none` (per-channel)

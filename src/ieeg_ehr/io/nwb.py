@@ -127,8 +127,40 @@ def load_channels_subset(nwb_path, channel_names_wanted):
     return data_v, channel_names, sfreq
 
 
+#: The two series that carry intracranial voltage, in the order a `series_name=None`
+#: caller gets them. 16 of 107 subjects have no `ElectricalSeries_sEEG` at all: 6
+#: have ECoG instead, 10 have no intracranial data, and `sub-067` has BOTH — so for
+#: that one subject the order below is a CHOICE, not a fallback, and a caller that
+#: cares should pass the name explicitly. See docs/data_sop.md §4.1 and §14.3.
+INTRACRANIAL_SERIES = ('ElectricalSeries_sEEG', 'ElectricalSeries_ECoG')
+
+
+def pick_intracranial_series(nwb):
+    """The first of INTRACRANIAL_SERIES present in an open NWBFile.
+
+    Raises rather than returning None: a caller that reached here wants neural
+    data, and the 10 subjects with only EKG + misc cannot supply it. Naming them
+    in the error is what makes that failure diagnosable instead of a bare KeyError
+    three frames deeper.
+    """
+    for name in INTRACRANIAL_SERIES:
+        if name in nwb.acquisition:
+            return name
+    raise KeyError(
+        f'no intracranial series (tried {INTRACRANIAL_SERIES}); this file has '
+        f'{sorted(nwb.acquisition)}. 10 subjects in this dataset carry only EKG '
+        'and misc channels and cannot be used for iEEG analysis '
+        '(docs/data_sop.md §4.1).')
+
+
 def load_window_with_electrodes(nwb_path, start_sec, dur_sec, series_name='ElectricalSeries_sEEG'):
     """One TIME WINDOW of a run, without reading the rest of it.
+
+    `series_name=None` auto-picks via `pick_intracranial_series`, which is what
+    handles the ECoG-only subjects. The DEFAULT stays the sEEG literal so no
+    existing caller changes behaviour -- the other loaders in this module all
+    hardcode it and break on those subjects (docs/data_sop.md §14.3), and fixing
+    them is a separate change with its own blast radius.
 
     The existing loaders do `series.data[:]`, which for a 5-min epoch out of a
     2-5 hour run is 20-60x more I/O than needed. V1 raw NWB `.data` is chunked
@@ -151,6 +183,8 @@ def load_window_with_electrodes(nwb_path, start_sec, dur_sec, series_name='Elect
     """
     io = NWBHDF5IO(nwb_path, 'r')
     nwb = io.read()
+    if series_name is None:
+        series_name = pick_intracranial_series(nwb)
     series = nwb.acquisition[series_name]
     if series.unit != 'volts':
         io.close()

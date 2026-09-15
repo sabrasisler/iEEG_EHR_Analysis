@@ -183,7 +183,12 @@ def bands_for(freq):
     aggregating to CANONICAL_BANDS_HZ when the caller asked for something else
     would produce a plausible table of the wrong quantity.
     """
-    if freq == 'log_bins_50':
+    if freq in ('log_bins_50', 'fullres'):
+        # Both mean "no aggregation, emit the stored axis" -- but they are stored
+        # axes of DIFFERENT caches (50 log bins vs 499 native FFT frequencies), so
+        # they stay separate values. Collapsing them into one 'none' would make a
+        # view config ambiguous about which cache it describes, and the two produce
+        # tables with the same column names and 10x different widths.
         return None
     if freq == 'canonical_bands':
         return config.CANONICAL_BANDS_HZ

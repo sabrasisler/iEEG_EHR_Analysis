@@ -22,6 +22,56 @@ date, or figure that prompted it.
 
 ## This week
 
+### Full-resolution PSD re-extraction (DECISIONS 2026-09-15)
+
+Native 0.5 Hz FFT grid, 1-250 Hz, 499 bins, pain epochs only, into
+`features/pain/psd_epochs_fullres/epoch-5min-pre/`. Replaces the 50-log-bin
+reduction that cost 13.2 Hz per line-noise notch and left delta/theta with 38
+distinct values across 44 bins. Locked: 2 s / 1 s grid kept (so epoch defs, QC
+masks and feature-level QC all transfer unchanged) - all 83 subject-sessions -
+binning moves entirely into the view layer.
+
+- [x] **Config + path builders** - `PSD_FULLRES_*`, `PSD_NOTCH_HALF_WIDTH_HZ`,
+      `config.fullres_epoch_*`. Done 2026-09-15.
+- [x] **The extractor** - `features/build_pain_epoch_fullres_psd.py`. Reads
+      `(n_windows + 1) * hop_sec` per epoch, NOT `epoch_minutes * 60`: the last
+      window needs one extra hop, and reading 300 s silently yields 299 windows.
+      Done 2026-09-15.
+- [x] **The correctness gate** - `features/fullres_psd_audit.py`. Check A
+      reproduces the on-disk 50-bin cache BIT-EXACTLY (0 ulp, sub-019, 3/3
+      epochs) via the real `_band_average_linear`, which proves read length,
+      epoch offset, pair order, detrend, scaling and log transform at once.
+      Done 2026-09-15.
+- [x] **View reader + tests** - `views/fullres_reader.py` (n_freqs from the
+      MANIFEST, never from config), `'fullres'` on AXIS 5, 35 tests green.
+      Done 2026-09-15.
+- [ ] **Smoke test + measured storage check.** sub-019 (35 pairs / 49 epochs) and
+      sub-256 (199 pairs / 137 epochs, worst case). Record bytes, wall time and
+      `seff` MaxRSS; extrapolate to 83 and re-check `sh_quota` BEFORE the array.
+      Oak was 64 % on 2026-09-15, up 14 TB in 11 days - the 300 GB estimate needs
+      confirming against real headroom, not against the SOP's stale figure.
+- [ ] **Array run** - `sbatch/build_pain_epoch_fullres_array.sbatch`,
+      `--array=0-86%12`, sized from the smoke test's `seff` rather than the
+      header's guess. Commit AND push first so the recorded hash matches.
+- [ ] **Reproduce one existing figure through the new path** (the P1.5 move):
+      rebuild a `psd_physiology` heatmap from the full-res cache aggregated to
+      `canonical_bands` and diff against the 50-bin version. Expect a small,
+      EXPLICABLE change (bands now integrate narrower notches); a large one is a
+      bug.
+- [ ] **Materialize the epoch-mean full-res view** (~1.2 GB vs the per-window
+      cache's ~300 GB). The one genuine "materialize only when recompute is
+      measured slow" case: a specparam sweep would otherwise re-read 300 GB per
+      arm. This is also what FOOOF reads.
+- [ ] **specparam / FOOOF (BG.3)** - deliberately a SECOND job, after the FFT
+      data is usable. Install on a dev node
+      (`pip install --no-deps --only-binary=:all: specparam`), then
+      `views/build_pain_epoch_fooof.py`. Two arms: `fixed` 1-45 Hz (below the
+      first harmonic, so no notch needed) and `knee` 1-150 Hz notched (150 not
+      250 - at 500 Hz sampling, 250 Hz IS Nyquist and the top of that range is
+      anti-alias rolloff, not brain). specparam wants LINEAR power; our cache
+      stores log10, so exponentiate in float64 first or it fits log-of-log.
+      Synthetic-recovery control BEFORE any real fit.
+
 ### Pain state decoding (PLANNING "Pain state decoding", DECISIONS 2026-09-08)
 
 Replication of Huang et al. 2025 on the discovery cohort. Locked: paper's 6

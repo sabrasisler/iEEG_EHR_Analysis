@@ -28,7 +28,12 @@ DOMAINS = ('log', 'linear')
 BASELINES = ('zero_pain_epochs', 'whole_session')
 NORMALIZATIONS = ('none', 'baseline_subtract', 'zscore_vs_baseline')
 EPOCH_AGGS = ('mean', 'rms')
-FREQ_AGGS = ('log_bins_50', 'canonical_bands', 'paper_bands_6')
+#: 'fullres' = the native 0.5 Hz FFT axis of features/pain/psd_epochs_fullres,
+#: unaggregated. Kept distinct from 'log_bins_50' -- which is also "no
+#: aggregation" -- because the two name the stored axes of DIFFERENT caches. A
+#: shared 'none' would leave a view config unable to say which cache it read, and
+#: both emit `freq_bin_index` columns that differ only in count (2026-09-15).
+FREQ_AGGS = ('log_bins_50', 'fullres', 'canonical_bands', 'paper_bands_6')
 BAND_WEIGHTINGS = ('uniform', 'width')
 REGION_AGGS = ('none', 'individual_dk')
 PAIN_BINS = ('absolute', 'subject_relative')

@@ -63,6 +63,7 @@ P0.6 (dtype) — cache stores float32, views compute in float64
 | P1.3 | Implement the view layer (`views/`) — all seven axes as functions, optional `save_path` + staleness sidecar, default recompute. |
 | P1.4 | Build the cache across the discovery cohort via Slurm array (one task per subject). |
 | P1.5 | Reproduce one prior figure through the new cache+view path to confirm numerical fidelity. |
+| P1.6 | **Full-resolution epoch PSD** — a SECOND base unit, `features/pain/psd_epochs_fullres/`, storing the native 0.5 Hz FFT grid (1–250 Hz, 499 bins) instead of 50 log bins, so all frequency binning becomes a view. Added 2026-09-15 because the log-bin reduction is irreversible and wrong at both ends: a notch near 60 Hz cost 13.2 Hz of real spectrum, and below ~4.7 Hz the bins are narrower than the 2 s window can resolve, leaving 38 distinct values across 44 bins. Same epochs, same 2 s/1 s grid, same pairs, so epoch defs, QC masks and feature-level QC all transfer unchanged. Pain-epochs-only raw re-read, the same considered departure as `bandpass_epochs`. Gated on a BIT-EXACT reproduction of the 50-bin cache. See DECISIONS 2026-09-15. |
 
 P1.5 is the gate: do not trust the refactor until an old number comes back out of
 the new path.
@@ -142,7 +143,7 @@ cross-family consistency.
 |---|---|---|
 | BG.1 | Finish PSD for the remaining subjects (~150 incoming) | highest — primary data |
 | BG.2 | 1/f slope (polyfit) across all subjects | high — cheapest new feature |
-| BG.3 | FOOOF / specparam | medium — not needed until finer sweep tiers |
+| BG.3 | FOOOF / specparam | **UNBLOCKED by P1.6** — the 50-log-bin axis gave ~2 samples per oscillatory peak and forced a `peak_width_limits` floor of ~5 Hz, wider than an alpha peak, which is why the existing 1/f number is a broadband tilt rather than an aperiodic exponent. Runs off P1.6's epoch-mean view, NOT off raw: its parameters are a sweep axis and must not require a raw re-read to change. Deliberately sequenced AFTER the FFT data is usable. |
 | BG.4 | PAC extraction (own family, time-domain Hilbert) | start early, slow |
 | BG.5 | Connectivity / coherence / PLV | lowest; ROI pairs first |
 | BG.6 | EHR/confound tables joined to epoch definitions | cheap, enables confound controls |

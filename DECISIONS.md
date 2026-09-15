@@ -738,3 +738,220 @@ blocked scheme roughly halves every arm.
 
 **Where it lives:** `src/ieeg_ehr/decoding/`, `src/ieeg_ehr/preprocessing/laplacian.py`,
 `sbatch/build_laplacian_bandpass_array.sbatch`, `docs/view_registry.md`.
+
+---
+
+## 2026-09-15 — Store the NATIVE FFT resolution for pain epochs; make all frequency binning a view
+
+New base unit `features/pain/psd_epochs_fullres/epoch-5min-pre/`: the same
+epochs, the same 2 s / 1 s window grid and the same bipolar pairs as
+`psd_epochs`, but the frequency axis is the native FFT grid — **0.5 Hz, 1–250 Hz,
+499 bins** — instead of 50 log-spaced bins. Extracted from the RAW signal, on
+pain epochs only. The 50-bin continuous family is unchanged and stays on disk.
+
+**Why — the log-bin reduction is irreversible and wrong at BOTH ends.**
+
+1. **Too coarse where it matters most.** A log bin near 60 Hz spans 53.3–66.4 Hz
+   (`log_bin_edges(50, 1, 250)`, bins 36+37). Excluding line noise therefore
+   costs **13.2 Hz of real spectrum to remove ~4 Hz of contamination**, and bin
+   49 alone spans 26 Hz (223.9–250.0) to catch a ±2 Hz guard at 240. Six of 50
+   bins carry `contains_line_noise`, so ~12 % of the axis is discarded to remove
+   ~1.6 %. On the native grid the same notch is 8 bins of 499 and costs 4.0 Hz —
+   pinned by `test_notch_costs_four_hz_per_harmonic_not_thirteen`.
+2. **Degenerate at low frequency.** Below ~4.7 Hz a log bin is *narrower* than
+   the 2 s window's own 0.5 Hz resolution, so `_band_average_linear`'s
+   nearest-frequency fallback fills it with a copy of a neighbour. Bins
+   {1,2,4,5,7,10} are exact duplicates: **the 44 non-line-noise bins carry only
+   38 distinct values** (`views.cache_reader.unresolvable_bins`). Delta and theta
+   were built from fewer independent measurements than their bin counts implied.
+3. **It blocked specparam.** ~2 samples per oscillatory peak is unfittable.
+   specparam refuses a `peak_width_limits` lower bound below 2× frequency
+   resolution, and the log axis's effective resolution is ~1.2 Hz at alpha and
+   ~2.5 Hz at beta — a floor of ~5 Hz, wider than an alpha peak. This is why
+   `psd_params.py`'s SLOPE_* block had to concede its exponent was a broadband
+   tilt rather than an aperiodic one (BG.3).
+
+**Why it is cheap enough to just do.** The full-resolution PSD is *already
+computed* inside `bipolar_reref._welch_one_channel` — `nfft` is never passed, so
+`nfft = nperseg` — and then thrown away by the binning step. It exists nowhere on
+disk and cannot be recovered from the stored bins, so this needs a raw re-read;
+but restricting to pain epochs makes that 3,710 × 301 s instead of 7,902 whole
+runs, and V1 raw NWB is chunked `(10000, n_channels)` so a short full-width read
+is the FAST direction. Measured: the 26 × 24 h continuous extraction becomes
+minutes per subject. It also DROPS `_band_average_linear`, the old pipeline's hot
+loop.
+
+**Why the native grid rather than a finer-but-still-reduced one.** 1 Hz linear
+bins would halve the ~300 GB, and a piecewise scheme would too. Both were
+rejected: storage is ~1 % of Oak's free space, and the entire failure being
+corrected here is that *an irreversible reduction got baked into the expensive
+layer*. Storing the native grid makes every scheme — `log_bins_50`,
+`canonical_bands`, `paper_bands_6`, 1 Hz linear, any notch half-width — a free
+recompute, permanently. Nothing is baked in that a view could have decided.
+
+**Why 2 s windows were kept.** df = sfreq/nperseg = 1/`PSD_WINDOW_SEC`, so 2 s
+gives 0.5 Hz at 500, 1000 **and** 2000 Hz sampling — the cohort lands on an
+identical frequency axis with no resampling, which is the only reason a fixed
+axis is possible at all. Keeping it also preserved the existing epoch
+definitions, QC masks and feature-level QC flags unchanged, and made the
+correctness gate below possible.
+
+**The gate, and why it is worth the design constraint it imposed.** The extractor
+deliberately calls `signal.spectrogram` per channel on the float32 bipolar trace,
+matching `_welch_one_channel` exactly, rather than batching over an axis or
+upcasting to float64. Both alternatives would be slightly more accurate and both
+would make the gate approximate. Instead, `fullres_psd_audit.py` check A re-bins
+the new output through the real `log_bin_edges` + `_band_average_linear` and
+**reproduces the on-disk 50-bin cache BIT-EXACTLY** — measured 0 ulp on sub-019,
+3/3 epochs, 2026-09-15. That one comparison proves the read length, the epoch
+offset, the pair ordering, `detrend`, `scaling` and the log transform
+simultaneously. An approximate gate could not distinguish a 1-ulp difference from
+a one-window time misalignment.
+
+**Two measured numbers worth not misreading.** Check B (re-binning from the
+*stored* float32 log values) came in at 2.25e-06 in log10 / 5.2e-06 fractional in
+linear power per window. That is **not** in tension with P0.6's 2.5e-07: P0.6
+measured epoch AVERAGES, and independent per-window rounding averages down —
+5.2e-06/√300 = 3.0e-07, reproducing P0.6 almost exactly. The per-window floor is
+set by float32's ~7 significant digits against a stored log10 magnitude of ~20
+(iEEG log power in V²/Hz is very negative), so 2.25e-06 is *at* the
+representation floor, not above it.
+
+**One accepted loss, recorded so it is not rediscovered as a bug.** View AXIS 2's
+`whole_session` baseline is UNAVAILABLE in this unit — an epoch-only cache has no
+non-epoch windows. The default `zero_pain_epochs` baseline is unaffected, since
+0-pain epochs *are* epochs. Use `psd_epochs` for `whole_session`.
+
+**Where it lives:** `src/ieeg_ehr/features/build_pain_epoch_fullres_psd.py`,
+`src/ieeg_ehr/features/fullres_psd_audit.py`,
+`src/ieeg_ehr/views/fullres_reader.py`,
+`sbatch/build_pain_epoch_fullres_array.sbatch`,
+`config/psd_params.py` (`PSD_FULLRES_*`, `PSD_NOTCH_HALF_WIDTH_HZ`),
+`config/paths.py` (`fullres_epoch_*`), `tests/test_fullres_psd.py`.
+
+**What would reverse it:** a measured storage problem (the estimate is ~300 GB
+for 83 subject-sessions; Oak was at 64 % on 2026-09-15, up 14 TB in 11 days, so
+this is worth re-checking before the ~250-subject cohort lands), or a decision to
+change `PSD_WINDOW_SEC`, which would change the resolution and force a new unit.
+
+---
+
+## 2026-09-15 — `window` and `detrend` are now passed explicitly in the PSD path (numerically inert)
+
+`bipolar_reref._welch_one_channel` hardcoded `window='hann'` while
+`config.PSD_WINDOW_FN` was what got RECORDED into provenance, and relied on
+scipy's default `detrend='constant'`, which was recorded nowhere. Both are now
+explicit parameters (`DEFAULT_PSD_WINDOW_FN`, `DEFAULT_PSD_DETREND`), threaded
+through `compute_welch_log_bins`, with `detrend` added to `welch_params`.
+
+**Why:** neither changes a single stored value — the constant *is* `'hann'` and
+the default *is* `'constant'` — but a default is not provenance. Changing
+`PSD_WINDOW_FN` would have silently produced wrong provenance for unchanged
+output, and **every spectrum this project has ever stored has had its
+per-2 s-segment mean removed with nothing on disk saying so**: a reader
+reconstructing the method from a sidecar could not recover it, and a future scipy
+default change would have silently altered the pipeline.
+
+Kept as parameters rather than a config import because `bipolar_reref` is
+deliberately config-free — `_welch_one_channel` is pickled to
+`ProcessPoolExecutor` workers, and the caller is where config belongs. Nothing
+existing was re-run; only newly written sidecars gain the `detrend` key, and
+`qc/psd_timing.classify_design` tests key membership only, so the addition is safe.
+
+**Where it lives:** `src/ieeg_ehr/preprocessing/bipolar_reref.py`,
+`src/ieeg_ehr/preprocessing/run_pipeline_bipolar.py`.
+
+---
+
+## 2026-09-15 — The full-res cache stays PARQUET, not NWB or HDF5 (measured, not argued)
+
+Asked directly whether NWB would make sense. Measured HDF5 against Parquet on
+real sub-256 data (6 epochs, 358,200 rows, 715 MB raw float32 payload):
+
+| Format | Size | vs raw payload |
+|---|---|---|
+| Parquet, zstd + BYTE_STREAM_SPLIT | 490.3 MB | **0.69x** |
+| HDF5, shuffle + gzip-4 | 495.4 MB | **0.69x** |
+
+**A dead tie on size** — unsurprising in hindsight, since HDF5's `shuffle` filter
+and Parquet's `BYTE_STREAM_SPLIT` are the same idea (transpose the bytes of each
+float so the repetitive sign/exponent bytes group together and the compressor has
+something to work with). So there is no storage argument for either, and the
+decision falls to everything else — where Parquet wins:
+
+- **Column pruning.** `read_epoch(columns=[...])` reads 9 frequencies in 2 ms
+  instead of 499. `io_conventions.md` §7 names this as the reason the cache is
+  Parquet at all. HDF5 can hyperslab but decompresses whole chunks.
+- **The artifact contract already fits.** `io.write_sidecar` / `config_hash` /
+  `parents` / `assert_fresh` are built for files with JSON sidecars. NWB wants
+  provenance embedded in a description string, which is exactly how
+  `bipolar_fft` ended up with stale per-run JSONs contradicting the in-NWB blob
+  (`data_sop.md` §14.1).
+- **Format follows the tree** (`io_conventions.md` §7): everything under
+  `features/` and `preprocessed/` is Parquet. A third format for one unit costs a
+  reader in every consumer.
+
+**And NWB specifically is a worse fit than plain HDF5**, for the reason
+`architecture.md` PART 1 already gave when rejecting it for the 50-bin sibling:
+*its contiguous-run time model fights a stack of discontiguous epochs*. A
+`DecompositionSeries` is `rate` + `starting_time` over one continuous recording;
+this cache is 122 discontiguous 5-minute epochs drawn from different runs, keyed
+by an `epoch_id` that joins to a pain score. Expressing that needs either a
+fabricated time axis or one series object per epoch, and `epoch_id` has no
+natural slot either way.
+
+`architecture.md` PART 1 named HDF5/Zarr-dense as the sanctioned fallback "if the
+storage check shows Parquet too big." The check ran; it is not.
+
+**Where it lives:** `features/build_pain_epoch_fullres_psd.py`
+(`CACHE_COMPRESSION` carries the full measurement table).
+
+---
+
+## 2026-09-15 — Parquet DICTIONARY encoding was inflating the cache 49% AND driving a 16 GB RSS
+
+pyarrow's default `use_dictionary=True` applies to every column. For a float32
+column of ~10,000 near-unique log-power values, the dictionary is about as large
+as the data *plus* the indices, so it **inflates**. Measured on real sub-019
+data, as a fraction of the raw float32 payload, with the cohort projection at the
+exact 156,905,430-row total:
+
+| Encoding | vs raw | Cohort |
+|---|---|---|
+| snappy + dictionary (**pyarrow default**) | 1.49x | **465 GB** |
+| snappy, no dictionary | 1.00x | 313 GB |
+| zstd, no dictionary | 0.82x | 256 GB |
+| snappy + BYTE_STREAM_SPLIT | 0.80x | 249 GB |
+| **zstd + BYTE_STREAM_SPLIT** | **0.72x** | **226 GB** |
+
+Chosen: **zstd + BYTE_STREAM_SPLIT on the frequency columns, dictionary on
+`channel` only** (~200 repeated short strings per epoch, where a dictionary is
+genuinely right), pyarrow's default RLE on the two integer index columns.
+
+zstd over snappy costs ~2x decode (0.138 s vs 0.068 s per epoch; 6.9 vs 3.4 min
+for a full-cohort pass) and saves 23 GB now, ~70 GB at the ~250-subject cohort.
+Taken because sub-second-per-epoch reads are not the bottleneck for anything
+downstream, and Oak was at 64% on 2026-09-15 having grown 14 TB in 11 days.
+
+**Verified LOSSLESS bitwise, not assumed.** BYTE_STREAM_SPLIT only reorders
+bytes, but P0.6 validated float32 round-trip through *default* Parquet, so a new
+encoding gets the same check — including `-inf` (an exactly-zero bin), `NaN`, and
+the ~-36.8 extreme `cache_params.py` cites. Pinned by
+`test_chosen_parquet_encoding_is_bitwise_lossless`.
+
+**The same flag was also the memory bug.** sub-256 (199 pairs, 2000 Hz) sat at
+**16.00 GB of a 16.00 GB** cgroup limit for a run whose live data is ~1.5 GB.
+Instrumenting per-epoch RSS showed it flat at **1.76 GB** under the new encoding,
+with pyarrow's pool at 0.00 GB — so the balloon was pyarrow holding ~499
+dictionary hash-table builders simultaneously while assembling each row group,
+not the spectrogram, not an accumulation, and not the writer's row-group buffer.
+One flag, two problems.
+
+Two further reductions applied alongside, both sound on their own: the frequency
+slice is resolved from `np.fft.rfftfreq` BEFORE the spectrogram and applied per
+channel (at 2000 Hz the full grid is 2001 bins against the 499 stored, so this
+avoids allocating 4x for data immediately discarded), and `log10` runs in place.
+
+**What would reverse it:** a pyarrow version that picks a sane encoding by
+default, or a measured read-speed problem that makes snappy's 2x decode worth
+23 GB.

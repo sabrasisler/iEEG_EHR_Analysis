@@ -211,7 +211,25 @@ def _band_average_linear(freqs, psd, bin_edges):
 # Welch PSD, band-averaged into log-spaced bins
 # ============================================================================
 
-def _welch_one_channel(channel_col, sfreq, nperseg, noverlap, bin_edges):
+#: scipy.signal.spectrogram's own defaults, made EXPLICIT rather than inherited.
+#: Numerically inert -- these are exactly what the calls below were already
+#: getting -- but a default is not provenance:
+#:   - `window` was the literal 'hann' while `config.PSD_WINDOW_FN` was what got
+#:     RECORDED, so changing the constant would have produced wrong provenance
+#:     for unchanged output.
+#:   - `detrend='constant'` means every spectrum this project has ever stored has
+#:     had its per-2s-segment mean removed, and that was written down nowhere. A
+#:     reader reconstructing the method from a sidecar could not recover it, and a
+#:     future scipy default change would silently alter the pipeline.
+#: Parameters rather than a config import because this module is deliberately
+#: config-free: `_welch_one_channel` is pickled to ProcessPoolExecutor workers,
+#: and the caller (`run_pipeline_bipolar`) is where config belongs. (2026-09-15)
+DEFAULT_PSD_WINDOW_FN = 'hann'
+DEFAULT_PSD_DETREND = 'constant'
+
+
+def _welch_one_channel(channel_col, sfreq, nperseg, noverlap, bin_edges,
+                       window=DEFAULT_PSD_WINDOW_FN, detrend=DEFAULT_PSD_DETREND):
     """Continuous overlapping PSD (band-averaged into log bins) for ONE
     channel's full time series -- single-level windowing (no outer/inner
     split): each `nperseg`-sample window (default 2s) is its own periodogram-
@@ -223,7 +241,7 @@ def _welch_one_channel(channel_col, sfreq, nperseg, noverlap, bin_edges):
     picklable for ProcessPoolExecutor."""
     freqs, times, Sxx = signal.spectrogram(
         channel_col, fs=sfreq, nperseg=nperseg, noverlap=noverlap,
-        window='hann', scaling='density', mode='psd')
+        window=window, detrend=detrend, scaling='density', mode='psd')
     # Sxx: (n_freqs, n_windows) linear power. Band-average each time-slice's
     # spectrum into the log bins, then log10 (average linear, THEN log --
     # averaging log first would bias the estimate low, Jensen's inequality).
@@ -239,7 +257,8 @@ def _welch_one_channel(channel_col, sfreq, nperseg, noverlap, bin_edges):
 
 def compute_welch_log_bins(bipolar_v, sfreq, window_sec, overlap_frac,
                             bin_edges, guard_hz, line_freqs=(60.0, 120.0, 180.0, 240.0),
-                            n_workers=1):
+                            n_workers=1, window_fn=DEFAULT_PSD_WINDOW_FN,
+                            detrend=DEFAULT_PSD_DETREND):
     """
     Single-level windowing (per lab discussion -- no outer/coarser window
     anymore): each 2s window (default) is its own PSD estimate, stepped by
@@ -286,13 +305,14 @@ def compute_welch_log_bins(bipolar_v, sfreq, window_sec, overlap_frac,
     if n_workers <= 1:
         for ch in range(n_pairs):
             per_channel[ch], times_ref = _welch_one_channel(
-                bipolar_v[:, ch], sfreq, nperseg, noverlap, bin_edges)
+                bipolar_v[:, ch], sfreq, nperseg, noverlap, bin_edges,
+                window=window_fn, detrend=detrend)
     else:
         import concurrent.futures
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
             futures = {
                 pool.submit(_welch_one_channel, bipolar_v[:, ch], sfreq, nperseg, noverlap,
-                            bin_edges): ch
+                            bin_edges, window_fn, detrend): ch
                 for ch in range(n_pairs)
             }
             for future in concurrent.futures.as_completed(futures):

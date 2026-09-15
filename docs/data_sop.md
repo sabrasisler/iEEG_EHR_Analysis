@@ -14,6 +14,12 @@ first four sections are the ones you actually need on day one.
 verified against disk on that date by reading the files — not from memory or from
 older docs. Counts drift; §9 has the commands to re-check them.
 
+**This file describes V1** — `/oak/.../data/iEEG_EHR/`. A re-converted **V2** of
+the raw NWBs now exists alongside it at `/oak/.../data/iEEG_EHR_V2/` (3 subjects
+as of 2026-09-09, uploads ongoing). The voltages are bit-identical, but the
+timestamp semantics and the HDF5 chunking differ, and §5.1 / §14.1 / §14.2 /
+§14.4 below do **not** describe V2. See `docs/dataset_v2.md` before touching it.
+
 **On conflict, these win:** `docs/architecture.md` (the layer model),
 `docs/io_conventions.md` (the artifact contract), `docs/view_registry.md` (the
 view axes), `CLAUDE.md` (standing rules). This file is a map, not an authority
@@ -604,7 +610,8 @@ Verified 2026-09-04.
 | **Bipolar PSD** | `derivatives/sisler/preprocessed/bipolar_fft/` | **97 subjects** |
 | Raw-voltage QC masks | `derivatives/sisler/qc/raw_voltage/masks/` | 90 subject-sessions per label |
 | Bipolar variance QC | `derivatives/sisler/qc/bipolar/` | ~82 subjects |
-| **Pain epoch cache** | `derivatives/sisler/features/pain/psd_epochs/epoch-5min-pre/` | **83 files / 81 subjects, 35 GB** |
+| **Pain epoch cache** (50 log bins) | `derivatives/sisler/features/pain/psd_epochs/epoch-5min-pre/` | **83 files / 81 subjects, 34 GB** |
+| **Pain epoch cache, FULL RESOLUTION** | `derivatives/sisler/features/pain/psd_epochs_fullres/epoch-5min-pre/` | native 0.5 Hz grid, 1–250 Hz, 499 bins. Built 2026-09-15; see below |
 | Discovery cohort | `derivatives/sisler/cohorts/discovery-core-2026-07-28.json` | 65 subjects |
 
 ```bash
@@ -630,6 +637,53 @@ been done to the data. For `epoch-5min-pre`:
 Those last three flags are the contract: the cache is **5-minute pre-rating
 windows of per-2 s-window log power, with masking, normalization, and averaging
 all left to the caller**, in that order (§9, §12).
+
+### 8.1 Two pain epoch caches — which one you want
+
+As of 2026-09-15 there are **two** epoch caches over the same 3,710 epochs. They
+differ ONLY in the frequency axis. Same epochs, same 2 s/1 s window grid, same
+bipolar pairs, so the epoch definitions, the QC masks and the feature-level QC
+flags apply identically to both.
+
+| | `psd_epochs/` | `psd_epochs_fullres/` |
+|---|---|---|
+| Frequency axis | 50 log-spaced bins, 1–250 Hz | **native FFT grid, 0.5 Hz, 1–250 Hz, 499 bins** |
+| Layout | LONG — a `bin` column, 50 rows per window-channel | **WIDE** — one row per window-channel, 499 float32 columns `f000..f498` |
+| Axis lives in | manifest `bin_edges_hz` + `contains_line_noise` | manifest **`freqs_hz`** (the columns are positional; nothing else says what `f000` is in Hz) |
+| Line noise | stored flags, fixed at the ±2 Hz guard it was built with | **a view parameter** — `fullres_reader.notch_freqs(half_width)` |
+| Source | `preprocessed/bipolar_fft` NWBs | **raw NWB** (the full-res PSD exists nowhere on disk) |
+| Reader | `views/cache_reader.py` | `views/fullres_reader.py` |
+| AXIS 2 `whole_session` | available | **NOT available** (no non-epoch windows) |
+| Size | ~34 GB | ~10x that |
+
+**Use `psd_epochs_fullres` unless you have a reason not to.** The log-bin axis is
+wrong at both ends and it cannot be fixed by a view: near 60 Hz a bin spans
+53.3–66.4 Hz, so excluding line noise costs **13.2 Hz of real spectrum to remove
+~4 Hz of contamination**, and below ~4.7 Hz a bin is *narrower* than the 2 s
+window's 0.5 Hz resolution, so `views.cache_reader.unresolvable_bins` shows the
+44 usable bins carry only **38 distinct values**. On the native grid the notch is
+4.0 Hz and every binning scheme — `log_bins_50`, `canonical_bands`,
+`paper_bands_6`, anything else — is a free recompute.
+
+**Reasons to still reach for `psd_epochs`:** you need an AXIS 2 `whole_session`
+baseline, you are reproducing a pre-2026-09-15 number exactly, or you want the
+smaller file. It is not deprecated.
+
+Everything downstream of the read is SHARED: `views/axes.py` (all seven axes),
+`views/aperiodic.py`, and `cache_reader`'s `load_mask` / `epoch_excluded` /
+`apply_mask` all take a `(n_win, n_pairs, n_freq)` block and a `bin_table` and do
+not care how long the frequency axis is.
+
+```python
+from ieeg_ehr.views import fullres_reader as fr
+pf, path = fr.open_cache('019', '01')
+defs = fr.load_defs('019', '01')
+rgs  = fr.verify_layout(pf, defs, fr.n_freqs())
+block = fr.read_epoch(pf, defs.iloc[0], rgs[0])       # (n_win, n_pairs, 499) float64
+alpha = fr.read_epoch(pf, defs.iloc[0], rgs[0],       # or 8 columns off disk
+                      columns=[f'f{i:03d}' for i in range(14, 23)])
+drop  = fr.notch_freqs()                              # 8 indices per harmonic
+```
 
 ---
 
@@ -825,6 +879,22 @@ derivatives/sisler/preprocessed/bipolar_fft/sub-019/ses-01/sub-019_ses-01_run-CA
 
 Same filename, ~170× size difference. Use `config.bipolar_psd_nwb_path()`. The
 in-tree `_bipolar_fullTFR.nwb` files are likewise legacy.
+
+**14.1b The FULL-RESOLUTION epoch cache reads `freqs_hz` from its manifest, not
+a config constant — and the 50-bin path still does the opposite.**
+`views/build_pain_epoch_view.py:57` takes `n_bins = config.PSD_N_LOG_BINS`, so
+moving that constant makes every existing 50-bin cache raise `CacheLayoutError`.
+`views/fullres_reader.py` derives `n_freqs` from `len(manifest['freqs_hz'])`
+instead, which is the pattern to copy. Do not "fix" the constant without
+rebuilding.
+
+**14.1c Reading `(n_windows + 1)` seconds is not an off-by-one bug — reading
+`n_windows` is.** PSD row `i` covers raw samples `[i*hop, i*hop + nperseg)`, so
+the last window of a 300-window epoch needs one extra hop of signal: 301 s, not
+300 s. `features/build_pain_epoch_bandpass.py` reads exactly
+`epoch_minutes * 60`, which is correct for its RMS purpose and one window short
+for any spectrogram. Pinned by
+`tests/test_fullres_psd.py:test_read_length_must_be_n_windows_plus_one`.
 
 **14.2 `session_start_time` is the run start, not the session start.** See §5.1 —
 the most consequential inaccuracy in the dataset. True session bounds are in the
