@@ -105,12 +105,15 @@ def test_neither_arm_reaches_250_hz():
         assert spec['fit_hi_hz'] < 250.0
 
 
-def test_fixed_arm_needs_no_notch_because_it_stops_below_60_hz():
+def test_fixed_arm_never_meets_a_harmonic_so_needs_no_line_handling():
     """Half the reason the primary arm is 1-45 Hz: no line-noise handling at all,
-    so no notch parameter can affect the primary number."""
+    so no line-noise parameter can affect the primary number."""
     assert fooofview.ARMS['fixed']['fit_hi_hz'] < 60.0 - config.PSD_NOTCH_HALF_WIDTH_HZ
-    assert fooofview.ARMS['fixed']['notch'] is False
-    assert fooofview.ARMS['knee']['notch'] is True
+    assert fooofview.ARMS['fixed']['drop_line_peaks'] is False
+    assert fooofview.ARMS['fixed']['line_peak_slots'] == 0
+    # The knee arm crosses 60/120, so it must remove them from the PEAKS.
+    assert fooofview.ARMS['knee']['drop_line_peaks'] is True
+    assert fooofview.ARMS['knee']['line_peak_slots'] > 0
 
 
 def test_select_freqs_fixed_arm_is_a_contiguous_unnotched_range():
@@ -121,19 +124,48 @@ def test_select_freqs_fixed_arm_is_a_contiguous_unnotched_range():
     assert len(ff) == 89
 
 
-def test_select_freqs_knee_arm_removes_exactly_the_harmonics_in_range():
+@pytest.mark.parametrize('arm', ['fixed', 'knee'])
+def test_select_freqs_is_always_evenly_spaced(arm):
+    """FOOOF raises `DataError: The input frequency values are not evenly spaced`
+    on any gap, so the input must NEVER be notched.
+
+    Found 2026-09-15 by trying it: the first version of this module notched out
+    60/120 Hz and the knee arm died three frames inside fooof. The harmonics are
+    handled as peaks after the fit instead.
+    """
     freqs = np.arange(1.0, 250.5, 0.5)
-    idx, ff = fooofview.select_freqs(freqs, 'knee')
-    assert ff[0] == 1.0 and ff[-1] == 150.0
-    # 60 and 120 fall inside 1-150; 180 and 240 do not.
-    for lf in (60.0, 120.0):
-        assert not np.any(np.abs(ff - lf) <= config.PSD_NOTCH_HALF_WIDTH_HZ), \
-            f'{lf} Hz survived the notch'
-    # The notch is a GAP, not an interpolation: the diff jumps where it bites.
-    assert np.any(np.diff(ff) > 0.5)
-    # Cost is 4 Hz per harmonic, i.e. 9 bins each, not the log axis's 13.2 Hz.
-    full = np.sum((freqs >= 1.0) & (freqs <= 150.0))
-    assert full - len(ff) == 18
+    idx, ff = fooofview.select_freqs(freqs, arm)
+    steps = np.diff(ff)
+    np.testing.assert_allclose(steps, 0.5, rtol=0, atol=1e-9)
+    assert ff[0] == fooofview.ARMS[arm]['fit_lo_hz']
+    assert ff[-1] == fooofview.ARMS[arm]['fit_hi_hz']
+
+
+def test_select_freqs_raises_a_pointed_error_on_a_non_uniform_grid():
+    """The error must name the cause, not defer to fooof's message three frames
+    deeper with nothing pointing at the notch."""
+    gappy = np.concatenate([np.arange(1.0, 50.0, 0.5), np.arange(62.0, 150.5, 0.5)])
+    with pytest.raises(ValueError, match='non-uniform|equidistant'):
+        fooofview.select_freqs(gappy, 'knee')
+
+
+def test_drop_line_peaks_removes_harmonics_and_keeps_real_oscillations():
+    """A 60.0 Hz peak is mains; a 40 Hz gamma peak is not. Matching is on the
+    CENTRE frequency, so a genuinely broad peak spanning 60 Hz survives."""
+    peaks = pd.DataFrame({
+        'epoch_id': [0]*5, 'channel': ['A']*5,
+        'peak_cf': [10.0, 59.8, 60.1, 120.0, 40.0],
+        'peak_pw': [0.5, 2.0, 2.1, 1.5, 0.4],
+        'peak_bw': [2.0, 1.2, 1.1, 1.3, 25.0],     # the last is broad, centred at 40
+    })
+    kept, n = fooofview.drop_line_peaks(peaks, half_width_hz=2.0)
+    assert n == 3
+    assert sorted(kept['peak_cf']) == [10.0, 40.0]
+
+
+def test_drop_line_peaks_is_a_noop_on_an_empty_table():
+    kept, n = fooofview.drop_line_peaks(pd.DataFrame())
+    assert kept.empty and n == 0
 
 
 def test_select_freqs_refuses_a_range_that_leaves_too_little():
@@ -144,11 +176,22 @@ def test_select_freqs_refuses_a_range_that_leaves_too_little():
     fooofview.select_freqs(freqs, 'fixed')
 
 
-def test_notch_half_width_is_overridable_and_widens_the_gap():
+def test_line_peak_width_is_overridable_and_a_wider_one_drops_more():
+    """The half-width is a sweep parameter. It acts on the PEAKS, not the input --
+    `select_freqs` must stay unaffected by it, since notching the input is what
+    FOOOF rejects."""
     freqs = np.arange(1.0, 250.5, 0.5)
-    _, narrow = fooofview.select_freqs(freqs, 'knee', notch_half_width=1.0)
-    _, wide = fooofview.select_freqs(freqs, 'knee', notch_half_width=5.0)
-    assert len(wide) < len(narrow), 'a wider notch must remove more frequencies'
+    _, a = fooofview.select_freqs(freqs, 'knee', notch_half_width=1.0)
+    _, b = fooofview.select_freqs(freqs, 'knee', notch_half_width=5.0)
+    assert len(a) == len(b), 'the half-width must NOT change what is fit'
+
+    peaks = pd.DataFrame({'epoch_id': [0]*3, 'channel': ['A']*3,
+                          'peak_cf': [10.0, 57.0, 60.0],
+                          'peak_pw': [0.5, 0.5, 2.0],
+                          'peak_bw': [2.0, 2.0, 1.0]})
+    _, n_narrow = fooofview.drop_line_peaks(peaks, half_width_hz=1.0)
+    _, n_wide = fooofview.drop_line_peaks(peaks, half_width_hz=5.0)
+    assert n_narrow == 1 and n_wide == 2, 'a wider window must drop more peaks'
 
 
 # ---------------------------------------------------------------------------

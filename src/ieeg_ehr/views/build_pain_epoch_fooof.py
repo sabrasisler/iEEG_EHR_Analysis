@@ -42,8 +42,12 @@ THE ARMS (`--arm`), and why there are two rather than one:
   fixed  1-45 Hz   PRIMARY. Below the first 60 Hz harmonic, so NO notch is needed
                    at all. ~1.65 decades, which does not require a knee. The most
                    literature-comparable number and the least artifactual.
-  knee   1-150 Hz  The broadband exponent, notched at 60/120 Hz. 150 rather than
-                   250 to clear the 500 Hz subjects' rolloff.
+  knee   1-150 Hz  The broadband exponent. 150 rather than 250 to clear the
+                   500 Hz subjects' rolloff. NOT notched -- FOOOF requires
+                   equidistant frequencies and rejects a gap, so the 60/120 Hz
+                   harmonics are fit AS peaks and then dropped from the peaks
+                   table (see ARMS). The aperiodic fit therefore sees the line
+                   noise, which is the main reason `fixed` is primary.
 
 They are not versions of each other, and the DIVERGENCE between them is
 informative: it is the knee plus the high-frequency floor that the existing
@@ -78,12 +82,35 @@ logger = logging.getLogger(__name__)
 SCRIPT = 'ieeg_ehr/views/build_pain_epoch_fooof.py'
 VIEW_LABEL_PREFIX = 'fooof'
 
-#: The two arms. See the module docstring on why the range stops short of 250 Hz.
+#: The two arms. See the module docstring on why neither range reaches 250 Hz.
+#:
+#: NEITHER ARM NOTCHES THE INPUT, and that is forced rather than chosen: FOOOF
+#: requires EQUIDISTANT frequencies (`fit.py::_prepare_data` raises
+#: `DataError: The input frequency values are not evenly spaced`), so removing
+#: 60 Hz leaves a gap the model rejects outright. Measured 2026-09-15 by trying it.
+#:
+#: The three ways out, and why the third wins:
+#:   - interpolate across the notch -> fabricates data, and a fabricated value at
+#:     60 Hz is a fabricated peak. Refused.
+#:   - fit sub-ranges 1-58 and 62-118 separately -> cannot fit ONE knee, which is
+#:     the entire point of this arm.
+#:   - let FOOOF model the line artifact AS A PEAK, then discard that peak.
+#:     A 60 Hz line artifact IS a narrow peak, and separating narrow peaks from
+#:     the aperiodic component is precisely what the model is for. The exponent
+#:     is then fit on a complete, evenly-spaced spectrum.
+#:
+#: `line_peak_slots` is the allowance added to `max_n_peaks` so absorbing the
+#: harmonics does not crowd out real oscillations; `drop_line_peaks` removes them
+#: from the peaks table afterwards, and the count is recorded.
+#:
+#: THE TRADE, stated plainly: the aperiodic fit SEES the line noise. FOOOF's
+#: alternating fit is robust to a couple of narrow peaks, but this is why `fixed`
+#: is the PRIMARY arm -- it stops at 45 Hz and never meets a harmonic at all.
 ARMS = {
     'fixed': {'aperiodic_mode': 'fixed', 'fit_lo_hz': 1.0, 'fit_hi_hz': 45.0,
-              'notch': False},
+              'drop_line_peaks': False, 'line_peak_slots': 0},
     'knee':  {'aperiodic_mode': 'knee',  'fit_lo_hz': 1.0, 'fit_hi_hz': 150.0,
-              'notch': True},
+              'drop_line_peaks': True, 'line_peak_slots': 2},
 }
 
 #: FOOOF's own parameters. All overridable on the CLI and all hashed into the view
@@ -110,8 +137,12 @@ def fooof_params(arm, peak_width_limits, max_n_peaks, min_peak_height,
         'aperiodic_mode': spec['aperiodic_mode'],
         'fit_lo_hz': spec['fit_lo_hz'],
         'fit_hi_hz': spec['fit_hi_hz'],
-        'notch_line_noise': spec['notch'],
-        'notch_half_width_hz': notch_half_width if spec['notch'] else None,
+        # The input is never notched -- FOOOF requires equidistant frequencies.
+        # These describe the POST-FIT peak removal instead.
+        'drop_line_peaks': spec['drop_line_peaks'],
+        'line_peak_half_width_hz': (notch_half_width if spec['drop_line_peaks']
+                                    else None),
+        'line_peak_slots': spec['line_peak_slots'],
         'peak_width_limits': list(peak_width_limits),
         'max_n_peaks': max_n_peaks,
         'min_peak_height': min_peak_height,
@@ -123,24 +154,54 @@ def fooof_params(arm, peak_width_limits, max_n_peaks, min_peak_height,
 
 
 def select_freqs(freqs, arm, notch_half_width=None):
-    """(indices, freqs) to fit: inside the arm's range, minus the notch.
+    """(indices, freqs) to fit: a CONTIGUOUS, EVENLY SPACED slice of the arm's range.
 
-    The notch is passed to FOOOF as a GAP in the frequency vector rather than
-    interpolated over, because FOOOF fits whatever frequencies it is given and a
-    fabricated value at 60 Hz is a fabricated peak. The `fixed` arm needs no notch
-    at all, which is half of why its range stops at 45 Hz.
+    Deliberately does NOT notch. FOOOF requires equidistant frequencies and raises
+    `DataError` on a gap, so the line harmonics are handled as peaks after the fit
+    (see ARMS). `notch_half_width` is accepted for signature stability and used
+    only by `drop_line_peaks`; it does not affect what is fit.
+
+    The even-spacing assertion is the point of this function: a caller that
+    reintroduced a gap would otherwise get FOOOF's error three frames deeper, with
+    nothing pointing at the cause.
     """
     spec = ARMS[arm]
     keep = (freqs >= spec['fit_lo_hz']) & (freqs <= spec['fit_hi_hz'])
-    if spec['notch']:
-        half = (config.PSD_NOTCH_HALF_WIDTH_HZ if notch_half_width is None
-                else notch_half_width)
-        for lf in config.PSD_LINE_NOISE_FREQS_HZ:
-            keep &= np.abs(freqs - lf) > half
     idx = np.flatnonzero(keep)
     if len(idx) < 20:
         raise ValueError(f'arm {arm!r} leaves only {len(idx)} frequencies to fit')
-    return idx, freqs[idx]
+    sel = freqs[idx]
+    steps = np.diff(sel)
+    if not np.allclose(steps, steps[0], rtol=0, atol=1e-9):
+        raise ValueError(
+            f'arm {arm!r} produced a non-uniform frequency grid (steps '
+            f'{np.unique(np.round(steps, 6))}). FOOOF requires equidistant '
+            'frequencies and raises DataError otherwise -- do not notch the input; '
+            'line harmonics are removed from the PEAKS after fitting.')
+    return idx, sel
+
+
+def drop_line_peaks(peaks_df, half_width_hz=None, line_freqs=None):
+    """Remove peaks centred on a line-noise harmonic. Returns (kept, n_dropped).
+
+    The counterpart to not notching the input. A peak at 60.0 Hz in an iEEG
+    spectrum is mains, not an oscillation, and leaving it in would put a spurious
+    'gamma' peak in every channel of every epoch.
+
+    Matches on the peak's CENTRE FREQUENCY rather than on overlap with its
+    bandwidth: a genuine broad gamma peak can extend across 60 Hz without being
+    line noise, and discarding it would be worse than keeping the artifact.
+    """
+    half = (config.PSD_NOTCH_HALF_WIDTH_HZ if half_width_hz is None
+            else half_width_hz)
+    lines = config.PSD_LINE_NOISE_FREQS_HZ if line_freqs is None else line_freqs
+    if peaks_df.empty:
+        return peaks_df, 0
+    bad = np.zeros(len(peaks_df), dtype=bool)
+    cf = peaks_df['peak_cf'].to_numpy()
+    for lf in lines:
+        bad |= np.abs(cf - lf) <= half
+    return peaks_df.loc[~bad].reset_index(drop=True), int(bad.sum())
 
 
 def _fit_group(fit_freqs, linear_spectra, arm, peak_width_limits, max_n_peaks,
@@ -152,8 +213,10 @@ def _fit_group(fit_freqs, linear_spectra, arm, peak_width_limits, max_n_peaks,
     """
     from fooof import FOOOFGroup
 
+    # Extra slots so absorbing the line harmonics (which this arm must, since
+    # FOOOF cannot take a notched grid) does not crowd out real oscillations.
     fg = FOOOFGroup(peak_width_limits=tuple(peak_width_limits),
-                    max_n_peaks=max_n_peaks,
+                    max_n_peaks=max_n_peaks + ARMS[arm]['line_peak_slots'],
                     min_peak_height=min_peak_height,
                     peak_threshold=peak_threshold,
                     aperiodic_mode=ARMS[arm]['aperiodic_mode'],
@@ -248,14 +311,20 @@ def build_subject_session(subject, session, vc, arm, args, epoch_minutes=None,
 
     # Peaks: long, because the count varies per fit. FOOOF's 4th column is the
     # row index into the group, which is how peaks map back to channel-epochs.
+    n_line_peaks = 0
     if peaks.size and peaks.shape[1] >= 4:
         pk = pd.DataFrame({'row': peaks[:, 3].astype(int),
                            'peak_cf': peaks[:, 0],
                            'peak_pw': peaks[:, 1],
                            'peak_bw': peaks[:, 2]})
         pk = pk.join(meta[['epoch_id', 'channel']], on='row').drop(columns='row')
-        counts = pk.groupby(['epoch_id', 'channel']).size()
-        out['n_peaks'] = [int(counts.get((e, c), 0))
+        if ARMS[arm]['drop_line_peaks']:
+            # This arm's range crosses 60/120 Hz and FOOOF cannot take a notched
+            # input, so the harmonics were fit AS peaks. Remove them here or every
+            # channel-epoch gets a spurious 'gamma' oscillation.
+            pk, n_line_peaks = drop_line_peaks(pk, args.notch_half_width)
+        counts = pk.groupby(['epoch_id', 'channel']).size() if len(pk) else {}
+        out['n_peaks'] = [int(counts.get((e, c), 0)) if len(pk) else 0
                           for e, c in zip(out['epoch_id'], out['channel'])]
     else:
         pk = pd.DataFrame(columns=['peak_cf', 'peak_pw', 'peak_bw',
@@ -267,6 +336,7 @@ def build_subject_session(subject, session, vc, arm, args, epoch_minutes=None,
     extra = {'n_channel_epochs': int(usable.sum()),
              'n_unusable_spectra': n_unusable,
              'n_peaks_total': int(len(pk)),
+             'n_line_peaks_dropped': int(n_line_peaks),
              'median_r_squared': float(np.nanmedian(r2)),
              'fit_freq_lo_hz': float(fit_freqs[0]),
              'fit_freq_hi_hz': float(fit_freqs[-1]),
@@ -284,7 +354,8 @@ def build_subject_session(subject, session, vc, arm, args, epoch_minutes=None,
                 subject, session, arm, int(usable.sum()), len(pk),
                 np.nanmedian(r2), len(fit_freqs), fit_freqs[0], fit_freqs[-1],
                 time.time() - t0,
-                f'  [{n_unusable} unusable]' if n_unusable else '')
+                (f'  [{n_unusable} unusable]' if n_unusable else '')
+                + (f'  [{n_line_peaks} line peaks dropped]' if n_line_peaks else ''))
     return ap_path, extra
 
 
