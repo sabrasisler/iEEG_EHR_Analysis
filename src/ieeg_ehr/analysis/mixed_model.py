@@ -212,6 +212,32 @@ CHANGE_TERMS = (('d_pain', 'dpain'),
                 ('med_between:gap_h', 'med_gap'),
                 ('pain_1', 'baseline'))
 
+# PAIN ENCODING WITH NO INTERVENING DOSE. Restricted to pairs where no dose of
+# the drug set fell between the two assessments, so every medication term is
+# dropped -- `med_between` has no variance left in this subset and including it
+# would be a rank deficiency, not a control.
+#
+# The point of the subset is causal direction: an effect present when NO DOSING
+# EVENT OCCURRED cannot have been caused by a dosing event. That is a clean
+# argument and it is why this is the strongest form of the pain positive control
+# -- stronger than fitting `d_pain` on all pairs, where a medication
+# contribution cannot be fully excluded.
+#
+# WHAT IT DOES NOT LICENSE: "unmedicated". Measured on this cohort, 58% of
+# no-dose pairs had a dose within 1 h of the pair starting and 78% within 4 h,
+# and the median no-dose pair begins 1.0 h after a dose against 3.4 h for dosed
+# pairs -- the no-dose group is the MORE recently dosed one. So this excludes an
+# acute dosing EVENT, not drug presence. `h_since_prior` is carried in the pair
+# index for anyone who wants to adjust for that.
+#
+# `pain_1` stays. Regression to the mean is a property of paired measurements,
+# not of medication, so it does not go away in this subset.
+FORMULA_CHANGE_NODOSE = 'd_log10_power ~ d_pain + pain_1 + gap_h'
+
+CHANGE_TERMS_NODOSE = (('d_pain', 'dpain'),
+                       ('pain_1', 'baseline'),
+                       ('gap_h', 'gap'))
+
 #: Per-subject medication effect, the matched model's analogue of `subj_slope`.
 VC_MATCHED = {
     'subj_int': '1',

@@ -51,6 +51,16 @@ def run_provenance(run_dir):
         return {}
 
 
+def run_subset(run_dir):
+    """The exposure subset this run was PREPARED with.
+
+    Read from provenance rather than re-passed as a flag, so a fit or collect
+    task cannot be pointed at a no-dose run while fitting the medication model.
+    Defaults to 'all' so runs prepared before this option existed still load.
+    """
+    return (run_provenance(run_dir).get('params') or {}).get('exposure_subset', 'all')
+
+
 # ============================================================================
 
 def stage_prepare(args):
@@ -89,6 +99,21 @@ def stage_prepare(args):
     pairs = change_score.build_pairs(defs, admin, args.min_gap_min,
                                      args.max_gap_min,
                                      exclude_admin=exclude_admin)
+
+    # PAIN ENCODING WITH NO INTERVENING DOSE. Subsetting here rather than in the
+    # fit stage so the run directory is self-describing: its pair_index contains
+    # only the pairs the model saw, and nothing downstream has to remember to
+    # re-apply the filter.
+    if args.exposure_subset == 'no_dose':
+        before = len(pairs)
+        pairs = pairs[pairs['med_between'] == 0].reset_index(drop=True)
+        logger.info('NO-DOSE SUBSET: %d of %d pairs kept (%d subjects). An '
+                    'effect here cannot be caused by a dosing EVENT -- but '
+                    'these pairs are NOT drug-free (58%% had a dose within 1 h '
+                    'before the pair started), so this is not "unmedicated".',
+                    len(pairs), before, pairs['subject'].nunique())
+        if pairs.empty:
+            raise SystemExit('no no-dose pairs survive the gap window')
     summary = change_score.pair_summary(pairs)
     logger.info('\n%s', summary.to_string(index=False))
 
@@ -122,7 +147,8 @@ def stage_prepare(args):
         question=args.question, output_type=OUTPUT_TYPE,
         view_scheme=args.view_scheme,
         run_name=(f'{args.run_name}_{args.drug_set}_min{int(args.min_gap_min)}'
-                  + ('_noco' if args.exclude_coexposure else '')))
+                  + ('_noco' if args.exclude_coexposure else '')
+                  + ('_nodose' if args.exposure_subset == 'no_dose' else '')))
     (run_dir / 'cells').mkdir(parents=True, exist_ok=True)
 
     params = {'drug_set': args.drug_set, 'subclasses': list(subclasses),
@@ -132,7 +158,8 @@ def stage_prepare(args):
               'excluded_subclasses': excluded_subclasses,
               'unresolvable_bins_removed': unresolvable,
               'line_noise_bins_removed': line_noise, 'roi_scheme': roi_scheme,
-              'formula': mm.FORMULA_CHANGE,
+              'exposure_subset': args.exposure_subset,
+              'formula': model_spec(args.exposure_subset)[0],
               # Recorded because it CHANGED on 2026-09-10: the channel component
               # was dropped as unidentifiable after differencing, so a run's
               # random-effects spec can no longer be inferred from the formula.
@@ -205,8 +232,21 @@ def stage_prepare(args):
 
 # ============================================================================
 
-def fit_change_cell(df, meta):
+def model_spec(exposure_subset):
+    """(formula, terms) for an exposure subset.
+
+    `no_dose` drops every medication term rather than keeping them as controls:
+    inside that subset `med_between` is constant, so it is a rank deficiency and
+    not a covariate.
+    """
+    if exposure_subset == 'no_dose':
+        return mm.FORMULA_CHANGE_NODOSE, mm.CHANGE_TERMS_NODOSE
+    return mm.FORMULA_CHANGE, mm.CHANGE_TERMS
+
+
+def fit_change_cell(df, meta, exposure_subset='all'):
     """One cell of the change-score grid."""
+    formula, terms = model_spec(exposure_subset)
     t0 = time.time()
     base = {'region': meta['region'], 'freq_bin_index': meta['freq_bin_index'],
             'freq_bin_low': meta['bin_low_hz'], 'freq_bin_high': meta['bin_high_hz'],
@@ -217,24 +257,27 @@ def fit_change_cell(df, meta):
             'n_pairs_dosed': int(df.loc[df['med_between'] == 1.0,
                                         'pair_id'].nunique())}
 
-    if (df['med_between'].nunique() < 2 or df['d_pain'].std(ddof=0) == 0
+    # In the no-dose subset `med_between` is constant BY CONSTRUCTION, so
+    # requiring an exposure contrast there would reject every cell.
+    needs_exposure = exposure_subset == 'all'
+    if ((needs_exposure and df['med_between'].nunique() < 2)
+            or df['d_pain'].std(ddof=0) == 0
             or base['n_subjects'] < mm.MIN_SUBJECTS):
         return {**base, 'converged': False,
                 'error': 'no exposure contrast, no d_pain variance, or too few '
                          'subjects'}
     try:
-        res, warn = mm.fit_cell(df, mm.VC_CHANGE, formula=mm.FORMULA_CHANGE)
+        res, warn = mm.fit_cell(df, mm.VC_CHANGE, formula=formula)
     except mm.CellFitError as exc:
         return {**base, 'converged': False, 'error': f'change: {exc}'[:200]}
     try:
-        res_red, _ = mm.fit_cell(df, mm.VC_CHANGE_REDUCED,
-                                 formula=mm.FORMULA_CHANGE)
+        res_red, _ = mm.fit_cell(df, mm.VC_CHANGE_REDUCED, formula=formula)
         stat, p_lrt = mm.lrt(res, res_red)
     except Exception:                                        # noqa: BLE001
         stat, p_lrt = np.nan, np.nan
 
     rec = dict(base)
-    for term, prefix in mm.CHANGE_TERMS:
+    for term, prefix in terms:
         rec.update(mm.term_stats(res, term, prefix))
     vc = mm.vcomp_by_name(res)
     rec.update({'var_subj_int': float(vc.get('subj_int', np.nan)),
@@ -244,12 +287,19 @@ def fit_change_cell(df, meta):
                 'lrt_stat': float(stat), 'p_lrt_mixture': float(p_lrt),
                 'converged': bool(res.converged), 'n_warnings': len(warn),
                 'error': '', 'fit_seconds': time.time() - t0})
-    logger.info('%-18s bin %2d | dpain %+.5f p %.3g | med %+.5f p %.3g | '
-                'ix %+.5f p %.3g | %d pairs (%d dosed)',
-                meta['region'], meta['freq_bin_index'], rec['dpain_beta'],
-                rec['dpain_p'], rec['med_beta'], rec['med_p'],
-                rec['med_ix_beta'], rec['med_ix_p'], rec['n_pairs'],
-                rec['n_pairs_dosed'])
+    if 'med_beta' in rec:
+        logger.info('%-18s bin %2d | dpain %+.5f p %.3g | med %+.5f p %.3g | '
+                    'ix %+.5f p %.3g | %d pairs (%d dosed)',
+                    meta['region'], meta['freq_bin_index'], rec['dpain_beta'],
+                    rec['dpain_p'], rec['med_beta'], rec['med_p'],
+                    rec['med_ix_beta'], rec['med_ix_p'], rec['n_pairs'],
+                    rec['n_pairs_dosed'])
+    else:
+        logger.info('%-18s bin %2d | dpain %+.5f p %.3g | baseline %+.5f | '
+                    '%d no-dose pairs, %d subjects',
+                    meta['region'], meta['freq_bin_index'], rec['dpain_beta'],
+                    rec['dpain_p'], rec.get('baseline_beta', float('nan')),
+                    rec['n_pairs'], rec['n_subjects'])
     return rec
 
 
@@ -302,7 +352,8 @@ def stage_fit(args):
                             'error': 'no rows after the ROI join'})
             continue
         records.append(fit_change_cell(change_score.build_change_frame(cell, pairs),
-                                       meta))
+                                       meta,
+                                       exposure_subset=run_subset(run_dir)))
 
     io.write_table(pd.DataFrame(records),
                    run_dir / 'cells' / f'region_{args.region_index:03d}.parquet',
@@ -432,7 +483,9 @@ def stage_collect(args):
         cells = add_fdr(cells, 'p_lrt_mixture', 'p_lrt')
 
     io.write_table(cells, run_dir / 'grid_cells.parquet',
-                   params={'fdr_q': FDR_Q, 'formula': mm.FORMULA_CHANGE},
+                   params={'fdr_q': FDR_Q,
+                           'formula': model_spec(run_subset(run_dir))[0],
+                           'exposure_subset': run_subset(run_dir)},
                    parents=[str(run_dir / 'grid_cell_manifest.parquet')],
                    script='ieeg_ehr/analysis/run_change_score_grid.py')
 
@@ -537,6 +590,12 @@ def main():
     ap.add_argument('--max-gap-min', type=float,
                     default=change_score.DEFAULT_MAX_GAP_MIN)
     ap.add_argument('--min-subjects', type=int, default=10)
+    ap.add_argument('--exposure-subset', choices=['all', 'no_dose'],
+                    default='all',
+                    help='no_dose keeps ONLY pairs with no intervening dose and '
+                         'drops every medication term. An effect there cannot be '
+                         'caused by a dosing event. It does NOT mean unmedicated '
+                         '-- 58%% of those pairs had a dose within 1 h before.')
     ap.add_argument('--exclude-coexposure', action='store_true',
                     help='Drop any pair with a dose from a NON-tested analgesic '
                          'subclass between its two assessments. Required for a '

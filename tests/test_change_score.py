@@ -307,3 +307,30 @@ def test_pain_1_absorbs_regression_to_the_mean_so_it_is_not_read_as_a_drug_effec
         f'baseline-adjusted fit leaked an RTM effect: {with_baseline["med_beta"]}')
     # And the naive spec is measurably worse -- that is the point of the test.
     assert abs(without['med_beta']) >= abs(with_baseline['med_beta'])
+
+
+# ----------------------------------------------------------------------------
+# NO-DOSE SUBSET. Pain encoding where no dosing event occurred, which is the
+# strongest form of the positive control: an effect there cannot have been
+# CAUSED by a dose. It does NOT mean unmedicated -- carryover is untouched.
+# ----------------------------------------------------------------------------
+
+def test_no_dose_spec_drops_every_medication_term():
+    from ieeg_ehr.analysis import mixed_model as mm
+    from ieeg_ehr.analysis.run_change_score_grid import model_spec
+
+    formula, terms = model_spec('no_dose')
+    assert 'med_between' not in formula
+    assert all('med' not in t for t, _ in terms)
+    assert 'pain_1' in formula, 'regression to the mean does not vanish here'
+    assert ('d_pain', 'dpain') in terms
+
+    full_formula, full_terms = model_spec('all')
+    assert full_formula == mm.FORMULA_CHANGE
+    assert any('med' in t for t, _ in full_terms)
+
+
+def test_no_dose_and_full_specs_are_different_models():
+    """Guards the wiring: a no-dose run must not silently fit the med model."""
+    from ieeg_ehr.analysis.run_change_score_grid import model_spec
+    assert model_spec('no_dose')[0] != model_spec('all')[0]
