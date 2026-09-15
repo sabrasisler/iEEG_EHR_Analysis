@@ -336,8 +336,8 @@ def build_subject_session(subject, session, epoch_minutes=None, overwrite=False,
         by_run.setdefault(str(ep['run_id']).replace('run-', ''), []).append(ep)
 
     stats = {'n_epochs': 0, 'n_short_read': 0, 'n_missing_run': 0,
-             'n_nonfinite': 0, 'n_rows': 0, 'missing_runs': set(),
-             'sfreqs': set(), 'n_pairs': 0}
+             'n_nonstandard_hop': 0, 'n_nonfinite': 0, 'n_rows': 0,
+             'missing_runs': set(), 'sfreqs': set(), 'n_pairs': 0}
     freqs_hz = None
     writer = None
     schema = None
@@ -358,6 +358,30 @@ def build_subject_session(subject, session, epoch_minutes=None, overwrite=False,
                 n_windows = int(ep['n_windows'])
                 hop_sec = float(ep['hop_sec'])
                 start_sec = float(ep['epoch_start_sec'])
+
+                # THE SUPERSEDED 60s DESIGN. Some epoch_defs rows carry
+                # hop_sec=60.0 with n_windows=5 -- they were indexed against the
+                # OLD outer-window PSD, whose rows are 60 s apart, not 1 s. Their
+                # row_start is meaningless against a 1 s-hop NWB, so an epoch built
+                # from them would be a 5-minute window sampled at the wrong rate
+                # from the wrong place. Measured 2026-09-15: 19 such epochs in
+                # sub-247 and 14 in sub-257, 33 of 3,710 cohort-wide.
+                #
+                # Checked HERE rather than inherited: build_pain_epoch_power.py
+                # imports qc.psd_timing and accepts nonstandard_hop='refuse' but
+                # never calls either, so the 50-bin cache contains these epochs and
+                # only the view layer refuses them.
+                expected_hop = config.PSD_WINDOW_SEC * (1.0 - config.PSD_OVERLAP_FRAC)
+                if abs(hop_sec - expected_hop) > 1e-9:
+                    logger.warning(
+                        'sub-%s ses-%s epoch %s: hop_sec=%g, expected %g -- these '
+                        'epoch_defs were indexed against the SUPERSEDED %gs-window '
+                        'PSD design and their row_start does not address the '
+                        'current NWB. Skipping (see qc/psd_timing.py).',
+                        subject, session, ep['epoch_id'], hop_sec, expected_hop,
+                        hop_sec)
+                    stats['n_nonstandard_hop'] += 1
+                    continue
 
                 # (n_windows + 1) * hop_sec -- see the module docstring. Reading
                 # n_windows * hop_sec yields n_windows - 1 complete windows.
@@ -482,8 +506,9 @@ def build_subject_session(subject, session, epoch_minutes=None, overwrite=False,
 
     if writer is None:
         logger.warning('sub-%s ses-%s: no epochs written (%d missing run, '
-                       '%d short read)', subject, session,
-                       stats['n_missing_run'], stats['n_short_read'])
+                       '%d short read, %d non-standard hop)', subject, session,
+                       stats['n_missing_run'], stats['n_short_read'],
+                       stats['n_nonstandard_hop'])
         return None
 
     params = _unit_params(epoch_minutes, freqs_hz)
@@ -496,6 +521,7 @@ def build_subject_session(subject, session, epoch_minutes=None, overwrite=False,
                'n_pairs': stats['n_pairs'],
                'n_short_read': stats['n_short_read'],
                'n_missing_run': stats['n_missing_run'],
+               'n_nonstandard_hop': stats['n_nonstandard_hop'],
                'missing_runs': sorted(stats['missing_runs']),
                'n_nonfinite_values': int(stats['n_nonfinite']),
                'sfreq_hz': sorted(stats['sfreqs']),
@@ -525,7 +551,9 @@ def build_subject_session(subject, session, epoch_minutes=None, overwrite=False,
                 subject, session, stats['n_epochs'], len(defs), stats['n_pairs'],
                 stats['n_rows'], cache_path.name,
                 cache_path.stat().st_size / 1e9, time.time() - t0,
-                f"  [{stats['n_nonfinite']} non-finite]" if stats['n_nonfinite'] else '')
+                (f"  [{stats['n_nonfinite']} non-finite]" if stats['n_nonfinite'] else '')
+                + (f"  [{stats['n_nonstandard_hop']} SUPERSEDED-hop epochs skipped]"
+                   if stats['n_nonstandard_hop'] else ''))
     return cache_path, freqs_hz, stats
 
 
