@@ -258,6 +258,193 @@ def channel_audit(paths, subjects, roi_by_subject):
     return out
 
 
+# ============================================================================
+# PER-SUBJECT SLOPE MAPS, for the two-stage cluster test
+# ============================================================================
+# The wide-layout counterpart of `pain_coef.subject_coef_matrix`. Same estimand
+# -- one OLS slope of ROI power on pain score, per subject per cell -- and the
+# same `pain_coef.coef_from_predictor` identity behind it, but the input is the
+# 499-column epoch-mean view rather than a long table, and the output carries the
+# pre-blocked structure the permutation null needs.
+
+def roi_epoch_matrix(path, mapping, regions, freq_cols):
+    """((n_epochs, n_region, n_freq) float64, pain scores, n_channels per region).
+
+    CHANNELS ARE AVERAGED WITHIN AN ROI AS A MEAN OF LOGS, not linear-then-log.
+    That is a deliberate departure from registry AXIS 6 and from the 2026-08-08
+    two-stage reference run, and the reason is what this matrix is FOR: it backs
+    the mixed-model map, and the mixed model keeps per-channel log values and
+    absorbs each contact's level in a random intercept -- which makes its fixed
+    effect an average of per-contact log slopes, i.e. the slope of a mean of logs.
+    A linear-then-log ROI value is dominated by the loudest contact, so its slope
+    is a different quantity and would not be the thing the grid estimated.
+
+    NaN-aware on the channel axis: a channel-epoch the QC mask blanked contributes
+    nothing, and an ROI whose every contact was blanked for an epoch comes out NaN
+    rather than zero.
+    """
+    df = io.read_table(path, columns=list(INDEX_COLUMNS) + list(freq_cols),
+                       on_stale='warn')
+    df = df.assign(roi=df['channel'].map(mapping)).dropna(subset=['roi'])
+    if df.empty:
+        return None, None, None
+
+    epochs = sorted(df['epoch_id'].unique())
+    e_idx = {e: i for i, e in enumerate(epochs)}
+    r_idx = {r: i for i, r in enumerate(regions)}
+    df = df[df['roi'].isin(r_idx)]
+    if df.empty:
+        return None, None, None
+
+    grouped = df.groupby(['epoch_id', 'roi'], sort=False)[list(freq_cols)].mean()
+    counts = df.groupby(['epoch_id', 'roi'], sort=False)['channel'].nunique()
+
+    Y = np.full((len(epochs), len(regions), len(freq_cols)), np.nan)
+    ei = np.fromiter((e_idx[e] for e, _ in grouped.index), int, len(grouped))
+    ri = np.fromiter((r_idx[r] for _, r in grouped.index), int, len(grouped))
+    Y[ei, ri, :] = grouped.to_numpy(dtype=np.float64)
+
+    n_chan = np.zeros(len(regions), dtype=int)
+    for (_, roi), c in counts.items():
+        n_chan[r_idx[roi]] = max(n_chan[r_idx[roi]], int(c))
+
+    x = (df.drop_duplicates('epoch_id').set_index('epoch_id')
+         .loc[epochs, 'pain_score'].to_numpy(dtype=np.float64))
+    return Y, x, n_chan
+
+
+def coef_blocks(Y2d, min_rows=3):
+    """[(row indices, column indices, Y block)] grouping columns by MISSINGNESS.
+
+    The permutation null recomputes a subject's whole slope map thousands of
+    times, and `pain_coef.coef_from_predictor` falls back to a PER-COLUMN Python
+    loop for any column with a missing epoch. At 10,479 cells x ~50 subjects x
+    2,000 permutations that fallback is ~10^9 iterations, which is the difference
+    between a minute and a week.
+
+    It is avoidable because the missingness has structure: the QC mask blanks
+    whole (window, channel) cells and broadcasts over frequency, so an ROI mean is
+    NaN for ALL frequencies of an epoch at once, and a subject has at most
+    n_region distinct patterns rather than n_cells. Grouping columns by their
+    exact finite pattern therefore collapses the loop to a handful of matmuls --
+    and it does so WITHOUT assuming that structure: `np.unique` finds whatever
+    patterns are actually there, so the uncharacterized non-finite values in the
+    cache can only cost speed, never correctness.
+
+    Columns with fewer than `min_rows` finite epochs are dropped entirely: a slope
+    on two points is noise wearing a number. They stay NaN in the output map.
+    """
+    finite = np.isfinite(Y2d)
+    patterns, inverse = np.unique(finite, axis=1, return_inverse=True)
+    blocks = []
+    for k in range(patterns.shape[1]):
+        rows = np.flatnonzero(patterns[:, k])
+        if rows.size < min_rows:
+            continue
+        cols = np.flatnonzero(inverse == k)
+        blocks.append((rows, cols, np.ascontiguousarray(Y2d[np.ix_(rows, cols)])))
+    return blocks
+
+
+def coef_from_blocks(x, blocks, n_cells):
+    """The slope map for one subject, from pre-blocked data. NaN where unestimable.
+
+    `x` is the subject's pain scores IN EPOCH ORDER -- permuted or not. Each block
+    re-derives the OLS weights over exactly its own surviving rows, which is the
+    same correctness argument `pain_coef.coef_from_predictor` makes for its slow
+    path; the blocking only changes how many times that has to happen.
+    """
+    from ieeg_ehr.analysis import pain_coef
+
+    out = np.full(n_cells, np.nan)
+    for rows, cols, block in blocks:
+        w = pain_coef.regression_weights(x[rows])
+        if w is None:
+            continue
+        out[cols] = w @ block
+    return out
+
+
+def subject_coef_matrix(paths, subjects, roi_by_subject, regions, freq_cols,
+                        min_rows=3):
+    """(coef (n_subject, n_region, n_freq), subject ids, {subject: (x, blocks)},
+    per-subject region coverage).
+
+    A cell the subject has no coverage for is NaN, never 0 -- 0 is a real
+    coefficient meaning "no relationship", and conflating the two would feed
+    fabricated nulls into the group mean.
+    """
+    n_region, n_freq = len(regions), len(freq_cols)
+
+    # ONE ROW PER SUBJECT, NOT PER SUBJECT-SESSION. Two subjects in this view have
+    # two sessions, and iterating paths would enter such a subject TWICE in the
+    # across-subject t -- double-weighting one patient and breaking the n=51 the
+    # cohort assertion just verified.
+    by_subject = {}
+    for p in paths:
+        subject, _ = subject_session_of(p)
+        by_subject.setdefault(f'sub-{subject}', []).append(p)
+    multi = {s: len(v) for s, v in by_subject.items() if len(v) > 1}
+    if multi:
+        logger.info('%d subject(s) contribute more than one session and are POOLED '
+                    'with within-session centring: %s', len(multi), multi)
+
+    kept, per_subject, coverage = [], {}, []
+    for sid, sid_paths in sorted(by_subject.items()):
+        if sid not in subjects or sid not in roi_by_subject:
+            continue
+        parts_y, parts_x, n_chan_tot = [], [], np.zeros(n_region, dtype=int)
+        for p in sid_paths:
+            Y, x, n_chan = roi_epoch_matrix(p, roi_by_subject[sid], regions,
+                                            freq_cols)
+            if Y is None:
+                continue
+            # CENTRE WITHIN SESSION, both sides. Two sessions of one patient have
+            # different contacts, so each carries its own ROI power offset; stacking
+            # them raw would let a between-session difference in pain level be read
+            # as a within-patient slope. Demeaning x and y inside each session is
+            # exactly a session fixed effect, and it makes the pooled OLS weights
+            # the within-session slope. A single-session subject is unaffected --
+            # centring is what the slope already removes.
+            Y2 = Y.reshape(len(x), n_region * n_freq)
+            if len(sid_paths) > 1:
+                Y2 = Y2 - np.nanmean(Y2, axis=0, keepdims=True)
+                x = x - x.mean()
+            parts_y.append(Y2)
+            parts_x.append(x)
+            n_chan_tot = np.maximum(n_chan_tot, n_chan)
+        if not parts_y:
+            logger.warning('%s: no ROI-labelled channel in the view, skipped', sid)
+            continue
+
+        Y2d = np.vstack(parts_y)
+        x_all = np.concatenate(parts_x)
+        blocks = coef_blocks(Y2d, min_rows=min_rows)
+        if not blocks:
+            logger.warning('%s: no cell has >=%d finite epochs, skipped', sid, min_rows)
+            continue
+        kept.append(sid)
+        per_subject[sid] = (x_all, blocks)
+        coverage.append({'subject_id': sid, 'n_sessions': len(parts_y),
+                         'n_epochs': len(x_all),
+                         'n_regions_covered': int((n_chan_tot > 0).sum()),
+                         'n_channels': int(n_chan_tot.sum()),
+                         'n_missingness_patterns': len(blocks)})
+
+    if not kept:
+        raise SystemExit('no subject produced a slope map')
+
+    coef = np.full((len(kept), n_region, n_freq), np.nan)
+    for i, sid in enumerate(kept):
+        x, blocks = per_subject[sid]
+        coef[i] = coef_from_blocks(x, blocks, n_region * n_freq).reshape(
+            n_region, n_freq)
+    logger.info('slope maps: %d subjects x %d regions x %d bins; %d/%d cells '
+                'estimable', len(kept), n_region, n_freq,
+                int(np.isfinite(coef).sum()), coef.size)
+    return coef, kept, per_subject, pd.DataFrame(coverage)
+
+
 def cell_frame(index, values, column, *, region, freq_bin_index):
     """One cell's model frame, sliced out of the region matrix.
 

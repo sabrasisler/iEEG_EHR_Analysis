@@ -302,10 +302,16 @@ def fig_fullres_spectra(cells, regions, out_path, ncol=5, smooth=9, ylim_pct=99.
         common.add_band_boundary_lines(ax)
         n = int(d['n_subjects'].max()) if d['n_subjects'].notna().any() else 0
         ax.set_title(f'{region}  (n={n})', fontsize=9)
-        ax.tick_params(labelsize=7)
+        # `sharex` hides inner tick labels, which on a 21-panel grid leaves 20
+        # panels with no frequency axis at all -- the reader cannot tell 10 Hz
+        # from 100 Hz on the panel they are looking at. Shared LIMITS are worth
+        # keeping; shared labels are not.
+        ax.tick_params(labelsize=7, labelbottom=True)
         if i % ncol == 0:
             ax.set_ylabel('beta (d log10 power / pain point)', fontsize=7.5)
-        if i // ncol == nrow - 1:
+        # Bottom-most panel IN ITS OWN COLUMN, not just the last row: the final
+        # row is partly empty, so a row test leaves four columns unlabelled.
+        if i + ncol >= len(regions):
             ax.set_xlabel('frequency (Hz)', fontsize=8)
 
     for j in range(len(regions), nrow * ncol):
