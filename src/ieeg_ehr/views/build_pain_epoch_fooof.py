@@ -346,8 +346,17 @@ def build_subject_session(subject, session, vc, arm, args, epoch_minutes=None,
                    parents=parents, subjects=[f'sub-{subject}'], extra=extra)
     io.write_table(pk, pk_path, kind='view', script=SCRIPT, params=params,
                    parents=parents, subjects=[f'sub-{subject}'], extra=extra)
-    io.write_view_sidecar(ap_path, view_config=params,
-                          cache_manifest=config.fullres_epoch_unit_dir(epoch_minutes))
+    # The staleness sidecar goes on the view DIRECTORY, not on the table file --
+    # and only if absent. Pointing it at `ap_path` OVERWRITES the provenance
+    # sidecar `write_table` just wrote there, silently discarding every `extra`
+    # counter (found 2026-09-15: `n_line_peaks_dropped` was computed, logged, and
+    # then thrown away, so a cohort summary read it as 0). One artifact, one
+    # sidecar; the directory gets the view-level staleness record. Same pattern as
+    # `build_pain_epoch_slope.py:360`.
+    if not io.sidecar_path(out_dir).exists():
+        io.write_view_sidecar(
+            out_dir, view_config=params, script=SCRIPT,
+            cache_manifest=config.fullres_epoch_unit_dir(epoch_minutes))
 
     logger.info('sub-%s ses-%s arm=%s: %d channel-epochs, %d peaks, '
                 'median r2 %.3f, %d freqs (%.1f-%.1f Hz), %.0fs%s',

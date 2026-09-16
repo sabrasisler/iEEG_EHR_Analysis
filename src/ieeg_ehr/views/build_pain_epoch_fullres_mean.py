@@ -169,8 +169,15 @@ def build_subject_session(subject, session, vc, epoch_minutes=None, overwrite=Fa
                    subjects=[f'sub-{subject}'],
                    extra={**stats, 'elapsed_sec': round(time.time() - t0, 1),
                           'freqs_hz_first_last': [float(freqs[0]), float(freqs[-1])]})
-    io.write_view_sidecar(out_path, view_config=params,
-                          cache_manifest=config.fullres_epoch_unit_dir(epoch_minutes))
+    # On the view DIRECTORY, not the table file, and only if absent -- pointing it
+    # at `out_path` overwrites the provenance sidecar `write_table` just wrote and
+    # discards every `extra` counter (see build_pain_epoch_fooof.py for the case
+    # where that silently zeroed a reported number). Same pattern as
+    # `build_pain_epoch_slope.py:360`.
+    if not io.sidecar_path(out_dir).exists():
+        io.write_view_sidecar(
+            out_dir, view_config=params, script=SCRIPT,
+            cache_manifest=config.fullres_epoch_unit_dir(epoch_minutes))
 
     logger.info('sub-%s ses-%s: %d epochs x %d channels -> %s (%.1f MB, %.0fs)%s',
                 subject, session, stats['n_epochs'], stats['n_channels'],
