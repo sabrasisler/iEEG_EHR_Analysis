@@ -104,16 +104,24 @@ def stage_prepare(args):
     # fit stage so the run directory is self-describing: its pair_index contains
     # only the pairs the model saw, and nothing downstream has to remember to
     # re-apply the filter.
-    if args.exposure_subset == 'no_dose':
+    if args.exposure_subset in ('no_dose', 'dose'):
+        want = 0.0 if args.exposure_subset == 'no_dose' else 1.0
         before = len(pairs)
-        pairs = pairs[pairs['med_between'] == 0].reset_index(drop=True)
-        logger.info('NO-DOSE SUBSET: %d of %d pairs kept (%d subjects). An '
-                    'effect here cannot be caused by a dosing EVENT -- but '
-                    'these pairs are NOT drug-free (58%% had a dose within 1 h '
-                    'before the pair started), so this is not "unmedicated".',
-                    len(pairs), before, pairs['subject'].nunique())
+        pairs = pairs[pairs['med_between'] == want].reset_index(drop=True)
+        if args.exposure_subset == 'no_dose':
+            logger.info('NO-DOSE SUBSET: %d of %d pairs kept (%d subjects). An '
+                        'effect here cannot be caused by a dosing EVENT -- but '
+                        'these pairs are NOT drug-free (58%% had a dose within '
+                        '1 h before the pair started), so not "unmedicated".',
+                        len(pairs), before, pairs['subject'].nunique())
+        else:
+            logger.info('DOSE-ONLY SUBSET: %d of %d pairs kept (%d subjects). '
+                        'This is the DISJOINT complement of the no-dose run, so '
+                        'agreement between the two is independent replication '
+                        'rather than the same rows scored twice.',
+                        len(pairs), before, pairs['subject'].nunique())
         if pairs.empty:
-            raise SystemExit('no no-dose pairs survive the gap window')
+            raise SystemExit(f'no {args.exposure_subset} pairs in the gap window')
     summary = change_score.pair_summary(pairs)
     logger.info('\n%s', summary.to_string(index=False))
 
@@ -148,7 +156,8 @@ def stage_prepare(args):
         view_scheme=args.view_scheme,
         run_name=(f'{args.run_name}_{args.drug_set}_min{int(args.min_gap_min)}'
                   + ('_noco' if args.exclude_coexposure else '')
-                  + ('_nodose' if args.exposure_subset == 'no_dose' else '')))
+                  + {'no_dose': '_nodose', 'dose': '_doseonly'}.get(
+                      args.exposure_subset, '')))
     (run_dir / 'cells').mkdir(parents=True, exist_ok=True)
 
     params = {'drug_set': args.drug_set, 'subclasses': list(subclasses),
@@ -239,7 +248,13 @@ def model_spec(exposure_subset):
     inside that subset `med_between` is constant, so it is a rank deficiency and
     not a covariate.
     """
-    if exposure_subset == 'no_dose':
+    if exposure_subset in ('no_dose', 'dose'):
+        # Both subsets hold `med_between` CONSTANT, so both drop the medication
+        # terms for the same reason. `dose` exists to make the replication test
+        # honest: no_dose pairs are a SUBSET of the full run, so agreement
+        # between full and no_dose is partly shared data. dose and no_dose are
+        # DISJOINT, so agreement between those two is real independent
+        # replication and cannot be waved away as the same rows twice.
         return mm.FORMULA_CHANGE_NODOSE, mm.CHANGE_TERMS_NODOSE
     return mm.FORMULA_CHANGE, mm.CHANGE_TERMS
 
@@ -590,12 +605,14 @@ def main():
     ap.add_argument('--max-gap-min', type=float,
                     default=change_score.DEFAULT_MAX_GAP_MIN)
     ap.add_argument('--min-subjects', type=int, default=10)
-    ap.add_argument('--exposure-subset', choices=['all', 'no_dose'],
+    ap.add_argument('--exposure-subset', choices=['all', 'no_dose', 'dose'],
                     default='all',
                     help='no_dose keeps ONLY pairs with no intervening dose and '
                          'drops every medication term. An effect there cannot be '
                          'caused by a dosing event. It does NOT mean unmedicated '
-                         '-- 58%% of those pairs had a dose within 1 h before.')
+                         '-- 58%% of those pairs had a dose within 1 h before. '
+                         '`dose` is its DISJOINT complement, for independent '
+                         'replication rather than shared-data agreement.')
     ap.add_argument('--exclude-coexposure', action='store_true',
                     help='Drop any pair with a dose from a NON-tested analgesic '
                          'subclass between its two assessments. Required for a '
