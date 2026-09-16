@@ -102,8 +102,11 @@ def notch_freqs(half_width_hz=None, line_freqs=None, epoch_minutes=None):
     The full-resolution counterpart of psd_epochs' stored `contains_line_noise`
     flags -- but a VIEW DECISION, not a stored one, which is the whole point of
     this unit. On the 50-log-bin axis the notch was 6 of 50 bins and cost 13.2 Hz
-    around 60 Hz alone; here it is 8 of 499 bins and costs 4.0 Hz, and the width
-    is free to sweep.
+    around 60 Hz alone; here the default +/-2 Hz takes 9 bins per harmonic
+    (58.0-62.0 inclusive, 4.5 Hz of the axis) -- 36 of 499 cohort-wide -- and the
+    width is free to sweep. The comparison is INCLUSIVE at both ends, so a
+    half-width of h takes 2h/df + 1 bins, not 2h/df; an earlier version of this
+    docstring said 8 and was off by one per harmonic (corrected 2026-09-16).
 
     Selects on the true frequency rather than on `freq_table`'s geometric centres
     -- see that docstring. Returns an int array, matching

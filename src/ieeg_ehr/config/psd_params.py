@@ -72,8 +72,12 @@ PSD_FULLRES_N_FREQS = int(round((PSD_FULLRES_FREQ_MAX_HZ - PSD_FULLRES_FREQ_MIN_
 #
 # 2.0 Hz is a structural floor, not a tuned value: a 2s Hann window's main lobe
 # is 2/T = 1.0 Hz wide (+/- 0.5 Hz), and mains frequency itself drifts by a few
-# tenths, so +/-2.0 Hz clears the lobe with margin. Cost is 4 Hz per harmonic —
-# 8 bins of 499, versus 6 bins of 50 on the log axis.
+# tenths, so +/-2.0 Hz clears the lobe with margin. The selection is INCLUSIVE at
+# both ends (|f - harmonic| <= half), so the cost is 2*half/df + 1 = 9 bins per
+# harmonic — 58.0-62.0 Hz, 4.5 Hz of the axis — and 36 of 499 over the four
+# harmonics, versus 6 bins of 50 on the log axis, where 60 Hz alone cost 13.2 Hz.
+# (Read "8 bins of 499" here until 2026-09-16; that was an off-by-one per
+# harmonic, not a different notch.)
 PSD_NOTCH_HALF_WIDTH_HZ = 2.0
 
 # HDF5 chunking: default is uncapped (whole run's time axis in one chunk per
