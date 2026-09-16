@@ -413,3 +413,17 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       `io.write_sidecar(path, params={...}, parents=[...])`. They stay CSV.
       (The detector/exclusion/mask writers already emit `params.json`, and the
       plot scripts already write `provenance.json` — those are fine.)
+- [ ] **Delete the four disposable full-res smoke runs** under
+      `analysis/pain/psd_physiology/univariate_analysis/cont_pain_fullres/`:
+      `smoke_fullres_20260916-112107`, `smoke_fullres_cluster_20260916-133006`,
+      `smoke2_bridge_20260916-134223`, `smoke2_break_20260916-134242`. They were
+      pipeline checks (3 of 21 regions, 200-300 permutations) and their index
+      lines are already logged. (→ docs/labnotebook/2026-09-16.md)
+- [ ] **Decide whether the >100 Hz cluster nominations are physiology or EMG.**
+      The detrended cluster arm nominates high-frequency DECREASES in M1/S1/
+      Parietal and INCREASES in Thalamus/Hippocampus (see
+      `fullres_cluster_20260916-135008/clusters.parquet`). Sensorimotor cortex is
+      where jaw/neck EMG lands, and pain changes muscle tone, so the sign split
+      is exactly what a myogenic confound would also produce. A bipolar-pair
+      distance check or a broadband-vs-band-limited shape test would separate
+      them. (→ docs/labnotebook/2026-09-16.md)

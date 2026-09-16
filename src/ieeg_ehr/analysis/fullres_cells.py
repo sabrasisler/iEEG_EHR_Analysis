@@ -38,6 +38,7 @@ any run that compares the two maps.
 """
 
 import logging
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -408,7 +409,14 @@ def subject_coef_matrix(paths, subjects, roi_by_subject, regions, freq_cols,
             # centring is what the slope already removes.
             Y2 = Y.reshape(len(x), n_region * n_freq)
             if len(sid_paths) > 1:
-                Y2 = Y2 - np.nanmean(Y2, axis=0, keepdims=True)
+                with warnings.catch_warnings():
+                    # All-NaN columns are the EXPECTED case -- they are the regions
+                    # this subject has no contact in -- and NaN is the answer we
+                    # want there. Left as a warning it fires once per uncovered
+                    # region per session and buries the log.
+                    warnings.filterwarnings('ignore', message='Mean of empty slice',
+                                            category=RuntimeWarning)
+                    Y2 = Y2 - np.nanmean(Y2, axis=0, keepdims=True)
                 x = x - x.mean()
             parts_y.append(Y2)
             parts_x.append(x)

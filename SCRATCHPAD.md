@@ -25,6 +25,25 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
 
 ## Open
 
+- **Should V2-era processing be channel-major rather than run-major?** V2's new
+  chunking (120 s × 1 channel, vs V1's 10 s × all channels) makes reading a whole
+  channel for a whole run ~118x faster — 18.9 s → 0.16 s, measured on sub-190 run
+  EA1896E0. That changes what shapes are affordable: one channel-run is 58 MB
+  instead of ~2 GB, so the array-task unit *could* become (subject, run, channel),
+  memory requests drop by an order of magnitude, and the straggler problem where
+  one 85-run subject sets the array's wall-clock goes away. Welch PSD, the four
+  raw-voltage detectors, and bipolar variance are already per-channel
+  computations sitting inside a load-everything loop, so the restructuring is
+  smaller than it sounds. Not obviously right, though: ~11k tasks per subject is
+  a lot of interpreter startup, and the boring answer — a per-channel loop
+  *inside* a per-run task — probably captures most of the win. Cross-channel
+  things (common-average/Laplacian reference, connectivity) want the access
+  pattern V2 made *slower* and would stay time-major. Genuinely open, and only
+  pays off on a re-extraction — so measure it when one is scheduled, not before.
+  Meanwhile the cheap half is already settled enough to act on: new V2 code
+  should read whole channels or >=120 s chunk-aligned blocks, never short
+  full-width windows. (→ docs/dataset_v2.md §4.2)
+
 - **Why does sub-067 have only 6 bipolar pairs?** All from one right-insula
   depth electrode (RI1-RI2 … RI5-RI6, plus RI13-RI14 in caudal middle frontal),
   and 3 of the 6 are white matter. The RI6→RI13 gap means contacts were dropped
@@ -274,3 +293,22 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       `/lognote` gets used on the *next* analysis run without being prompted; if
       it doesn't, the friction is in the wrong place and the command should shrink,
       not the habit. (→ docs/labnotebook/2026-07-27.md)
+- [ ] The raw cluster arm's failure is a CORRECTION-STAGE failure, not a power
+      failure, and it may be telling us the statistic is wrong rather than the
+      effect absent. Smallest within-region p was 0.0061 against a BH requirement
+      of 0.05/21 = 0.0024. Cluster MASS scales with extent, and at 0.5 Hz the
+      broadband low-frequency offset makes both the observed runs and the null's
+      runs hundreds of bins long, so the null's max-mass is huge and nothing
+      stands out. Options if this matters: a cluster-EXTENT or peak-t statistic,
+      a higher cluster-forming threshold, or reading only the detrended arm.
+      Worth knowing before anyone reports "no significant raw clusters" as if it
+      were evidence of absence. (→ docs/labnotebook/2026-09-16.md)
+- [ ] One discovery subject contributes two sessions to the full-res epoch-mean
+      view. The cluster path now pools them with within-session centring (a
+      session fixed effect), but `run_fullres_grid` / `run_mixed_model_grid` pool
+      them with only a subject-level `NRS_submean` and a `subject|channel`
+      intercept — so if the two sessions share pair names they share a channel
+      intercept, and a between-session power offset is only partly absorbed. One
+      subject of 51, so unlikely to move anything; the question is whether the
+      mixed model should carry a session term at all.
+      (→ docs/labnotebook/2026-09-16.md)
