@@ -32,6 +32,11 @@ into the run directory it describes, beside `band_cells.parquet`.
     permutation     Null histogram for one cell and Wald-vs-permutation p for
                     all of them. Requires `--stage perm` to have run; skipped
                     with a message if it has not.
+    attenuation     THE REGRESSION-ADJUSTMENT FIGURE: is the pain-power
+                    association explained away by medication state? beta(pain)
+                    unadjusted, beta(pain) adjusted by the model carrying the
+                    medication interaction, the % attenuation between them, and
+                    beta(med_within). Needs a run fitted with `--med-model`.
 
 TWO PLACES WHERE THIS DEPARTS FROM WHAT WAS ASKED FOR, both deliberate:
 
@@ -72,13 +77,21 @@ logger = logging.getLogger(__name__)
 SCRIPT = 'ieeg_ehr/analysis/plot_bandpower_checks.py'
 
 FIGURES = ('decomposition', 'within_between', 'caterpillar', 'effects',
-           'residuals', 'coverage', 'permutation')
+           'residuals', 'coverage', 'permutation', 'attenuation')
 
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
 
 #: Enough lags to see structure without running off the end of a short subject.
 ACF_MAX_LAG = 6
+
+MED_CAVEAT_SHORT = (
+    'CONFOUNDING BY INDICATION: patients are dosed BECAUSE they are in pain '
+    '(opioid-medicated epochs average NRS 4.67 against 2.22), so attenuation of '
+    'the pain slope by a medication term is NOT evidence that the pain effect was '
+    'spurious -- medication state is partly a proxy for pain severity, and '
+    'adjusting for a collider-ish covariate can remove real signal as easily as '
+    'artifact.')
 
 
 # ============================================================================
@@ -897,6 +910,184 @@ def fig_permutation(data, args):
 
 
 # ============================================================================
+# 8. REGRESSION ADJUSTMENT: is the pain effect explained away by medication?
+# ============================================================================
+
+def fig_attenuation(data, args):
+    """beta(pain) unadjusted -> adjusted -> % attenuation -> beta(med_within).
+
+    ONE MODEL supplies the adjusted columns: the decomposed fit, which carries
+    `NRS_within:med_within`, so the adjusted pain slope is read at the patient's
+    own average medication level rather than marginally over dosing.
+
+    PANELS 1 AND 2 SHARE A COLOUR SCALE, deliberately and without a percentile
+    clip: the entire point is a within-quantity comparison, and any per-panel
+    scaling would make an attenuated effect look identical to an intact one.
+
+    TWO HAZARDS THE PANELS HANDLE RATHER THAN PROPAGATE:
+
+      A RATIO EXPLODES WHERE THE DENOMINATOR IS ~ZERO. Occipital delta has
+      beta_unadj = -0.0012; adjusting it by a hair gives a percentage in the
+      hundreds and means nothing. % attenuation is therefore computed ONLY where
+      the UNADJUSTED effect cleared BH -- those are the cells whose pain effect is
+      actually being claimed, and so the only ones an "explained away" question
+      applies to. Everything else is grey.
+
+      A SIGN FLIP IS NOT 110% ATTENUATION. A slope that crossed zero is a
+      different claim, not a smaller version of the same one, so those cells are
+      marked with an x instead of being allowed to read as extreme attenuation --
+      the same distinction `plot_mixed_model_grid._outcome_map` draws.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from ieeg_ehr.features import common
+
+    cells = data['cells']
+    if 'model' not in cells.columns or not (cells['model'] != 'pain').any():
+        logger.warning('this run has no medication model; re-run the fit with '
+                       '--med-model decomposed. Skipping the attenuation figure.')
+        return None
+
+    pain = cells[cells['model'] == 'pain'].set_index(['region', 'band'])
+    adj = cells[cells['model'] == 'med_decomposed'].set_index(['region', 'band'])
+    if not len(adj):
+        logger.warning('no med_decomposed rows; skipping')
+        return None
+    if 'med_ix_beta' not in adj.columns or adj['med_ix_beta'].isna().all():
+        logger.warning('the med model in this run carries no interaction term; '
+                       'the adjusted slope would not be what this figure claims')
+        return None
+
+    params = run_params(data['run_dir'])
+    roi_scheme = params.get('roi_scheme', 'roi_v2_ofc')
+    bands = [b for b in dict.fromkeys(cells['band'])]
+    regions = [r for r in view_tables.roi_regions_for({'roi_scheme': roi_scheme})
+               if r in set(cells['region'])]
+
+    def grid(frame, col):
+        return (frame[col].reset_index()
+                .pivot_table(index='region', columns='band', values=col)
+                .reindex(index=regions, columns=bands))
+
+    b_un = grid(pain, 'beta_nrs_within')
+    b_adj = grid(adj, 'beta_nrs_within')
+    b_med = grid(adj, 'medw_beta')
+
+    def rej(frame, col):
+        if col not in frame.columns:
+            return pd.DataFrame(False, index=regions, columns=bands)
+        f = frame.assign(_r=frame[col].fillna(False).astype(bool))
+        return (f['_r'].reset_index()
+                .pivot_table(index='region', columns='band', values='_r')
+                .reindex(index=regions, columns=bands).fillna(0).astype(bool))
+
+    sig_un = rej(pain, 'p_bh_reject')
+    sig_adj = rej(adj, 'p_bh_reject')
+    sig_med = rej(adj, 'medw_p_bh_reject')
+
+    u = b_un.to_numpy(dtype=float)
+    a = b_adj.to_numpy(dtype=float)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        att = 100.0 * (u - a) / u
+    flipped = np.isfinite(u) & np.isfinite(a) & (np.sign(u) != np.sign(a))
+    claimed = sig_un.to_numpy()
+    att = np.where(claimed, att, np.nan)
+
+    # ONE cap for panels 1 and 2, over BOTH, so they are strictly comparable.
+    shared = float(np.nanmax(np.abs(np.concatenate([u.ravel(), a.ravel()]))))
+    att_cap = 100.0
+    n_sat = int(np.nansum(np.abs(att) > att_cap))
+
+    div = plt.get_cmap('RdBu_r').copy()
+    div.set_bad('0.85')
+    att_cm = plt.get_cmap('PuOr_r').copy()
+    att_cm.set_bad('0.85')
+
+    panels = [
+        (u, div, -shared, shared, sig_un.to_numpy(),
+         'beta(pain) UNADJUSTED\nd log10 power per pain point', None),
+        (a, div, -shared, shared, sig_adj.to_numpy(),
+         'beta(pain) ADJUSTED for medication\nsame model as panels 3-4', None),
+        (att, att_cm, -att_cap, att_cap, None,
+         '% ATTENUATION\n100 x (unadj - adj) / unadj', 'flip'),
+        (b_med.to_numpy(dtype=float), div,
+         -float(np.nanmax(np.abs(b_med.to_numpy(dtype=float)))),
+         float(np.nanmax(np.abs(b_med.to_numpy(dtype=float)))), sig_med.to_numpy(),
+         'beta(med_within)\nd log10 power when recently dosed', None),
+    ]
+
+    fig, axes = plt.subplots(1, 4, figsize=(17.0, 0.42 * len(regions) + 4.0))
+    for i, (arr, cm, vlo, vhi, outline, title, mark) in enumerate(panels):
+        ax = axes[i]
+        im = ax.imshow(arr, aspect='auto', cmap=cm, vmin=vlo, vmax=vhi,
+                       interpolation='nearest')
+        if outline is not None:
+            common.draw_mask_outline(ax, outline)
+        if mark == 'flip':
+            yy, xx = np.nonzero(flipped & claimed)
+            ax.plot(xx, yy, 'x', color='black', ms=7, mew=1.6, zorder=6)
+        ax.set_xticks(range(len(bands)))
+        ax.set_xticklabels(bands, fontsize=7.5, rotation=45, ha='right')
+        ax.set_yticks(range(len(regions)))
+        ax.set_yticklabels(regions if i == 0 else [], fontsize=8)
+        ax.set_title(title, fontsize=9.5)
+        cb = fig.colorbar(im, ax=ax, fraction=0.045, pad=0.03)
+        cb.ax.tick_params(labelsize=7)
+        if i == 1:
+            cb.set_label('SHARED with panel 1', fontsize=7)
+
+    vals = att[np.isfinite(att)]
+    summary = ''
+    if vals.size:
+        summary = (f'among the {int(claimed.sum())} cells whose UNADJUSTED pain '
+                   f'effect cleared BH: median attenuation {np.median(vals):.0f}%, '
+                   f'{int((vals > 50).sum())} above 50%, '
+                   f'{int((vals < 5).sum())} below 5%, '
+                   f'{int((flipped & claimed).sum())} reversed sign')
+    fig.suptitle('Is the pain-power association explained away by medication '
+                 f'state?\n{summary}', fontsize=12)
+    fig.tight_layout(rect=(0, 0.14, 1, 0.91))
+    _footnote(fig,
+              'PANELS 1 AND 2 SHARE ONE COLOUR SCALE and it is not percentile-'
+              'clipped: the comparison IS the figure, and per-panel scaling would '
+              'make an attenuated effect look identical to an intact one. The '
+              'adjusted slope comes from the model carrying med_within, '
+              'med_submean and NRS_within:med_within, so it is the pain slope at '
+              "the patient's own average medication level -- not marginal over "
+              'dosing. % ATTENUATION IS MASKED to cells whose UNADJUSTED effect '
+              'cleared BH, because a ratio whose denominator is ~zero is '
+              'arithmetic noise, not evidence: it is only meaningful to ask '
+              'whether an effect was explained away where there was one to '
+              f'explain. Clipped at +/-{att_cap:.0f}% ({n_sat} cells beyond). An x '
+              'marks a cell whose slope CHANGED SIGN -- that is a different claim '
+              'from a smaller slope, not a larger attenuation. PANEL 4 HAS ITS OWN '
+              'SCALE because its units differ: the pain slope is per ONE NRS point '
+              'of a 0-10 scale, while med_within is per 0->1 dose-state switch, '
+              'i.e. the whole range of its predictor, so the two are not '
+              'commensurate no matter how they are coloured. '
+              f'{MED_CAVEAT_SHORT}\n{DISCLAIMER}')
+    out = data['run_dir'] / 'fig_med_attenuation.png'
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    tbl = pd.DataFrame({
+        'region': np.repeat(regions, len(bands)),
+        'band': np.tile(bands, len(regions)),
+        'beta_unadj': u.ravel(), 'beta_adj': a.ravel(),
+        'pct_attenuation': (100.0 * (u - a) / u).ravel(),
+        'sign_flipped': flipped.ravel(),
+        'unadj_bh_significant': claimed.ravel(),
+        'beta_med_within': b_med.to_numpy(dtype=float).ravel()})
+    io.write_table(tbl, data['run_dir'] / 'med_attenuation.csv',
+                   params={'adjusted_model': 'med_decomposed',
+                           'attenuation': '100 * (beta_unadj - beta_adj) / beta_unadj',
+                           'masked_to': 'cells whose unadjusted effect cleared BH'},
+                   script=SCRIPT)
+    return out
+
+
+# ============================================================================
 
 BUILDERS = {'decomposition': fig_decomposition,
             'within_between': fig_within_between,
@@ -904,7 +1095,8 @@ BUILDERS = {'decomposition': fig_decomposition,
             'effects': fig_effects,
             'residuals': fig_residuals,
             'coverage': fig_coverage,
-            'permutation': fig_permutation}
+            'permutation': fig_permutation,
+            'attenuation': fig_attenuation}
 
 
 def main():
