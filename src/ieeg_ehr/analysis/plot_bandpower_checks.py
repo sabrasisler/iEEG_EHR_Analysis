@@ -135,22 +135,34 @@ def load_frame(run_dir, cell_index):
     return io.read_table(path, on_stale='ignore')
 
 
-def conditional_parts(res, df):
-    """(fitted WITH random effects, conditional residuals).
+def conditional_parts(res, df, tol=1e-6):
+    """(conditional fitted Xb + Zu, conditional residuals y - Xb - Zu).
 
-    `res.fittedvalues` is the FIXED-effects prediction alone, so `res.resid` still
-    contains every subject and channel effect. Plotting that against fitted would
-    show enormous structure and indict the log transform for something the model
-    deliberately absorbs. These are the conditional quantities -- y minus Xb minus
-    Zu -- which are the ones a residual diagnostic is about.
+    `MixedLMResults.fittedvalues` ALREADY CONTAINS THE RANDOM EFFECTS. Verified
+    against statsmodels 0.14.6 on this model (2026-09-17): it differs from
+    `exog @ fe_params` by up to 2.6 log units, and `res.resid` has SD 0.2140
+    against sqrt(scale) = 0.2165 and is uncorrelated with Xb to 1e-12. So `resid`
+    is the conditional residual already and NOTHING needs subtracting.
+
+    An earlier version of this function believed the opposite and subtracted Zu a
+    second time. That double-counted every channel intercept and produced a clean
+    spurious line in residuals-vs-fitted with slope ~-0.44 -- which looks exactly
+    like a failed transform and would have been reported as one.
+
+    The random effects are still reconstructed here, purely to ASSERT that
+    reading. If a future statsmodels changes what `fittedvalues` means, this
+    warns and falls back to the explicit construction instead of silently drawing
+    the wrong diagnostic.
     """
-    marginal = np.asarray(res.fittedvalues, dtype=float)
-    re = np.zeros(len(df), dtype=float)
+    fitted = np.asarray(res.fittedvalues, dtype=float)
+    y = df['log10_power'].to_numpy(dtype=float)
 
+    marginal = np.asarray(res.model.exog, dtype=float) @ np.asarray(res.fe_params,
+                                                                   dtype=float)
+    re = np.zeros(len(df), dtype=float)
     subj = df['subject'].to_numpy()
     uid = df['channel_uid'].to_numpy()
     within = df['NRS_within'].to_numpy(dtype=float)
-
     chan_effect = {}
     for subject, eff in res.random_effects.items():
         m = subj == subject
@@ -163,9 +175,18 @@ def conditional_parts(res, df):
                 chan_effect[key.split('[C(channel_uid)[')[1].rstrip(']')] = float(val)
     if chan_effect:
         re += np.array([chan_effect.get(u, 0.0) for u in uid])
+    explicit = marginal + re
 
-    fitted = marginal + re
-    return fitted, df['log10_power'].to_numpy(dtype=float) - fitted
+    gap = float(np.nanmax(np.abs(fitted - explicit)))
+    if gap > tol:
+        logger.warning(
+            'res.fittedvalues does not match Xb + Zu (max |diff| = %.3g). Either '
+            'statsmodels changed what fittedvalues means, or a random-effect key '
+            'is unrecognised (%d of %d channels matched). Using the EXPLICIT '
+            'construction, which is what a conditional residual is.',
+            gap, len(chan_effect), df['channel_uid'].nunique())
+        return explicit, y - explicit
+    return fitted, y - fitted
 
 
 def epoch_times(subjects, epoch_minutes=None):
@@ -675,11 +696,12 @@ def fig_residuals(data, args):
                  fontsize=12.5)
     fig.tight_layout(rect=(0, 0.12, 1, 0.92))
     _footnote(fig,
-              'THESE ARE CONDITIONAL RESIDUALS -- y minus the fixed effects MINUS '
-              'the fitted random effects. statsmodels\' own `resid` is marginal '
-              '(it still contains every subject and channel effect), and plotting '
-              'that would show huge structure and wrongly indict the log '
-              'transform for variance the model absorbs on purpose. THE ACF IS THE '
+              'THESE ARE CONDITIONAL RESIDUALS -- y minus the fixed effects minus '
+              'the fitted random effects, which for statsmodels is exactly '
+              '`res.resid` (its `fittedvalues` already includes the random '
+              'effects; the code asserts that rather than assuming it, because '
+              'believing the opposite produces a clean spurious slope here that '
+              'looks like a failed transform). THE ACF IS THE '
               'CONSEQUENTIAL PANEL: the permutation null relabels epochs freely '
               'within a subject, which assumes no temporal dependence beyond what '
               'the model already carries. Autocorrelation at lag 1-2 above the '
