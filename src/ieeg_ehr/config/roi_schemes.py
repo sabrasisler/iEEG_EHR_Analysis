@@ -242,11 +242,76 @@ def _merge_categories(patterns, display, merges):
 _ROI_V2_OFC_PATTERNS, _ROI_V2_OFC_DISPLAY = _merge_categories(
     _ROI_V2_PATTERNS, _ROI_V2_DISPLAY, {'OFC': ('mOFC', 'lOFC')})
 
+# ---------------------------------------------------------------------------
+# pain_domains -- the pain matrix grouped by PROCESSING DOMAIN (2026-09-17)
+# ---------------------------------------------------------------------------
+# Regions collapsed into the domains of the pain matrix, following Shirvalkar et
+# al.'s framework (their Figure: regions implicated in different domains of pain
+# perception, superimposed on the ascending transmission and descending
+# modulation pathways). "Domain" is used there, and here, for a collection of
+# related psychological processes -- somatosensation, emotion, cognition, memory
+# -- not for an anatomical grouping.
+#
+# THE POINT OF THIS SCHEME is that it makes the domain the UNIT OF THE MODEL. Two
+# contacts in S1 and S2 of the same patient now pool into one `Sensory` estimate
+# with one standard error, instead of being two region rows a reader has to
+# average by eye. Nothing else about the pipeline changes -- it is a region set,
+# and region sets are data here.
+#
+# WHAT IS DELIBERATELY NOT ASSIGNED, and why each one is held back:
+#
+#   Insula    -- the framework splits ANTERIOR insula (affective) from POSTERIOR
+#                insula (sensory), and DK has exactly one `insula` parcel. Putting
+#                it in either domain would fabricate the distinction the domains
+#                rest on. Needs the Destrieux/a2009s assignment
+#                (G_insular_short, S_circular_insula_ant/sup/inf), which our
+#                channel_meta does not yet carry.
+#   Thalamus  -- same problem one level deeper: the ascending sensory pathway is
+#                VPL/VPM specifically, while medial/dorsal nuclei sit in the
+#                affective pathway. DK gives one `thalamus`, and Destrieux will
+#                not fix this either -- it is a surface parcellation. Needs a
+#                nucleus-level atlas.
+#   PCC, Parietal (other), Lateral Temporal
+#             -- not in the framework's region set. Dropping them is honest;
+#                assigning them to a domain to avoid dropping them is not. PCC in
+#                particular carries one of the larger low-frequency pain effects
+#                in this cohort, so its absence here is a real loss and a
+#                deliberate one.
+#
+# These stay as CATEGORIES (so a contact is still labelled) but are absent from
+# `display`, which is what drops them from region-level output -- the same
+# mechanism that drops White Matter.
+#
+# ONE JUDGEMENT CALL WORTH OVERRULING IF YOU DISAGREE: `dmPFC/SMA` is DK's
+# `superiorfrontal`, which straddles SMA (sensorimotor) and dorsomedial
+# prefrontal (cognitive/affective). It is placed in Cognitive because medial PFC
+# is the dominant reading of that parcel, but a defensible alternative is to hold
+# it out with the insula. `Basal Ganglia` is similarly impure: the framework's
+# affective node is ventral striatum, and DK's caudate/putamen/pallidum/accumbens
+# lumps dorsal striatum in with it.
+_PAIN_DOMAINS = {
+    'Sensory': ('M1', 'S1', 'S2/PO'),
+    'Affective': ('rACC', 'dACC', 'Amygdala', 'Basal Ganglia'),
+    'Cognitive': ('dlPFC', 'dmPFC/SMA', 'IFG/vlPFC', 'OFC'),
+    'Memory': ('Hippocampus', 'MTL (other)'),
+    'Control': ('Occipital', 'Auditory'),
+}
+
+_PAIN_DOMAIN_PATTERNS, _ = _merge_categories(
+    _ROI_V2_OFC_PATTERNS, _ROI_V2_OFC_DISPLAY, _PAIN_DOMAINS)
+
+#: Display order follows the pathway: ascending sensory, then the affective and
+#: cognitive domains it projects to, then memory, then the quasi-controls last so
+#: a reader meets them after the regions the hypothesis is about.
+_PAIN_DOMAIN_DISPLAY = ['Sensory', 'Affective', 'Cognitive', 'Memory', 'Control']
+
 ROI_SCHEMES = {
     'default': {'patterns': _DEFAULT_PATTERNS, 'display': _DEFAULT_DISPLAY},
     'roi_v2': {'patterns': _ROI_V2_PATTERNS, 'display': _ROI_V2_DISPLAY},
     'roi_v2_ofc': {'patterns': _ROI_V2_OFC_PATTERNS,
                    'display': _ROI_V2_OFC_DISPLAY},
+    'pain_domains': {'patterns': _PAIN_DOMAIN_PATTERNS,
+                     'display': _PAIN_DOMAIN_DISPLAY},
 }
 
 DEFAULT_ROI_SCHEME = 'default'

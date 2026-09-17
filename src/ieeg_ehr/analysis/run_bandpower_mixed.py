@@ -122,10 +122,29 @@ BAND_SETS = {'paper_bands_6_hg200': config.PAPER_BANDS_6_HG200_HZ,
              'paper_bands_6': config.PAPER_BANDS_6_HZ,
              'canonical': config.CANONICAL_BANDS_HZ}
 
-#: Level-4 folder per band set, so the path says which edges were used.
-VIEW_SCHEMES = {'paper_bands_6_hg200': 'paperbands6hg200-roiv2ofc',
-                'paper_bands_6': 'paperbands6-roiv2ofc',
-                'canonical': 'canonicalbands-roiv2ofc'}
+#: Level-4 folder per band set. The ROI scheme's code is appended by
+#: `view_scheme_for`, so a path can never claim a region set the run did not use.
+VIEW_SCHEMES = {'paper_bands_6_hg200': 'paperbands6hg200',
+                'paper_bands_6': 'paperbands6',
+                'canonical': 'canonicalbands'}
+
+
+def view_scheme_for(band_set, roi_scheme, drug_set=None):
+    """The level-4 folder: band edges, region set, and drug set if medicated.
+
+    All three change what every coefficient in the run MEANS, so all three are in
+    the path. Built in one place because the alternative -- a hardcoded string per
+    band set -- silently kept saying `roiv2ofc` after `--roi-scheme` was added.
+    """
+    from ieeg_ehr.views.view_config import ROI_SCHEME_CODES
+    from pathlib import Path as _Path
+    roi = ROI_SCHEME_CODES.get(roi_scheme)
+    if roi is None:
+        roi = _Path(str(roi_scheme)).stem.replace('_', '').replace('-', '')
+    parts = [VIEW_SCHEMES.get(band_set, band_set), roi or 'roidefault']
+    if drug_set:
+        parts.append(drug_set)
+    return '-'.join(parts)
 
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
@@ -1076,11 +1095,9 @@ def main():
     args = ap.parse_args()
 
     if args.view_scheme is None:
-        args.view_scheme = VIEW_SCHEMES.get(args.band_set, VIEW_SCHEME)
-        if args.med_model != 'none':
-            # The drug set and the fact that medication is in the model both
-            # change what every coefficient means, so they belong in the path.
-            args.view_scheme = f'{args.view_scheme}-{args.drug_set}'
+        args.view_scheme = view_scheme_for(
+            args.band_set, args.roi_scheme,
+            args.drug_set if args.med_model != 'none' else None)
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')

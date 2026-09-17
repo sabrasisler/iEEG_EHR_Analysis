@@ -57,7 +57,8 @@ PAIN_BIN_CODES = {'subject_relative': 'relpain', 'absolute': 'abspain'}
 # The ROI scheme is in the folder name too, because two schemes are two different
 # REGION SETS and a figure of one must not land in the other's directory. The
 # default is spelled as '' so existing paths are unchanged and remain valid.
-ROI_SCHEME_CODES = {'default': '', 'roi_v2': 'roiv2', 'roi_v2_ofc': 'roiv2ofc'}
+ROI_SCHEME_CODES = {'default': '', 'roi_v2': 'roiv2', 'roi_v2_ofc': 'roiv2ofc',
+                    'pain_domains': 'paindomains'}
 
 
 @dataclass(frozen=True)
