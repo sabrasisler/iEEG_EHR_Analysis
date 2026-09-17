@@ -180,7 +180,7 @@ def load_region_matrix(paths, subjects, region, roi_by_subject, bin_indices,
     stats = {'n_subjects': 0, 'n_files': 0, 'n_channels': 0, 'n_nonfinite': 0,
              'n_rows': 0}
     for p in paths:
-        subject, _ = subject_session_of(p)
+        subject, session = subject_session_of(p)
         sid = f'sub-{subject}'
         if sid not in subjects or sid not in roi_by_subject:
             continue
@@ -200,6 +200,10 @@ def load_region_matrix(paths, subjects, region, roi_by_subject, bin_indices,
         values = df[cols].to_numpy(dtype=config.CACHE_FLOAT_DTYPE)
         index = df[list(INDEX_COLUMNS)].copy()
         index.insert(0, 'subject_id', sid)
+        # SESSION travels with the rows. epoch_id is unique only within a
+        # subject-SESSION, and two subjects here have two sessions -- so a join on
+        # (subject, epoch_id) alone would mis-assign 17 epochs of one patient.
+        index.insert(1, 'session', session)
         idx_parts.append(index)
         val_parts.append(values)
         stats['n_subjects'] += 1
@@ -208,7 +212,7 @@ def load_region_matrix(paths, subjects, region, roi_by_subject, bin_indices,
         stats['n_nonfinite'] += int((~np.isfinite(values)).sum())
 
     if not idx_parts:
-        return (pd.DataFrame(columns=['subject_id', *INDEX_COLUMNS]),
+        return (pd.DataFrame(columns=['subject_id', 'session', *INDEX_COLUMNS]),
                 np.empty((0, len(cols)), dtype=config.CACHE_FLOAT_DTYPE), stats)
 
     index = pd.concat(idx_parts, ignore_index=True)

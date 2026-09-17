@@ -278,7 +278,8 @@ class CellFitError(RuntimeError):
 # BUILDING A CELL'S FRAME
 # ============================================================================
 
-def build_cell_frame(cell_rows, *, region=None, freq_bin_index=None):
+def build_cell_frame(cell_rows, *, region=None, freq_bin_index=None,
+                     extra_columns=()):
     """Tidy one cell's rows into the model frame.
 
     `cell_rows` is the per-channel view's long table already subset to one
@@ -286,6 +287,12 @@ def build_cell_frame(cell_rows, *, region=None, freq_bin_index=None):
     epoch_id, pain_score, value.
 
     Returns columns: subject, channel_uid, epoch_id, NRS, log10_power.
+
+    `extra_columns` are copied across verbatim, for a model that needs a
+    per-row covariate this function does not know about -- `med_state` being the
+    reason it exists. They are copied BEFORE the non-finite filter so they stay
+    row-aligned with the outcome; assigning them afterwards would silently
+    misalign them, because the filter drops rows and the index is reset.
 
     UPCAST ON THE WAY IN. The cache is float32 and the view inherits it; every
     reduction downstream (the variance components are reductions) accumulates in
@@ -302,6 +309,8 @@ def build_cell_frame(cell_rows, *, region=None, freq_bin_index=None):
         'NRS': cell_rows['pain_score'].to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE),
         'log10_power': cell_rows['value'].to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE),
     })
+    for name in extra_columns:
+        df[name] = cell_rows[name].to_numpy()
     df = df[np.isfinite(df['log10_power']) & np.isfinite(df['NRS'])]
     if region is not None:
         df.attrs['region'] = region

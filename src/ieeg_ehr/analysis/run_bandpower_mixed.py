@@ -91,8 +91,12 @@ import pandas as pd
 
 from ieeg_ehr import config, io
 from ieeg_ehr.analysis import cluster_permutation as cp
-from ieeg_ehr.analysis import fullres_cells, mixed_model as mm
+from ieeg_ehr.analysis import fullres_cells, med_state, mixed_model as mm
 from ieeg_ehr.analysis import reference_run, view_tables
+# The medication fits are REUSED, not reimplemented: these are the same two
+# models `run_mixed_model_med_strata` runs on the 50-log-bin grid, so a band
+# result and a frequency result mean the same thing by construction.
+from ieeg_ehr.analysis.run_mixed_model_med_strata import fit_decomposed, fit_matched
 from ieeg_ehr.analysis.plot_mixed_model_subject_lines import epoch_level, subject_slopes
 from ieeg_ehr.analysis.run_fullres_grid import (CONFOUND_CAVEAT, resolve_cohort)
 from ieeg_ehr.views import axes, fullres_reader
@@ -160,6 +164,18 @@ def band_caveat(band_set):
         'the 58-62 Hz residue and high_gamma the 118-122 and 178-182 Hz ones.')
     return ' '.join(parts)
 
+
+MED_CAVEAT = (
+    'CONFOUNDING BY INDICATION IS THE FIRST-ORDER PROBLEM HERE, not a footnote. '
+    'Patients are dosed BECAUSE they are in pain: on this cohort opioid-medicated '
+    'epochs average NRS 4.67 against 2.22 unmedicated, so medication state and '
+    'pain are entangled by design and no term in a regression undoes that. The '
+    'arrow is also not identifiable from this table -- a scheduled dose is given '
+    'whatever the score, and an assessment is often charted precisely BECAUSE a '
+    'PRN dose was requested (see med_state and med_analysis/pain_link). What the '
+    'models below do is separate the WITHIN-patient medication contrast from the '
+    'BETWEEN-patient one, and condition on the reported score; what they cannot '
+    'do is make either contrast causal.')
 
 WALD_CAVEAT = (
     'p and p_bh are PARAMETRIC Wald. They assume z ~ N(0,1) under the null, which '
@@ -307,6 +323,31 @@ def stage_fit(args):
                                       epoch_minutes)
     band_names = list(bands)
 
+    # ---- per-epoch medication state ------------------------------------
+    med_lookup, med_summary, med_missing = None, None, []
+    if args.med_model != 'none':
+        subclasses = med_state.DRUG_SETS[args.drug_set]
+        admin = med_state.load_admin_table(subclasses=subclasses)
+        bare = sorted(s.replace('sub-', '') for s in subjects)
+        defs = med_state.load_epoch_defs(epoch_minutes=epoch_minutes, subjects=bare)
+        state = med_state.epoch_med_state(defs, admin, hours=args.med_window_hours)
+        med_missing = sorted(set(defs['subject']) - set(admin['subject']))
+        if med_missing:
+            # NOT fatal: "no opioid charted" is a real observation. But a session
+            # absent from the MAR export looks identical to a patient who was
+            # never dosed, so it is named rather than absorbed into the
+            # unmedicated stratum.
+            logger.warning('%d cohort subject(s) have NO %s administrations at '
+                           'all, so every one of their epochs reads as '
+                           'unmedicated: %s', len(med_missing), args.drug_set,
+                           med_missing)
+        med_summary = med_state.stratum_summary(state)
+        logger.info('\n%s', med_summary.to_string(index=False))
+        med_lookup = state.assign(
+            subject_id='sub-' + state['subject'].astype(str),
+            med_state=state['med_state'].astype(float))[
+                ['subject_id', 'session', 'epoch_id', 'med_state']]
+
     run_dir = (Path(args.run_dir) if args.run_dir else
                config.analysis_run_dir(question=args.question,
                                        output_type=OUTPUT_TYPE,
@@ -343,14 +384,57 @@ def stage_fit(args):
                     'cell_index': ri * len(band_names) + band_names.index(band)}
             frame = pd.DataFrame({
                 'subject_id': index['subject_id'].to_numpy(),
+                'session': index['session'].to_numpy(),
                 'channel': index['channel'].to_numpy(),
                 'epoch_id': index['epoch_id'].to_numpy(),
                 'pain_score': index['pain_score'].to_numpy(),
                 'value': band_values[:, bi]})
+            extra = ()
+            if med_lookup is not None:
+                # Joined on subject, SESSION and epoch_id -- epoch_id is unique
+                # only within a subject-session. An epoch with no med row is
+                # dropped rather than defaulted: a silent False here would invent
+                # an unmedicated observation.
+                before = len(frame)
+                frame = frame.merge(med_lookup,
+                                    on=['subject_id', 'session', 'epoch_id'],
+                                    how='inner')
+                if len(frame) < before:
+                    logger.info('%s %s: %d of %d rows had no medication record '
+                                'and were dropped', region, band,
+                                before - len(frame), before)
+                extra = ('med_state',)
             df = mm.build_cell_frame(frame, region=region,
-                                     freq_bin_index=meta['band_index'])
+                                     freq_bin_index=meta['band_index'],
+                                     extra_columns=extra)
             rec, slopes, blups = fit_one_cell(df, meta)
+            rec['model'] = 'pain'
             records.append(rec)
+
+            if args.med_model in ('decomposed', 'both'):
+                dec, _ = fit_decomposed(df, {**meta,
+                                             'freq_bin_index': meta['band_index'],
+                                             'bin_low_hz': meta['band_lo_hz'],
+                                             'bin_high_hz': meta['band_hi_hz']})
+                dec.update({'band': band, 'model': 'med_decomposed'})
+                records.append(dec)
+                logger.info('%-18s %-11s | DECOMPOSED  med_within %+.5f (p %.3g)  '
+                            'pain x med %+.5f (p %.3g)', region, band,
+                            dec.get('medw_beta', np.nan), dec.get('medw_p', np.nan),
+                            dec.get('med_ix_beta', np.nan),
+                            dec.get('med_ix_p', np.nan))
+            if args.med_model in ('matched', 'both'):
+                mat = fit_matched(df, {**meta,
+                                       'freq_bin_index': meta['band_index'],
+                                       'bin_low_hz': meta['band_lo_hz'],
+                                       'bin_high_hz': meta['band_hi_hz']})
+                mat.update({'band': band, 'model': 'med_matched'})
+                records.append(mat)
+                logger.info('%-18s %-11s | MATCHED     med at same NRS %+.5f '
+                            '(p %.3g)  nonparam %+.5f over %s subj', region, band,
+                            mat.get('beta_med', np.nan), mat.get('p', np.nan),
+                            mat.get('nonparam_diff', np.nan),
+                            mat.get('n_subjects_matched', 0))
             if slopes is not None:
                 slope_parts.append(slopes)
             if blups is not None and len(blups):
@@ -378,6 +462,20 @@ def stage_fit(args):
                                      'beside the unpooled slopes, never instead'},
                    script=SCRIPT)
 
+    if med_summary is not None:
+        io.write_table(med_summary, run_dir / 'med_stratum_summary.parquet',
+                       params={'drug_set': args.drug_set,
+                               'window_hours': args.med_window_hours},
+                       parents=[str(med_state.ADMIN_TABLE)], script=SCRIPT,
+                       extra={'caveat': MED_CAVEAT})
+        io.write_table(med_lookup, run_dir / 'epoch_med_state.parquet',
+                       params={'drug_set': args.drug_set,
+                               'window_hours': args.med_window_hours,
+                               'subclasses': list(med_state.DRUG_SETS[args.drug_set])},
+                       parents=[str(med_state.ADMIN_TABLE)], script=SCRIPT,
+                       extra={'caveat': MED_CAVEAT,
+                              'subjects_without_administrations': med_missing})
+
     if args.region_index is None:
         io.write_table(inventory(scores, diagnostics), run_dir / 'inventory_subjects.parquet',
                        script=SCRIPT)
@@ -392,6 +490,11 @@ def stage_fit(args):
                     ).scheme_provenance(roi_scheme),
                     'cohort': args.cohort, 'epoch_minutes': epoch_minutes,
                     'notched_bins_excluded': notched,
+                    'med_model': args.med_model,
+                    'drug_set': args.drug_set if args.med_model != 'none' else None,
+                    'med_window_hours': (args.med_window_hours
+                                         if args.med_model != 'none' else None),
+                    'subjects_without_administrations': med_missing,
                     'excluded_regions': list(args.exclude_regions),
                     'excluded_regions_reason': args.exclude_reason,
                     'aggregation': 'linear_then_log via axes.aggregate_bands',
@@ -472,13 +575,43 @@ def stage_collect(args):
     cells = pd.concat(parts, ignore_index=True).sort_values('cell_index')
     cells = cells.reset_index(drop=True)
 
-    usable = cells['p'].notna()
+    if 'model' not in cells.columns:
+        cells['model'] = 'pain'
+
+    # BH RUNS WITHIN EACH MODEL FAMILY, never pooled across them. The pain slope,
+    # the within-patient medication effect and the matched medication contrast are
+    # three different questions asked of the same cells; correcting each for the
+    # others' tests would make every one of them harder to detect for no
+    # inferential reason.
     cells['p_bh'] = np.nan
     cells['p_bh_reject'] = pd.NA
-    if usable.any():
-        _, adj = cp.bh_fdr(cells.loc[usable, 'p'].to_numpy(), q=args.fdr_q)
-        cells.loc[usable, 'p_bh'] = adj
-        cells.loc[usable, 'p_bh_reject'] = adj <= args.fdr_q
+    for model, idx in cells.groupby('model').groups.items():
+        sub = cells.loc[idx]
+        usable = sub['p'].notna()
+        if not usable.any():
+            continue
+        _, adj = cp.bh_fdr(sub.loc[usable, 'p'].to_numpy(), q=args.fdr_q)
+        cells.loc[sub.index[usable], 'p_bh'] = adj
+        cells.loc[sub.index[usable], 'p_bh_reject'] = adj <= args.fdr_q
+        logger.info('BH family %r: %d cells, %d rejected at q=%.2f', model,
+                    int(usable.sum()), int((adj <= args.fdr_q).sum()), args.fdr_q)
+
+    # The decomposed model's medication terms get their OWN families, for the same
+    # reason: `medw` and `med_ix` are separate hypotheses from the pain slope that
+    # shares their fit.
+    for prefix in ('medw', 'med_ix'):
+        col = f'{prefix}_p'
+        if col not in cells.columns:
+            continue
+        m = cells['p'].notna() if col not in cells else cells[col].notna()
+        cells[f'{prefix}_p_bh'] = np.nan
+        cells[f'{prefix}_p_bh_reject'] = pd.NA
+        if m.any():
+            _, adj = cp.bh_fdr(cells.loc[m, col].to_numpy(), q=args.fdr_q)
+            cells.loc[m, f'{prefix}_p_bh'] = adj
+            cells.loc[m, f'{prefix}_p_bh_reject'] = adj <= args.fdr_q
+            logger.info('BH family %r: %d cells, %d rejected', prefix,
+                        int(m.sum()), int((adj <= args.fdr_q).sum()))
 
     # The heterogeneity LRT gets its own family. Two questions, two corrections;
     # pooling them would correct each for the other's tests.
@@ -549,8 +682,10 @@ def stage_collect(args):
                    extra={'status': DISCLAIMER, 'inference_caveat': WALD_CAVEAT,
                           'band_caveat': band_caveat(args.band_set)})
 
-    report(cells, args.fdr_q)
-    figures(run_dir, cells, args)
+    report(cells[cells['model'] == 'pain'], args.fdr_q)
+    figures(run_dir, cells[cells['model'] == 'pain'], args)
+    if (cells['model'] != 'pain').any():
+        med_figure(run_dir, cells, args)
     write_methods(run_dir, cells, args)
     io.log_analysis(f'band-power mixed-effects models, {len(cells)} region x band '
                     'cells, BH-corrected (EXPLORATORY)', run_dir)
@@ -665,8 +800,101 @@ def figures(run_dir, cells, args):
     logger.info('wrote %s and %s', p1.name, p2.name)
 
 
+def med_figure(run_dir, cells, args):
+    """One heat panel per medication term: region x band, significance outlined.
+
+    THREE TERMS, THREE DIFFERENT QUESTIONS, which is why they are not one panel:
+
+      med_within   within a patient, is power different when recently dosed?
+      pain x med   does being dosed CHANGE the pain slope?
+      matched      at the SAME reported score, is power different when dosed?
+
+    The pain slope from the medication-free fit is drawn beside them, on its own
+    colour scale, because the medication terms are only interpretable against the
+    effect they are supposed to be confounding.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from ieeg_ehr.features import common
+
+    bands = [b for b in BAND_SETS[args.band_set] if b in set(cells['band'])]
+    regions = [r for r in view_tables.roi_regions_for({'roi_scheme': args.roi_scheme})
+               if r in set(cells['region'])]
+
+    def grid(sub, value, reject):
+        v = (sub.pivot_table(index='region', columns='band', values=value)
+             .reindex(index=regions, columns=bands))
+        if reject in sub.columns:
+            r = (sub.assign(_r=sub[reject].fillna(False).astype(bool))
+                 .pivot_table(index='region', columns='band', values='_r')
+                 .reindex(index=regions, columns=bands).fillna(0).astype(bool))
+        else:
+            r = pd.DataFrame(False, index=regions, columns=bands)
+        return v, r
+
+    dec = cells[cells['model'] == 'med_decomposed']
+    mat = cells[cells['model'] == 'med_matched']
+    pain = cells[cells['model'] == 'pain']
+
+    panels = []
+    if len(pain):
+        panels.append((*grid(pain, 'beta_nrs_within', 'p_bh_reject'),
+                       'PAIN SLOPE (no medication term)\nd log10 power per pain point'))
+    if len(dec):
+        panels.append((*grid(dec, 'medw_beta', 'medw_p_bh_reject'),
+                       'MED_WITHIN\nd log10 power when recently dosed'))
+        panels.append((*grid(dec, 'med_ix_beta', 'med_ix_p_bh_reject'),
+                       'PAIN x MED interaction\nchange in the pain slope when dosed'))
+    if len(mat):
+        panels.append((*grid(mat, 'beta_med', 'p_bh_reject'),
+                       'MATCHED at the same NRS\nd log10 power when dosed'))
+        panels.append((*grid(mat, 'nonparam_diff', None),
+                       'MATCHED, NON-PARAMETRIC\nmean within-subject level difference'))
+
+    fig, axes = plt.subplots(1, len(panels),
+                             figsize=(3.3 * len(panels) + 1.2,
+                                      0.40 * len(regions) + 3.6), squeeze=False)
+    for i, (val, rej, title) in enumerate(panels):
+        ax = axes[0][i]
+        arr = val.to_numpy(dtype=float)
+        cap = float(np.nanmax(np.abs(arr))) or 1.0
+        cm = plt.get_cmap('RdBu_r').copy()
+        cm.set_bad('0.85')
+        im = ax.imshow(arr, aspect='auto', cmap=cm, vmin=-cap, vmax=cap,
+                       interpolation='nearest')
+        common.draw_mask_outline(ax, rej.to_numpy())
+        ax.set_xticks(range(len(bands)))
+        ax.set_xticklabels(bands, fontsize=7, rotation=45, ha='right')
+        ax.set_yticks(range(len(regions)))
+        ax.set_yticklabels(regions if i == 0 else [], fontsize=7.5)
+        ax.set_title(title, fontsize=8.5)
+        fig.colorbar(im, ax=ax, fraction=0.045, pad=0.03).ax.tick_params(labelsize=6.5)
+
+    fig.suptitle(f'Band power vs pain WITH {args.drug_set} in the model '
+                 f'({args.med_window_hours:g} h before the score)', fontsize=12.5)
+    fig.tight_layout(rect=(0, 0.13, 1, 0.93))
+    fig.text(0.01, 0.005,
+             f'EVERY PANEL HAS ITS OWN COLOUR SCALE -- they are different '
+             f'quantities, and a shared one would imply a comparison that is not '
+             f'available. Outlines are BH at q={args.fdr_q:g} WITHIN that term\'s '
+             f'own family, never pooled across terms. {MED_CAVEAT} '
+             f'{WALD_CAVEAT}\n{DISCLAIMER}',
+             fontsize=6.4, va='bottom', ha='left', color='0.35', wrap=True)
+    out = run_dir / 'fig_med_effects.png'
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    logger.info('wrote %s', out.name)
+    return out
+
+
 def write_methods(run_dir, cells, args):
     bands = BAND_SETS[args.band_set]
+    if 'model' in cells.columns:
+        med = cells[cells['model'] != 'pain']
+        cells = cells[cells['model'] == 'pain']
+    else:
+        med = cells.iloc[0:0]
     sig = cells[cells['p_bh_reject'] == True]                    # noqa: E712
     lines = [f"""# Band-power mixed-effects models
 
@@ -739,6 +967,42 @@ toward the group.
             lines.append('| {} | {} | {:+.5f} | {:.5f} | {:+.2f} | {:.4g} | {:.2f} |\n'
                          .format(r.region, r.band, r.beta_nrs_within, r.se, r.z,
                                  r.p_bh, getattr(r, 'frac_sign_consistent', np.nan)))
+
+    if len(med):
+        lines.append(f"""
+## Medication in the model: `{args.med_model}`, drug set `{args.drug_set}`
+
+An epoch counts as medicated when any administration in that drug set falls in
+the {args.med_window_hours:g} h before its pain score. The window is anchored on
+the ASSESSMENT, not the epoch start, because the assessment is the clinical event
+a dose is timed against.
+
+**{MED_CAVEAT}**
+
+Three terms, three questions, each with its OWN BH family -- pooling them would
+correct each hypothesis for the others' tests:
+
+| term | question |
+|---|---|
+| `medw_beta` | within a patient, is power different when recently dosed? |
+| `med_ix_beta` | does being dosed CHANGE the pain slope? |
+| `beta_med` (matched) | at the SAME reported score, is power different when dosed? |
+| `nonparam_diff` | the same contrast without a model: per subject, the mean difference between dosed and undosed epochs AT EQUAL NRS, averaged unweighted over the levels present in both |
+
+`med_submean` (`medb_beta`) is the BETWEEN-patient part and is a nuisance term
+here. It is not evidence about medication: subject mean pain correlates +0.685
+with subject proportion medicated, so most of what it carries is a pain
+difference wearing a medication label.
+
+""")
+        for model, label in (('med_decomposed', 'decomposed'),
+                             ('med_matched', 'matched')):
+            sub = med[med['model'] == model]
+            if not len(sub):
+                continue
+            rej = sub[sub['p_bh_reject'] == True]                # noqa: E712
+            lines.append(f'\n### {label}: {len(rej)} of {len(sub)} cells '
+                         f'BH-significant on its primary term\n')
     (run_dir / 'METHODS.md').write_text(''.join(lines))
 
 
@@ -756,6 +1020,28 @@ def main():
                     help='Which cell `--stage perm` shuffles.')
     ap.add_argument('--band-set', choices=list(BAND_SETS),
                     default='paper_bands_6_hg200')
+    ap.add_argument('--med-model', choices=['none', 'decomposed', 'matched', 'both'],
+                    default='none',
+                    help="Add medication to the model. 'decomposed' splits "
+                         'med_state into within- and between-patient parts and '
+                         'adds its interaction with pain -- the split is needed '
+                         'because subject mean pain correlates +0.685 with subject '
+                         "proportion medicated. 'matched' conditions on the "
+                         'reported score as a FACTOR and asks whether power '
+                         'differs at the SAME pain level, which is the cleaner '
+                         "answer to confounding by indication. 'both' fits both "
+                         'and keeps the pain-only fit beside them.')
+    ap.add_argument('--drug-set', choices=list(med_state.DRUG_SETS),
+                    default='opioids',
+                    help="Which administrations count. 'opioids' is the "
+                         'pharmacologically cleanest set and costs about a third '
+                         "of the medicated epochs; 'non_opioid_analgesics' is its "
+                         'complement and the nearest thing to a negative control.')
+    ap.add_argument('--med-window-hours', type=float,
+                    default=med_state.DEFAULT_WINDOW_HOURS,
+                    help='Hours before the ASSESSMENT that count as recently '
+                         'dosed (default 2.0). Anchored on the score, not the '
+                         'epoch start.')
     ap.add_argument('--exclude-regions', nargs='*', default=[],
                     help='Regions to leave out of the run ENTIRELY -- not fitted, '
                          'not in the BH family, not on the figures. Use for a '
@@ -791,6 +1077,10 @@ def main():
 
     if args.view_scheme is None:
         args.view_scheme = VIEW_SCHEMES.get(args.band_set, VIEW_SCHEME)
+        if args.med_model != 'none':
+            # The drug set and the fact that medication is in the model both
+            # change what every coefficient means, so they belong in the path.
+            args.view_scheme = f'{args.view_scheme}-{args.drug_set}'
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
