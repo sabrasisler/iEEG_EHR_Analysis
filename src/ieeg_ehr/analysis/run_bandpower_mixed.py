@@ -220,7 +220,7 @@ def fit_one_cell(df, meta):
         rec = mm.failed_record(meta['region'], meta['band_index'], meta['band_lo_hz'],
                                meta['band_hi_hz'], reason, df=df)
         rec.update({k: meta[k] for k in ('band', 'cell_index')})
-        return rec, None
+        return rec, None, None
 
     t0 = time.time()
     try:
@@ -230,7 +230,7 @@ def fit_one_cell(df, meta):
                                meta['band_hi_hz'], f'full: {exc}', df=df,
                                fit_seconds=time.time() - t0)
         rec.update({k: meta[k] for k in ('band', 'cell_index')})
-        return rec, None
+        return rec, None, None
 
     # The reduced model IS fitted here, unlike the 9,723-cell grid. At 120 cells
     # the second fit is affordable, and the heterogeneity LRT is a question worth
@@ -255,12 +255,21 @@ def fit_one_cell(df, meta):
     slopes = subject_slopes(epoch_level(df))
     slopes['region'] = meta['region']
     slopes['band'] = meta['band']
+
+    # BLUPs as well as the unpooled slopes. They are NOT interchangeable -- partial
+    # pooling drags every subject toward the group, which is exactly why the
+    # caterpillar plot wants both: the gap between them IS the shrinkage, and a
+    # cell whose spread only exists before pooling is telling you something.
+    blups = pd.DataFrame(mm.blup_rows(res, df, region=meta['region'],
+                                      freq_bin_index=meta['band_index']))
+    if len(blups):
+        blups['band'] = meta['band']
     logger.info('%-18s %-11s | n=%2d subj %4d chan %6d rows | beta %+.5f z %+5.2f '
                 'p %.4g | LRT p %.4g | %.1fs',
                 meta['region'], meta['band'], rec['n_subjects'], rec['n_channels'],
                 rec['n_rows'], rec['beta_nrs_within'], rec['z'], rec['p'],
                 rec['p_lrt_mixture'], rec['fit_seconds'])
-    return rec, slopes
+    return rec, slopes, blups
 
 
 def stage_fit(args):
@@ -312,7 +321,7 @@ def stage_fit(args):
         raise SystemExit(f'--region-index {args.region_index} outside '
                          f'0..{len(regions) - 1}')
 
-    records, slope_parts = [], []
+    records, slope_parts, blup_parts = [], [], []
     for region in todo:
         ri = regions.index(region)
         t0 = time.time()
@@ -340,10 +349,12 @@ def stage_fit(args):
                 'value': band_values[:, bi]})
             df = mm.build_cell_frame(frame, region=region,
                                      freq_bin_index=meta['band_index'])
-            rec, slopes = fit_one_cell(df, meta)
+            rec, slopes, blups = fit_one_cell(df, meta)
             records.append(rec)
             if slopes is not None:
                 slope_parts.append(slopes)
+            if blups is not None and len(blups):
+                blup_parts.append(blups)
             # The frame, so `--stage perm` refits without re-reading the view.
             if len(df):
                 io.write_table(df, run_dir / 'frames' /
@@ -359,6 +370,12 @@ def stage_fit(args):
                    else pd.DataFrame(columns=['subject', 'slope', 'region', 'band']),
                    run_dir / 'cells' / f'slopes_{tag}.parquet',
                    params={'source': 'unpooled per-subject OLS, not BLUPs'},
+                   script=SCRIPT)
+    io.write_table(pd.concat(blup_parts, ignore_index=True) if blup_parts
+                   else pd.DataFrame(columns=['subject', 'region', 'band']),
+                   run_dir / 'cells' / f'blups_{tag}.parquet',
+                   params={'source': 'model BLUPs -- SHRUNK toward the group, keep '
+                                     'beside the unpooled slopes, never instead'},
                    script=SCRIPT)
 
     if args.region_index is None:
@@ -497,6 +514,15 @@ def stage_collect(args):
         logger.info('permutation p present for %d/%d cells', int(up.sum()), len(cells))
         io.write_table(nulls, run_dir / 'permutation_null.parquet',
                        params={'n_shards': len(shards)}, script=SCRIPT)
+
+    blup_parts = [io.read_table(p, on_stale='ignore')
+                  for p in sorted((run_dir / 'cells').glob('blups_*.parquet'))]
+    blup_parts = [b for b in blup_parts if len(b)]
+    if blup_parts:
+        io.write_table(pd.concat(blup_parts, ignore_index=True),
+                       run_dir / 'blups.parquet',
+                       params={'source': 'model BLUPs, shrunk toward the group'},
+                       script=SCRIPT)
 
     slopes = [io.read_table(p, on_stale='ignore')
               for p in sorted((run_dir / 'cells').glob('slopes_*.parquet'))]
