@@ -435,3 +435,13 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       `(1 | subject:channel)` term is the suspect. A permutation null on those
       cells would burn ~1.3 CPU-hours each to refine a meaningless number.
       (→ docs/labnotebook/2026-09-17.md)
+- [ ] **The band-power permutation null must be BLOCKED, not a free shuffle.**
+      Measured residual autocorrelation within subject is 0.42 at lag 1 (median
+      2.0 h between assessments), decaying to 0.17 by lag 6 (~15 h) — well above
+      the white-noise band (`fig_check_residuals.png`,
+      `residual_acf.csv`). `mixed_model.permutation_null` relabels epochs freely,
+      which assumes exchangeability the data denies, so it would give a null that
+      is too NARROW and p-values too small. Options: a cyclic time shift within
+      subject, block permutation over contiguous assessment runs, or add a
+      temporal term to the model and shuffle the residuals. Decide before
+      spending the ~53 CPU-hours. (→ docs/labnotebook/2026-09-17.md)

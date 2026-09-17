@@ -320,3 +320,14 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       here) is the current partial answer, but the honest summary might be a
       distribution over patients rather than a mean and a p-value. Bears on how
       any of this gets reported at P2.6. (→ docs/labnotebook/2026-09-17.md)
+- [ ] The band-power residuals have a heavy LEFT tail — skew -1.81, excess
+      kurtosis +24.6, lower tail reaching -15 SD on IFG/vlPFC beta — i.e. a
+      population of channel-epochs whose band power is far BELOW what the model
+      predicts, with no matching upper tail. That asymmetry is what dropout,
+      flatline or a partially-masked epoch looks like after averaging, so it may
+      be a QC lead rather than a modelling one: the feature-level mask thresholds
+      (K/X/Y/Z, still TODO per CLAUDE.md) have never been set. Two things follow
+      if it is artifact: the Wald SEs assume normality and this is a long way from
+      it, and those epochs are pulling the very low-frequency estimates hardest.
+      Worth isolating the offending channel-epochs and looking at their raw
+      traces before trusting any parametric p. (→ docs/labnotebook/2026-09-17.md)
