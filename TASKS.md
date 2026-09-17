@@ -427,3 +427,11 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       is exactly what a myogenic confound would also produce. A bipolar-pair
       distance check or a broadband-vs-band-limited shape test would separate
       them. (→ docs/labnotebook/2026-09-16.md)
+- [ ] **Fix or exclude Lateral Temporal in the band-power models before running
+      the permutation stage.** Its alpha and high_gamma cells do not converge and
+      its SEs are ~6-10x those of comparable regions (0.022-0.025 vs
+      0.002-0.004), so z=+0.48 on beta=+0.0107 is an artifact of an unidentified
+      variance component, not a null result. 819 contacts in one
+      `(1 | subject:channel)` term is the suspect. A permutation null on those
+      cells would burn ~1.3 CPU-hours each to refine a meaningless number.
+      (→ docs/labnotebook/2026-09-17.md)

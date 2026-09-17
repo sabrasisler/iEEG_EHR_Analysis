@@ -312,3 +312,11 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       subject of 51, so unlikely to move anything; the question is whether the
       mixed model should carry a session term at all.
       (→ docs/labnotebook/2026-09-16.md)
+- [ ] The heterogeneity LRT is BH-significant in 118 of 120 band-power cells
+      (p down to 1e-214), which is the same ~98% the 50-bin grid saw. If subjects
+      genuinely differ in their pain slope almost everywhere, the population-mean
+      beta may be the wrong headline quantity — a cell can have a near-zero mean
+      with half the patients strongly positive. `frac_sign_consistent` (0.62-0.88
+      here) is the current partial answer, but the honest summary might be a
+      distribution over patients rather than a mean and a p-value. Bears on how
+      any of this gets reported at P2.6. (→ docs/labnotebook/2026-09-17.md)
