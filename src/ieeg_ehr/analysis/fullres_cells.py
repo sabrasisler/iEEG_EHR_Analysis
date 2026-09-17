@@ -221,6 +221,45 @@ def load_region_matrix(paths, subjects, region, roi_by_subject, bin_indices,
     return index, values, stats
 
 
+def load_all_parcels(paths, subjects, parcel_of, bin_indices, epoch_minutes=None):
+    """(index frame with a `parcel` column, (n_rows, n_bins) float32) in ONE pass.
+
+    `parcel_of` is {subject_id: {channel: parcel}}. Every channel with a parcel is
+    kept, so the whole cohort's rows come back together -- which is what a model
+    with parcel as a random effect needs, and what `load_region_matrix` cannot
+    give: that reads one region at a time, so 30 parcels would mean 30 passes
+    over a 1.5 GB view.
+    """
+    all_cols = fullres_reader.freq_columns(epoch_minutes)
+    cols = [all_cols[int(b)] for b in bin_indices]
+
+    idx_parts, val_parts = [], []
+    for p in paths:
+        subject, session = subject_session_of(p)
+        sid = f'sub-{subject}'
+        mapping = parcel_of.get(sid)
+        if sid not in subjects or not mapping:
+            continue
+        df = io.read_table(p, columns=list(INDEX_COLUMNS) + cols, on_stale='warn')
+        df = df.assign(parcel=df['channel'].map(mapping)).dropna(subset=['parcel'])
+        if df.empty:
+            continue
+        val_parts.append(df[cols].to_numpy(dtype=config.CACHE_FLOAT_DTYPE))
+        index = df[['parcel', *INDEX_COLUMNS]].copy()
+        index.insert(0, 'subject_id', sid)
+        index.insert(1, 'session', session)
+        idx_parts.append(index)
+
+    if not idx_parts:
+        raise SystemExit('no rows for any parcel; check the ROI scheme')
+    index = pd.concat(idx_parts, ignore_index=True)
+    values = np.concatenate(val_parts, axis=0)
+    logger.info('parcel-level load: %d rows, %d parcels, %d subjects, %d channels',
+                len(index), index['parcel'].nunique(),
+                index['subject_id'].nunique(), index['channel'].nunique())
+    return index, values
+
+
 def channel_audit(paths, subjects, roi_by_subject):
     """{subject_id: {'absent_from_meta': [...], 'n_non_roi': int}} per subject.
 

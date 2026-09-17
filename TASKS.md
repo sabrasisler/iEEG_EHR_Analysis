@@ -445,3 +445,11 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       subject, block permutation over contiguous assessment runs, or add a
       temporal term to the model and shuffle the residuals. Decide before
       spending the ~53 CPU-hours. (→ docs/labnotebook/2026-09-17.md)
+- [ ] **Add the exact-crossing robustness check for the domain model.** The
+      primary fit nests parcel in subject because statsmodels cannot fit a
+      crossed parcel term (it silently nests it -- verified 2026-09-17), so the
+      domain SE does not account for a parcel deviating consistently across
+      patients. The check: an OLS slope per (subject, parcel), then a domain
+      contrast on those with TWO-WAY cluster-robust SEs (clustered on subject and
+      on parcel). Cheap, handles the crossing exactly, and uses machinery that
+      already exists. (→ docs/labnotebook/2026-09-17.md)
