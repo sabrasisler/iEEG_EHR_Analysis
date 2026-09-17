@@ -41,8 +41,18 @@ export MKL_NUM_THREADS=1
 
 EXTRA=${EXTRA:-}
 
+# A region name and a reason both contain SPACES, and ${EXTRA} expands unquoted --
+# so they get their own variables and are passed as array elements. Putting them
+# in EXTRA silently split "Lateral Temporal" into two arguments and killed a run.
+EXCLUDE_REGIONS=${EXCLUDE_REGIONS:-}
+EXCLUDE_REASON=${EXCLUDE_REASON:-}
+args=()
+[ -n "${EXCLUDE_REGIONS}" ] && args+=(--exclude-regions "${EXCLUDE_REGIONS}")
+[ -n "${EXCLUDE_REASON}" ] && args+=(--exclude-reason "${EXCLUDE_REASON}")
+
 echo "=== bandpower mixed models | $(date) ==="
-RUN_DIR=$(python -m ieeg_ehr.analysis.run_bandpower_mixed --stage fit ${EXTRA} | tail -1)
+RUN_DIR=$(python -m ieeg_ehr.analysis.run_bandpower_mixed --stage fit \
+    "${args[@]}" ${EXTRA} | tail -1)
 echo "    run: ${RUN_DIR}"
 python -m ieeg_ehr.analysis.run_bandpower_mixed --stage collect --run-dir "${RUN_DIR}"
 echo "=== done ($(date)) ==="
