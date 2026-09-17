@@ -331,3 +331,17 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       it, and those epochs are pulling the very low-frequency estimates hardest.
       Worth isolating the offending channel-epochs and looking at their raw
       traces before trusting any parametric p. (→ docs/labnotebook/2026-09-17.md)
+- [ ] Opioid administration has a LARGER within-patient association with band
+      power than pain does (|medw| median 0.0199 vs pain betas 0.01-0.02), it is
+      positive and low-frequency-dominant like sedation, and its biggest cells are
+      ones where the pain effect is null (Occipital delta, S1 delta, dlPFC theta).
+      Three estimators agree on sign and magnitude; only significance differs.
+      Two consequences to think through. (1) Every pain map logged so far —
+      the native-resolution grid, the cluster test, the pain-only band models —
+      was fitted with no medication term, and 34.7% of epochs are within 2 h of an
+      opioid dose. (2) In the 19 cells with a significant pain x med interaction
+      the two are not additively separable, so "adjusting for" medication there is
+      not a matter of adding a term. The honest framing may be that the
+      unmedicated stratum is the only place a pain effect is interpretable, which
+      is a much smaller analysis (1570 epochs, and a compressed NRS range:
+      unmedicated mean 2.22). (→ docs/labnotebook/2026-09-17.md)
