@@ -93,7 +93,7 @@ ESTIMAND_CAVEAT = (
 # COHORT
 # ============================================================================
 
-def resolve_cohort(ref, view_dir, cohort='reference'):
+def resolve_cohort(ref, view_dir, cohort='reference', roi_scheme=None):
     """(paths, scores, diagnostics, subjects, roi map, subjects without ROI).
 
     Same eligibility rule as the 50-bin grid, applied to the same epochs -- the
@@ -151,7 +151,10 @@ def resolve_cohort(ref, view_dir, cohort='reference'):
                        'comparison with the reference map now spans two cohorts.',
                        cohort)
 
-    roi_scheme = ref.view_params.get('roi_scheme', 'roi_v2')
+    # An override is honoured so an analysis can fuse or split regions without
+    # pretending the reference run used that scheme. Which scheme was actually
+    # applied is recorded, with its full contents, in the run's provenance.
+    roi_scheme = roi_scheme or ref.view_params.get('roi_scheme', 'roi_v2')
     roi_by_subject, no_roi = roi_maps(paths, subjects, roi_scheme)
     subjects -= set(no_roi)
     return paths, scores, diagnostics, subjects, roi_by_subject, no_roi

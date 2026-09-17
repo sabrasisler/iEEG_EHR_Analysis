@@ -195,9 +195,58 @@ _ROI_V2_DISPLAY = [
     'Parietal (other)', 'MTL (other)', 'Lateral Temporal', 'Auditory', 'Occipital',
 ]
 
+# ---------------------------------------------------------------------------
+# roi_v2_ofc -- roi_v2 with the two orbitofrontal parcels fused (2026-09-16)
+# ---------------------------------------------------------------------------
+# 20 regions. `mOFC` and `lOFC` become one `OFC`, at Sabra's request for the
+# band-power analysis. The two were split in roi_v2 because DK can separate them,
+# but medial and lateral OFC are frequently reported together in the pain
+# literature and splitting them halves the contacts behind each estimate -- roi_v2
+# measured 94 in mOFC and 191 in lOFC against 504 in Insula.
+#
+# DERIVED from _ROI_V2_PATTERNS rather than copy-pasted, so an edit to roi_v2
+# cannot silently leave this variant behind. The fused category takes the POSITION
+# of its first member in both dicts, which preserves precedence (pattern order)
+# and figure row order (display order).
+
+def _merge_categories(patterns, display, merges):
+    """(patterns, display) with each named group of categories fused into one.
+
+    `merges` is {new name: (member, member, ...)}. A member that is absent is an
+    ERROR rather than a no-op: silently producing the un-merged scheme would give
+    a run whose provenance claims a region set it does not have.
+    """
+    members = {m: new for new, group in merges.items() for m in group}
+    for m in members:
+        if m not in patterns:
+            raise ValueError(f'cannot merge {m!r}: not a category of the parent scheme')
+
+    out_patterns, seen = {}, set()
+    for name, pats in patterns.items():
+        new = members.get(name)
+        if new is None:
+            out_patterns[name] = list(pats)
+        elif new not in seen:
+            seen.add(new)
+            out_patterns[new] = [p for m in merges[new] for p in patterns[m]]
+
+    out_display, seen_d = [], set()
+    for name in display:
+        new = members.get(name, name)
+        if new not in seen_d:
+            seen_d.add(new)
+            out_display.append(new)
+    return out_patterns, out_display
+
+
+_ROI_V2_OFC_PATTERNS, _ROI_V2_OFC_DISPLAY = _merge_categories(
+    _ROI_V2_PATTERNS, _ROI_V2_DISPLAY, {'OFC': ('mOFC', 'lOFC')})
+
 ROI_SCHEMES = {
     'default': {'patterns': _DEFAULT_PATTERNS, 'display': _DEFAULT_DISPLAY},
     'roi_v2': {'patterns': _ROI_V2_PATTERNS, 'display': _ROI_V2_DISPLAY},
+    'roi_v2_ofc': {'patterns': _ROI_V2_OFC_PATTERNS,
+                   'display': _ROI_V2_OFC_DISPLAY},
 }
 
 DEFAULT_ROI_SCHEME = 'default'
