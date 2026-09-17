@@ -47,12 +47,15 @@ normalization and no baseline: contact amplitude differences are multiplicative,
 so in log space they are additive and the channel random intercept absorbs them
 exactly.
 
-PAPER_BANDS_6 CARRIES TWO PROPERTIES THAT ARE THE PAPER'S, NOT OURS. There is a
-GAP at 12-15 Hz (alpha ends at 12, beta starts at 15), and nothing above 170 Hz
--- so a high-frequency effect above 170 Hz has no band to appear in. Its `gamma`
-and `high_gamma` also STRADDLE the 60 and 120 Hz harmonics, which is why
-excluding the notched bins from the aggregation is mandatory here rather than
-optional.
+BAND SETS. The default is `paper_bands_6_hg200`: the target paper's six bands
+with high_gamma extended to 70-200 Hz, because 170 Hz was their ceiling and not
+this dataset's -- the native-resolution map shows Thalamus high-frequency
+structure running past it. The published `paper_bands_6` stays selectable and
+UNEDITED, since the decoding replication's edges must remain the paper's. Both
+keep the paper's GAP AT 12-15 HZ, reproduced rather than closed. Bands that cross
+a 60 Hz harmonic have the notched bins removed before aggregation; `band_caveat()`
+states each set's own gaps and crossings, and it is computed rather than written
+down so it cannot misdescribe a variant.
 
 INFERENCE, IN TWO STAGES BECAUSE THEY COST DIFFERENT AMOUNTS
 ------------------------------------------------------------
@@ -105,20 +108,58 @@ RUN_NAME = 'paperbands6_mixedlm'
 
 FDR_Q = 0.05
 
-BAND_SETS = {'paper_bands_6': config.PAPER_BANDS_6_HZ,
+#: `paper_bands_6_hg200` is the DEFAULT rather than the published
+#: `paper_bands_6`: 170 Hz was the target paper's ceiling, not this dataset's,
+#: and the native-resolution map shows Thalamus high-frequency structure running
+#: past it. The published set stays selectable, unedited, because the decoding
+#: replication's edges must remain the paper's. The chosen set is in the run's
+#: folder name, so a path never misstates which edges produced it.
+BAND_SETS = {'paper_bands_6_hg200': config.PAPER_BANDS_6_HG200_HZ,
+             'paper_bands_6': config.PAPER_BANDS_6_HZ,
              'canonical': config.CANONICAL_BANDS_HZ}
+
+#: Level-4 folder per band set, so the path says which edges were used.
+VIEW_SCHEMES = {'paper_bands_6_hg200': 'paperbands6hg200-roiv2ofc',
+                'paper_bands_6': 'paperbands6-roiv2ofc',
+                'canonical': 'canonicalbands-roiv2ofc'}
 
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
 
-PAPER_BAND_CAVEAT = (
-    'paper_bands_6 is reproduced exactly as published (Huang et al. 2025), '
-    'including two gaps that are theirs and not ours: nothing covers 12-15 Hz, '
-    'and nothing covers above 170 Hz -- so an effect above 170 Hz, which the '
-    'native-resolution map shows in Thalamus, has no band to appear in here. '
-    'Its gamma (25-70) and high_gamma (70-170) straddle the 60 and 120 Hz '
-    'harmonics, so the notched bins are excluded from the aggregation; without '
-    'that, gamma would absorb the 58-62 Hz residue.')
+def band_caveat(band_set):
+    """The band set's own gaps and harmonic crossings, in words.
+
+    Computed rather than written down, because the two paper variants differ in
+    exactly the property a reader needs (what the top of high_gamma is), and a
+    fixed string would misdescribe one of them.
+    """
+    bands = BAND_SETS[band_set]
+    top = max(hi for _, hi in bands.values())
+    parts = []
+    if band_set.startswith('paper_bands_6'):
+        parts.append(
+            'The band edges are the target paper\'s (Huang et al. 2025), which '
+            'leaves a GAP AT 12-15 HZ -- alpha ends at 12 and beta starts at 15 '
+            '-- reproduced rather than closed.')
+    if band_set == 'paper_bands_6':
+        parts.append(
+            'Nothing covers above 170 Hz, so the pain-related high-frequency '
+            'increase the native-resolution map shows in Thalamus above ~170 Hz '
+            'has no band to appear in. `--band-set paper_bands_6_hg200` extends '
+            'high_gamma to 200 Hz for that reason.')
+    elif band_set == 'paper_bands_6_hg200':
+        parts.append(
+            'high_gamma is EXTENDED to 70-200 Hz, not the paper\'s 70-170: 170 Hz '
+            'was their ceiling, not this dataset\'s, and the native-resolution map '
+            'shows Thalamus structure running past it. The published set is '
+            'unedited and still selectable as `--band-set paper_bands_6`. Nothing '
+            f'covers {top:g}-250 Hz.')
+    parts.append(
+        'Bands that CROSS a 60 Hz harmonic have the notched bins removed before '
+        'aggregation -- mandatory, not optional: without it gamma would absorb '
+        'the 58-62 Hz residue and high_gamma the 118-122 and 178-182 Hz ones.')
+    return ' '.join(parts)
+
 
 WALD_CAVEAT = (
     'p and p_bh are PARAMETRIC Wald. They assume z ~ N(0,1) under the null, which '
@@ -240,6 +281,17 @@ def stage_fit(args):
 
     roi_scheme = args.roi_scheme or ref.view_params.get('roi_scheme', 'roi_v2')
     regions = view_tables.roi_regions_for({'roi_scheme': roi_scheme})
+    if args.exclude_regions:
+        unknown = [r for r in args.exclude_regions if r not in regions]
+        if unknown:
+            raise SystemExit(
+                f'--exclude-regions {unknown} are not regions of {roi_scheme!r}. '
+                f'Known: {regions}. Refusing rather than silently excluding '
+                'nothing, which would look like the exclusion worked.')
+        regions = [r for r in regions if r not in set(args.exclude_regions)]
+        logger.warning('EXCLUDED from this run entirely (not fitted, not in the BH '
+                       'family, not plotted): %s -- %s', args.exclude_regions,
+                       args.exclude_reason or 'no reason recorded')
     logger.info('ROI scheme %r -> %d region(s): %s', roi_scheme, len(regions), regions)
     logger.info('band set %r:', args.band_set)
     kept, bands, notched = band_table(args.band_set, args.notch_half_width_hz,
@@ -323,11 +375,14 @@ def stage_fit(args):
                     ).scheme_provenance(roi_scheme),
                     'cohort': args.cohort, 'epoch_minutes': epoch_minutes,
                     'notched_bins_excluded': notched,
+                    'excluded_regions': list(args.exclude_regions),
+                    'excluded_regions_reason': args.exclude_reason,
                     'aggregation': 'linear_then_log via axes.aggregate_bands',
                     'n_cells': len(records)},
             parents=[str(Path(args.reference_run) / 'provenance.json'), str(view_dir)],
             subjects=sorted(subjects),
-            extra={'status': DISCLAIMER, 'band_caveat': PAPER_BAND_CAVEAT,
+            extra={'status': DISCLAIMER,
+                   'band_caveat': band_caveat(args.band_set),
                    'inference_caveat': WALD_CAVEAT,
                    'mask_content': CONFOUND_CAVEAT,
                    'subjects_without_roi': sorted(no_roi)})
@@ -466,7 +521,7 @@ def stage_collect(args):
                                        'permutation p separately'},
                    script=SCRIPT,
                    extra={'status': DISCLAIMER, 'inference_caveat': WALD_CAVEAT,
-                          'band_caveat': PAPER_BAND_CAVEAT})
+                          'band_caveat': band_caveat(args.band_set)})
 
     report(cells, args.fdr_q)
     figures(run_dir, cells, args)
@@ -538,7 +593,8 @@ def figures(run_dir, cells, args):
     fig.tight_layout(rect=(0, 0.10, 1, 1))
     fig.text(0.01, 0.005,
              'Outlines mark BH-significant cells across all fitted cells at '
-             f'q={args.fdr_q}. {WALD_CAVEAT} {PAPER_BAND_CAVEAT}\n{DISCLAIMER}',
+             f'q={args.fdr_q}. {WALD_CAVEAT} {band_caveat(args.band_set)}\n'
+             f'{DISCLAIMER}',
              fontsize=6.5, va='bottom', ha='left', color='0.35', wrap=True)
     p1 = run_dir / 'fig_band_map.png'
     fig.savefig(p1, dpi=150, bbox_inches='tight')
@@ -610,7 +666,7 @@ applied. REML, statsmodels.
 
 Band set `{args.band_set}`: {', '.join(f'{k} {v[0]}-{v[1]} Hz' for k, v in bands.items())}.
 
-{PAPER_BAND_CAVEAT}
+{band_caveat(args.band_set)}
 
 ## Why a refit rather than averaging the grid's betas
 
@@ -672,7 +728,18 @@ def main():
                          'which takes minutes at 120 cells.')
     ap.add_argument('--cell-index', type=int, default=None,
                     help='Which cell `--stage perm` shuffles.')
-    ap.add_argument('--band-set', choices=list(BAND_SETS), default='paper_bands_6')
+    ap.add_argument('--band-set', choices=list(BAND_SETS),
+                    default='paper_bands_6_hg200')
+    ap.add_argument('--exclude-regions', nargs='*', default=[],
+                    help='Regions to leave out of the run ENTIRELY -- not fitted, '
+                         'not in the BH family, not on the figures. Use for a '
+                         'region whose data is under review, and say why: the '
+                         'reason goes into provenance. Excluding a region because '
+                         'it was not significant is a different and illegitimate '
+                         'act, which is why this takes names rather than a '
+                         'threshold.')
+    ap.add_argument('--exclude-reason', default=None,
+                    help='Recorded verbatim in provenance beside --exclude-regions.')
     ap.add_argument('--roi-scheme', default='roi_v2_ofc',
                     help="Region set. Default 'roi_v2_ofc' = roi_v2 with mOFC and "
                          'lOFC fused into one OFC (20 regions). Pass roi_v2 to keep '
@@ -690,9 +757,14 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--fdr-q', type=float, default=FDR_Q)
     ap.add_argument('--question', default=QUESTION)
-    ap.add_argument('--view-scheme', default=VIEW_SCHEME)
+    ap.add_argument('--view-scheme', default=None,
+                    help='Level-4 folder. Default: derived from --band-set, so '
+                         'the path cannot claim band edges the run did not use.')
     ap.add_argument('--run-name', default=RUN_NAME)
     args = ap.parse_args()
+
+    if args.view_scheme is None:
+        args.view_scheme = VIEW_SCHEMES.get(args.band_set, VIEW_SCHEME)
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')

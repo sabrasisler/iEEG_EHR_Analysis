@@ -175,3 +175,24 @@ PAPER_BANDS_6_HZ = {
     'delta': (1, 4), 'theta': (4, 8), 'alpha': (8, 12),
     'beta': (15, 25), 'gamma': (25, 70), 'high_gamma': (70, 170),
 }
+
+# ----------------------------------------------------------------------------
+# THE SAME SIX BANDS WITH high_gamma EXTENDED TO 200 Hz  (2026-09-17)
+# ----------------------------------------------------------------------------
+# A SEPARATE constant, never an edit of PAPER_BANDS_6_HZ, because that dict is
+# the published set and the decoding replication's claim to be a replication
+# rests on its edges being exactly the paper's. Changing it in place would
+# silently redefine a completed analysis.
+#
+# WHY EXTEND IT. 170 Hz was the paper's ceiling, not this dataset's: the stored
+# spectrum reaches 250 Hz, and the native-resolution map shows a pain-related
+# high-frequency increase in Thalamus running from ~124 Hz to the top of the
+# range — structure that 70-170 truncates and therefore dilutes with a wide band
+# of nothing. 200 Hz keeps a margin below the 250 Hz ceiling, where the rare
+# 500 Hz-sampled subject sits at Nyquist.
+#
+# 70-200 Hz CONTAINS TWO HARMONICS (120 and 180 Hz), where 70-170 contained one.
+# Both are removed by the view-time notch before aggregation — mandatory here,
+# not optional, exactly as for the parent set. Derived from the parent so an edit
+# to those five shared edges cannot leave this variant behind.
+PAPER_BANDS_6_HG200_HZ = {**PAPER_BANDS_6_HZ, 'high_gamma': (70, 200)}
