@@ -54,7 +54,12 @@ Two arms, two nulls. Raw 27 clusters / 0 significant; detrended 52 / 17
 - `bandpower/domain_model/paperbands6hg200-paindomainsv2-opioids/domain_mixedlm_20260918-132124/`
 - `bandpower/domain_model/paperbands6hg200-paindomainsv2-analgesics/domain_mixedlm_20260918-132041/`
 - `bandpower/domain_model/paperbands6hg200-paindomainsv2-non_opioid_analgesics/domain_mixedlm_20260918-135720/`
-- **RUNNING**: `--drug-set opioids --exclude-drug-set non_opioid_analgesics`, job 44163810
+- `bandpower/domain_model/paperbands6hg200-paindomainsv2-opioids-exclnon_opioid_analgesics/domain_mixedlm_20260918-145947/`
+  — **the clean opioid contrast**: opioid-dosed vs ANALGESIC-FREE. 356 of 2406
+  epochs dosed with a non-opioid analgesic but not an opioid were dropped, so
+  836 medicated vs 1214 unmedicated (was 836 vs 1570). 87,789 rows vs 104,844.
+  `bands/*_residuals.parquet` here are INVALID — see `bands/RESIDUALS_INVALID.md`
+  and `TASKS.md`; nothing else in the run is affected.
 
 Disposable smoke runs under `cont_pain_fullres/` (`smoke_*`) can be deleted; see
 `TASKS.md`.
@@ -106,6 +111,35 @@ separable from these fits: something non-pharmacological about being dosed, or
 the opioid term being absorbed by the pain terms it is collinear with. Either
 way it argues against reading the opioid medication effect as a drug effect.
 
+### Cleaning the comparison stratum (opioid vs analgesic-free)
+The original opioid arm compared opioid-dosed epochs against "nothing OR an
+acetaminophen/NSAID", which is not a drug-free baseline. Excluding the 356
+non-opioid-only epochs costs 16% of the rows and does three separable things:
+
+- **The pain effect does not move.** r = 0.987 across the 30 domain × band
+  cells, **100% sign agreement**, betas near-identical (Sensory beta +0.0092 vs
+  +0.0099). Significant cells fall 12/30 → 3/30 purely on the lost power — the
+  SEs grow, the estimates do not shift. This is the third independent way the
+  pain effect has survived a medication control.
+- **Part of the high-gamma "opioid" effect was the contaminated baseline.** The
+  high_gamma medication betas collapse toward zero (Sensory −0.0014 vs −0.0105,
+  Cognitive −0.0036 vs −0.0076) and lose significance. Overall medication cells
+  18/30 → 15/30, sign agreement only 87% — the term is the least stable of the
+  three.
+- **The pain × opioid interaction SHARPENS, on less data.** Omnibus: theta
+  0.0028 → 5.5e-05, gamma 0.447 → **0.0097**, high_gamma 0.729 → **0.042**.
+  Significant cells 6/30 → 9/30. Expected direction — the old "unmedicated"
+  stratum was 23% analgesic-dosed, which blurred the very contrast the
+  interaction measures.
+
+Shape of the interaction: **positive at gamma/high-gamma** (Sensory +0.0064,
+Cognitive +0.0037, Control +0.0054 — pain's positive high-frequency slope gets
+*steeper* when dosed) and **negative at delta/theta, concentrated in Control**
+(−0.0157, −0.0130). The delta/theta omnibus is therefore significant largely
+because Control is the outlier, not because the pain-matrix domains are large —
+the same reading trap as the delta main effect in §3. Treat the low-frequency
+interaction as a Control-domain anomaly worth explaining, not as a pain finding.
+
 ---
 
 ## 4. Code written
@@ -151,6 +185,14 @@ sbatch: `fullres_grid_{array,collect}`, `fullres_cluster`, `bandpower_{mixed,per
    variables.
 6. **Level-4 folder name lied** — kept saying `roiv2ofc` after `--roi-scheme` was
    added. Now built from band set + region set + drug set in one place.
+7. **Conditional residuals, again, the other way** — `conditional_parts` matched
+   hard-coded variance-component NAMES, so it silently omitted the domain model's
+   fourth component (`subj_parcel_slope`); the mismatch guard fired and its
+   fallback returned the INCOMPLETE vector as the residual. Same class of error
+   as #2, opposite sign. Now enumerates `res.k_vc` and uses the model's own
+   `exog_vc.mats`, so no `vc_formula` can outrun it, and a mismatch is
+   adjudicated by residual SD against `sqrt(scale)` with both numbers logged
+   (`32df4d5`).
 
 ---
 
@@ -214,8 +256,14 @@ medication effect is at that patient's own average pain — **not** zero pain.
 
 ## 8. Next
 
-1. Opioid-vs-analgesic-free run (job 44163810) — the cleanest medication contrast.
-2. Figure B for the four domain runs (~10 min each).
-3. Figure C for the domain model, now that residuals are saved.
+1. Figure B for the five domain runs (~10 min each).
+2. Figure C for the domain model — needs a refit at `32df4d5`, since the only
+   saved residuals are the invalid ones (`TASKS.md`).
+3. Beta band is unidentified in the domain fits (`var_subj_slope` 0.0227 vs
+   ~0.0003 elsewhere, Hessian not positive definite). Quote its omnibus, never a
+   per-domain beta pain slope, until that is pinned down (`TASKS.md`).
 4. Blocked permutation before any permutation p is quoted.
 5. Decide whether the >100 Hz nominations are physiology or EMG (`TASKS.md`).
+6. Explain the Control domain's low-frequency behaviour — it carries both the
+   delta main effect and the largest delta/theta pain × opioid interaction. Until
+   it is understood, every low-frequency claim in this project is soft.

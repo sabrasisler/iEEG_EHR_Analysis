@@ -453,3 +453,26 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       contrast on those with TWO-WAY cluster-robust SEs (clustered on subject and
       on parcel). Cheap, handles the crossing exactly, and uses machinery that
       already exists. (→ docs/labnotebook/2026-09-17.md)
+- [ ] **Delete the six `*_residuals.parquet` in the opioid-vs-analgesic-free
+      domain run, then regenerate them.** They were written at commit `b760533`
+      by a `conditional_parts` that matched hard-coded variance-component NAMES
+      and so silently omitted the domain model's fourth component,
+      `subj_parcel_slope` — its mismatch guard fired and the fallback returned
+      the INCOMPLETE vector as the conditional residual. The files still contain
+      a fitted random effect of the same order as the residual SD (gap 0.27 vs SD
+      ~0.21), so Figure C drawn from them would read a modelled term as lack of
+      fit. Marked in place by `bands/RESIDUALS_INVALID.md` because the deletion
+      was not authorised. The code is fixed at `32df4d5` (enumerates `res.k_vc`,
+      uses the model's own `exog_vc.mats`); correct residuals need a refit,
+      ~35 min for 6 bands. Coefficients, SEs, omnibus tests and both figures in
+      that run are UNAFFECTED. (→ docs/labnotebook/2026-09-18.md)
+- [ ] **Treat the beta-band pain marginals in the domain runs as unidentified
+      until the fit is stabilised.** In the opioid-vs-analgesic-free run beta is
+      the only band that failed its first optimisation (lbfgs retry, Hessian not
+      positive definite) and its `var_subj_slope` is 0.0227 against ~0.0003 in
+      every other band — two orders of magnitude. The consequence is visible in
+      Figure A: the beta pain omnibus is p=6.4e-07 while every per-domain beta CI
+      spans about +/-0.04, i.e. the DIFFERENCES between domains are precise but
+      the levels are not. Quote the beta omnibus if anything, never a per-domain
+      beta pain slope, until the variance component is pinned down.
+      (→ docs/labnotebook/2026-09-18.md)
