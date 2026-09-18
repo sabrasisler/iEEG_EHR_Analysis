@@ -76,7 +76,7 @@ import pandas as pd
 
 from ieeg_ehr import config, io
 from ieeg_ehr.analysis import cluster_permutation as cp
-from ieeg_ehr.analysis import fullres_cells, mixed_model as mm
+from ieeg_ehr.analysis import fullres_cells, med_state, mixed_model as mm
 from ieeg_ehr.analysis import reference_run, view_tables
 from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS, band_table, aggregate
 from ieeg_ehr.analysis.run_fullres_grid import CONFOUND_CAVEAT, resolve_cohort
@@ -196,11 +196,101 @@ def parcel_domain_maps(paths, subjects, scheme, collapse_hemisphere=True):
 # THE MODEL
 # ============================================================================
 
-def domain_formula(domains):
-    """The fixed-effects formula, with `Control` as the reference if present."""
+def domain_formula(domains, med=False):
+    """The fixed-effects formula, with `Control` as the reference if present.
+
+    With `med=True` the design is the FULL THREE-WAY, pain x domain x medication:
+
+        NRS_within * C(domain) * med_within + NRS_submean + med_submean
+
+    which nests every weaker version and lets all four questions be asked of one
+    fit -- does the pain slope differ by domain, does medication shift power, does
+    medication change the pain slope, and does THAT differ by domain. 22 fixed
+    effects at five domains, which is cheap: the cost of these fits is the
+    variance components, not the design matrix.
+
+    `med_within` is subject-mean-centred, so a coefficient read at med_within = 0
+    is the estimate AT THE PATIENT'S OWN AVERAGE MEDICATION LEVEL -- not
+    marginally over dosing, and not in an unmedicated state. `med_submean` is the
+    between-patient nuisance term, present for the same reason NRS_submean is:
+    subject mean pain correlates +0.685 with subject proportion medicated, so
+    without it the within-patient medication effect absorbs a pain difference
+    wearing a medication label.
+    """
     ref = REFERENCE_DOMAIN if REFERENCE_DOMAIN in domains else sorted(domains)[0]
-    return (f"log10_power ~ NRS_within * C(domain, Treatment('{ref}')) "
-            '+ NRS_submean'), ref
+    dom = f"C(domain, Treatment('{ref}'))"
+    if med:
+        return (f'log10_power ~ NRS_within * {dom} * med_within '
+                '+ NRS_submean + med_submean'), ref
+    return f'log10_power ~ NRS_within * {dom} + NRS_submean', ref
+
+
+def marginal_contrast(res, domains, ref, base_term, term_label):
+    """Each domain's marginal value of `base_term`, as a linear combination.
+
+    Generalises `marginal_slopes` to any term that is crossed with domain:
+    pass 'NRS_within' for the pain slope, 'med_within' for the medication effect,
+    'NRS_within:med_within' for the pain x medication interaction. For domain d
+    the value is `base + base:domain[T.d]`, and its SE needs the covariance of
+    the two, not the square root of the sum of variances.
+
+    patsy spells the interaction with the domain factor inline, and the ORDER of
+    the factors in a term name is patsy's, not ours -- so the term is found by
+    matching its PARTS rather than by string-building a name that would silently
+    fail to match and hand back the reference value for every domain.
+    """
+    from scipy import stats
+
+    names = list(res.fe_params.index)
+    cov = np.asarray(res.cov_params())[:len(names), :len(names)]
+    beta = res.fe_params.to_numpy()
+    base_parts = set(base_term.split(':'))
+
+    def find_base():
+        for i, n in enumerate(names):
+            if set(n.split(':')) == base_parts:
+                return i
+        return None
+
+    def find_interaction(dom):
+        for i, n in enumerate(names):
+            parts = n.split(':')
+            dom_part = [q for q in parts if q.endswith(f'[T.{dom}]')]
+            rest = {q for q in parts if not q.endswith(f'[T.{dom}]')}
+            if dom_part and rest == base_parts:
+                return i
+        return None
+
+    bi = find_base()
+    if bi is None:
+        logger.warning('no base term %r in the fit; skipping %s', base_term,
+                       term_label)
+        return pd.DataFrame()
+
+    rows = []
+    for dom in domains:
+        c = np.zeros(len(names))
+        c[bi] = 1.0
+        ii = None
+        if dom != ref:
+            ii = find_interaction(dom)
+            if ii is None:
+                logger.warning('no %s x %s interaction term found', base_term, dom)
+                continue
+            c[ii] = 1.0
+        est = float(c @ beta)
+        se = float(np.sqrt(c @ cov @ c))
+        z = est / se if se > 0 else np.nan
+        rows.append({'term': term_label, 'domain': dom, 'is_reference': dom == ref,
+                     'beta': est, 'se': se, 'z': z,
+                     'p': float(2 * stats.norm.sf(abs(z))) if np.isfinite(z) else np.nan,
+                     'ci_lo': est - 1.96 * se, 'ci_hi': est + 1.96 * se,
+                     'diff_from_ref': float(beta[ii]) if ii is not None else 0.0,
+                     'diff_se': (float(np.sqrt(cov[ii, ii])) if ii is not None
+                                 else np.nan),
+                     'diff_p': (float(res.pvalues.iloc[ii]) if ii is not None
+                                else np.nan)})
+    return pd.DataFrame(rows)
 
 
 def marginal_slopes(res, domains, ref):
@@ -249,6 +339,32 @@ def marginal_slopes(res, domains, ref):
     return pd.DataFrame(rows)
 
 
+def omnibus_block(res, domains, ref, base_term, label):
+    """(chi2, df, p) for "does `base_term` differ across domains".
+
+    Joint Wald over that term's domain interactions. NOT an LRT: REML
+    likelihoods are not comparable across fixed-effects designs.
+    """
+    names = list(res.fe_params.index)
+    base_parts = set(base_term.split(':'))
+    idx = []
+    for i, n in enumerate(names):
+        parts = n.split(':')
+        dom_part = [q for q in parts if any(q.endswith(f'[T.{d}]')
+                                            for d in domains if d != ref)]
+        rest = {q for q in parts if q not in dom_part}
+        if dom_part and rest == base_parts:
+            idx.append(i)
+    if not idx:
+        return {'block': label, 'chi2': np.nan, 'df': 0, 'p': np.nan}
+    R = np.zeros((len(idx), len(np.asarray(res.params))))
+    for r, i in enumerate(idx):
+        R[r, i] = 1.0
+    test = res.wald_test(R, scalar=False)
+    return {'block': label, 'chi2': float(np.squeeze(test.statistic)),
+            'df': len(idx), 'p': float(test.pvalue)}
+
+
 def omnibus_wald(res, domains, ref):
     """(chi2, df, p) for "do domains differ at all", as a joint Wald test.
 
@@ -276,20 +392,36 @@ def omnibus_wald(res, domains, ref):
     return stat, len(terms), float(test.pvalue)
 
 
-def fit_band(df, domains, band):
-    """(record, marginal slope frame) for one band."""
-    formula, ref = domain_formula(domains)
+def fit_band(df, domains, band, med=False):
+    """(record, contrast frame) for one band."""
+    formula, ref = domain_formula(domains, med=med)
     t0 = time.time()
     res, warn = mm.fit_cell(df, VC_DOMAIN, formula=formula)
     elapsed = time.time() - t0
 
     chi2, ddf, p_omni = omnibus_wald(res, domains, ref)
-    slopes = marginal_slopes(res, domains, ref)
+
+    # Every term that is crossed with domain gets the same treatment: a marginal
+    # value per domain from a linear combination, never the raw interaction
+    # coefficient (which is only the difference from the reference).
+    wanted = [('NRS_within', 'pain')]
+    if med:
+        wanted += [('med_within', 'med'),
+                   ('NRS_within:med_within', 'pain_x_med')]
+    parts = [marginal_contrast(res, domains, ref, base, label)
+             for base, label in wanted]
+    slopes = pd.concat([x for x in parts if len(x)], ignore_index=True)
     slopes.insert(0, 'band', band)
+
+    blocks = [omnibus_block(res, domains, ref, base, label)
+              for base, label in wanted]
 
     vc = mm.vcomp_by_name(res)
     rec = {
-        'band': band, 'reference_domain': ref,
+        'band': band, 'reference_domain': ref, 'med_model': bool(med),
+        **{f'omnibus_{b["block"]}_chi2': b['chi2'] for b in blocks},
+        **{f'omnibus_{b["block"]}_df': b['df'] for b in blocks},
+        **{f'p_omnibus_{b["block"]}': b['p'] for b in blocks},
         'n_rows': int(len(df)), 'n_subjects': int(df['subject'].nunique()),
         'n_parcels': int(df['parcel'].nunique()),
         'n_channels': int(df['channel_uid'].nunique()),
@@ -307,10 +439,13 @@ def fit_band(df, domains, band):
                 'df %d p %.4g | %.0fs%s', band, rec['n_rows'], rec['n_parcels'],
                 rec['n_channels'], chi2, ddf, p_omni, elapsed,
                 '' if res.converged else '  NOT CONVERGED')
+    for b in blocks:
+        logger.info('    omnibus %-11s chi2 %7.2f df %d p %.4g', b['block'],
+                    b['chi2'], b['df'], b['p'])
     for r in slopes.itertuples():
-        logger.info('    %-10s beta %+.5f (SE %.5f) z %+5.2f p %.4g%s',
-                    r.domain, r.beta_pain, r.se, r.z, r.p,
-                    '   [reference]' if r.is_reference
+        logger.info('    %-10s %-10s beta %+.5f (SE %.5f) z %+5.2f p %.4g%s',
+                    r.term, r.domain, r.beta, r.se, r.z, r.p,
+                    '   [ref]' if r.is_reference
                     else f'   vs ref {r.diff_from_ref:+.5f} p {r.diff_p:.3g}')
     return rec, slopes
 
@@ -337,6 +472,17 @@ def main():
                     default='reference')
     ap.add_argument('--allow-cohort-drift', action='store_true')
     ap.add_argument('--notch-half-width-hz', type=float, default=None)
+    ap.add_argument('--med-model', choices=['none', 'interaction'], default='none',
+                    help="'interaction' fits the FULL THREE-WAY design, "
+                         'pain x domain x medication, which nests every weaker '
+                         'version: the pain slope per domain adjusted for '
+                         'medication, the medication effect per domain, the '
+                         'pain x medication interaction, and whether THAT differs '
+                         'by domain.')
+    ap.add_argument('--drug-set', choices=list(med_state.DRUG_SETS),
+                    default='opioids')
+    ap.add_argument('--med-window-hours', type=float,
+                    default=med_state.DEFAULT_WINDOW_HOURS)
     ap.add_argument('--fdr-q', type=float, default=0.05)
     ap.add_argument('--run-name', default=RUN_NAME)
     ap.add_argument('--replot', default=None,
@@ -397,6 +543,27 @@ def main():
     logger.info('parcels per domain:\n%s',
                 coverage.groupby(['domain', 'parcel']).size().to_string())
 
+    med_lookup, med_summary = None, None
+    if args.med_model != 'none':
+        subclasses = med_state.DRUG_SETS[args.drug_set]
+        admin = med_state.load_admin_table(subclasses=subclasses)
+        bare = sorted(s.replace('sub-', '') for s in subjects)
+        mdefs = med_state.load_epoch_defs(epoch_minutes=epoch_minutes,
+                                          subjects=bare)
+        state = med_state.epoch_med_state(mdefs, admin,
+                                          hours=args.med_window_hours)
+        missing = sorted(set(mdefs['subject']) - set(admin['subject']))
+        if missing:
+            logger.warning('%d subject(s) have NO %s administrations at all, so '
+                           'every one of their epochs reads as unmedicated: %s',
+                           len(missing), args.drug_set, missing)
+        med_summary = med_state.stratum_summary(state)
+        logger.info('\n%s', med_summary.to_string(index=False))
+        med_lookup = state.assign(
+            subject_id='sub-' + state['subject'].astype(str),
+            med_state=state['med_state'].astype(float))[
+                ['subject_id', 'session', 'epoch_id', 'med_state']]
+
     kept, bands, notched = band_table(args.band_set, args.notch_half_width_hz,
                                       epoch_minutes)
     want = list(bands) if args.bands is None else [b for b in bands if b in args.bands]
@@ -414,14 +581,23 @@ def main():
             continue
         frame = pd.DataFrame({
             'subject_id': index['subject_id'].to_numpy(),
+            'session': index['session'].to_numpy(),
             'channel': index['channel'].to_numpy(),
             'epoch_id': index['epoch_id'].to_numpy(),
             'pain_score': index['pain_score'].to_numpy(),
             'value': band_values[:, bi],
             'parcel': index['parcel'].to_numpy()})
         frame['domain'] = frame['parcel'].map(parcel_to_domain)
-        df = mm.build_cell_frame(frame, extra_columns=('parcel', 'domain'))
-        rec, slopes = fit_band(df, domains, band)
+        extra = ['parcel', 'domain']
+        if med_lookup is not None:
+            frame = frame.merge(med_lookup,
+                                on=['subject_id', 'session', 'epoch_id'],
+                                how='inner')
+            extra.append('med_state')
+        df = mm.build_cell_frame(frame, extra_columns=tuple(extra))
+        if med_lookup is not None:
+            df = mm.add_med_components(df)
+        rec, slopes = fit_band(df, domains, band, med=med_lookup is not None)
         records.append(rec)
         slope_parts.append(slopes)
 
@@ -430,19 +606,35 @@ def main():
 
     # BH over the per-domain slopes (one family) and over the omnibus tests
     # (another). Two questions, two families.
-    for frame, col, out in ((slopes, 'p', 'p_bh'), (cells, 'p_omnibus', 'p_omnibus_bh')):
-        m = frame[col].notna()
-        frame[out] = np.nan
-        if m.any():
-            _, adj = cp.bh_fdr(frame.loc[m, col].to_numpy(), q=args.fdr_q)
-            frame.loc[m, out] = adj
-            frame[f'{out}_reject'] = frame[out] <= args.fdr_q
+    # BH WITHIN each term, never pooled across them: the pain slope, the
+    # medication effect and their interaction are three different questions asked
+    # of the same fit.
+    slopes['p_bh'] = np.nan
+    for term, idx in slopes.groupby('term').groups.items():
+        sub = slopes.loc[idx]
+        m = sub['p'].notna()
+        if not m.any():
+            continue
+        _, adj = cp.bh_fdr(sub.loc[m, 'p'].to_numpy(), q=args.fdr_q)
+        slopes.loc[sub.index[m], 'p_bh'] = adj
+        logger.info('BH family %r: %d cells, %d rejected', term, int(m.sum()),
+                    int((adj <= args.fdr_q).sum()))
+    slopes['p_bh_reject'] = slopes['p_bh'] <= args.fdr_q
+
+    m = cells['p_omnibus'].notna()
+    cells['p_omnibus_bh'] = np.nan
+    if m.any():
+        _, adj = cp.bh_fdr(cells.loc[m, 'p_omnibus'].to_numpy(), q=args.fdr_q)
+        cells.loc[m, 'p_omnibus_bh'] = adj
+        cells['p_omnibus_bh_reject'] = cells['p_omnibus_bh'] <= args.fdr_q
 
     from ieeg_ehr.views.view_config import ROI_SCHEME_CODES
     scheme_code = ROI_SCHEME_CODES.get(args.roi_scheme, 'paindomains')
     run_dir = config.analysis_run_dir(
         question=QUESTION, output_type=OUTPUT_TYPE,
-        view_scheme=f'{args.band_set.replace("_", "")}-{scheme_code}',
+        view_scheme='-'.join(
+            [args.band_set.replace('_', ''), scheme_code]
+            + ([args.drug_set] if args.med_model != 'none' else [])),
         run_name=args.run_name)
     run_dir.mkdir(parents=True, exist_ok=True)
     logger.info('run dir: %s', run_dir)
@@ -454,6 +646,10 @@ def main():
                                  else 'collapsed'),
               'reference_domain': domain_formula(domains)[1],
               'band_set': args.band_set, 'roi_scheme': args.roi_scheme,
+              'med_model': args.med_model,
+              'drug_set': args.drug_set if args.med_model != 'none' else None,
+              'med_window_hours': (args.med_window_hours
+                                   if args.med_model != 'none' else None),
               'roi_scheme_contents': roi_schemes.scheme_provenance(args.roi_scheme),
               'notched_bins_excluded': notched, 'fdr_q': args.fdr_q,
               'epoch_minutes': epoch_minutes,
@@ -475,6 +671,10 @@ def main():
                                      'is the interaction coefficient itself.'})
     io.write_table(coverage, run_dir / 'parcel_coverage.parquet', params=params,
                    script=SCRIPT)
+    if med_summary is not None:
+        io.write_table(med_summary, run_dir / 'med_stratum_summary.parquet',
+                       params=params, parents=[str(med_state.ADMIN_TABLE)],
+                       script=SCRIPT)
     io.write_run_provenance(run_dir, script=SCRIPT, params=params,
                             parents=[str(view_dir)], subjects=sorted(subjects),
                             extra={'status': DISCLAIMER,
@@ -486,6 +686,19 @@ def main():
                     'per band, parcel as a nested random slope (EXPLORATORY)',
                     run_dir)
     print(run_dir)
+
+
+def pain_slopes_frame(slopes):
+    """The pain-slope rows in a uniform shape, old schema or new.
+
+    Runs before 2026-09-18 wrote one row per (band, domain) with the column
+    `beta_pain`; runs after carry a `term` column and a generic `beta`, because
+    the medication design produces three contrasts per cell. Normalising here
+    keeps `--replot` working on both rather than silently drawing nothing.
+    """
+    if 'beta_pain' in slopes.columns:
+        return slopes.rename(columns={'beta_pain': 'beta'})
+    return slopes[slopes['term'] == 'pain'].copy()
 
 
 def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
@@ -509,7 +722,8 @@ def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
     from ieeg_ehr.features import common
 
     bands = list(cells['band'])
-    piv = (slopes.pivot_table(index='domain', columns='band', values='beta_pain')
+    slopes = pain_slopes_frame(slopes)
+    piv = (slopes.pivot_table(index='domain', columns='band', values='beta')
            .reindex(index=domains, columns=bands))
     rej = (slopes.assign(_r=slopes['p_bh_reject'].fillna(False).astype(bool))
            .pivot_table(index='domain', columns='band', values='_r')
@@ -566,7 +780,8 @@ def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
                  fontsize=12.5)
     fig.tight_layout(rect=(0, 0.16, 1, 0.90))
 
-    omni = ' · '.join(f'{r.band} p={r.p_omnibus:.3g}' for r in cells.itertuples())
+    col = 'p_omnibus' if 'p_omnibus' in cells.columns else 'p_omnibus_pain'
+    omni = ' · '.join(f'{r.band} p={getattr(r, col):.3g}' for r in cells.itertuples())
     fig.text(0.01, 0.005,
              'EACH CELL IS THAT DOMAIN\'S MARGINAL PAIN SLOPE TESTED AGAINST '
              'ZERO -- not against the Control domain. A significant Control cell '
@@ -598,6 +813,7 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
     import matplotlib.pyplot as plt
 
     bands = [b for b in cells['band']]
+    slopes = pain_slopes_frame(slopes)
     fig, axes = plt.subplots(1, len(bands), figsize=(2.9 * len(bands) + 1.6, 5.4),
                              sharey=True, squeeze=False)
     xmax = float(np.nanmax(np.abs(np.concatenate(
@@ -612,14 +828,15 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
         for i, dom in enumerate(domains):
             r = d.loc[dom]
             sig = bool(r.get('p_bh_reject', False))
-            ax.errorbar(r['beta_pain'], i, xerr=1.96 * r['se'], fmt='o',
+            ax.errorbar(r['beta'], i, xerr=1.96 * r['se'], fmt='o',
                         ms=8 if sig else 5.5, lw=1.8 if sig else 1.1, capsize=3,
                         color=colours.get(dom, '0.4'),
                         markerfacecolor=colours.get(dom, '0.4') if sig else 'white',
                         zorder=3)
         ax.axvline(0, color='0.5', lw=1.0, ls='--')
         omni = cells[cells['band'] == band].iloc[0]
-        ax.set_title(f'{band}\nomnibus p = {omni["p_omnibus"]:.3g}', fontsize=9)
+        p_omni = omni.get('p_omnibus', omni.get('p_omnibus_pain', np.nan))
+        ax.set_title(f'{band}\nomnibus p = {p_omni:.3g}', fontsize=9)
         ax.set_xlim(-xmax, xmax)
         ax.set_xlabel('d log10 power / pain point', fontsize=8)
         ax.tick_params(labelsize=7)
