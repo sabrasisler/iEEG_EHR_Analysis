@@ -305,6 +305,60 @@ _PAIN_DOMAIN_PATTERNS, _ = _merge_categories(
 #: a reader meets them after the regions the hypothesis is about.
 _PAIN_DOMAIN_DISPLAY = ['Sensory', 'Affective', 'Cognitive', 'Memory', 'Control']
 
+# ---------------------------------------------------------------------------
+# pain_domains_v2 -- Sabra's domain assignment (2026-09-17)
+# ---------------------------------------------------------------------------
+# Supersedes `pain_domains` for new work. The v1 scheme is KEPT rather than
+# edited, because a logged run cites it by name and rewriting the name's meaning
+# would make that run's record misleading (its provenance carries the contents,
+# so v1 stays reconstructable either way).
+#
+# FIVE CHANGES FROM v1, all Sabra's assignment:
+#   THALAMUS joins Sensory. v1 held it out because DK gives one thalamus parcel
+#     while the ascending pathway is VPL/VPM specifically. The caveat does not go
+#     away -- a Sensory effect now partly reflects medial/dorsal nuclei that sit
+#     in the affective pathway -- it is accepted deliberately, and Thalamus is one
+#     of the stronger cells in the region-level runs, so it is carrying weight.
+#   M1 leaves Sensory for its own PAIN MODULATORY domain, with Brainstem.
+#   BASAL GANGLIA becomes Unassigned, which resolves v1's impurity: the
+#     framework's affective node is ventral striatum and DK lumps dorsal striatum
+#     with it.
+#   HIPPOCAMPUS and MTL (other) become Unassigned; v1's `Memory` domain is gone.
+#   INSULA remains absent, pending the Destrieux/a2009s anterior-posterior split.
+#
+# BRAINSTEM HAS ZERO CONTACTS IN THIS COHORT -- measured 2026-09-17 over 7,068
+# contacts in 51 subjects: no brain-stem, pons, medulla, midbrain or
+# periaqueductal label at all. So `Pain modulatory` is M1 ALONE today: 82
+# contacts in 20 subjects, one parcel. It is the weakest domain in the scheme and
+# the only one whose internal consistency cannot be checked, because a
+# single-parcel domain has no parcel-to-parcel agreement to inspect. The
+# brainstem pattern is registered anyway so a future subject with such a contact
+# lands in the right place rather than in FALLBACK.
+#
+# `paracentral` stays with Sensory because roi_v2's `S1` is postcentral PLUS
+# paracentral, and the assignment above names S1. It is medial sensorimotor and
+# arguably straddles this scheme's Sensory/Modulatory boundary; 30 contacts in 10
+# subjects.
+_PAIN_DOMAINS_V2 = {
+    'Sensory': ('S1', 'S2/PO', 'Thalamus'),
+    'Affective': ('rACC', 'dACC', 'Amygdala'),
+    'Cognitive': ('mOFC', 'lOFC', 'dlPFC', 'IFG/vlPFC', 'dmPFC/SMA'),
+    'Modulatory': ('M1',),
+    'Control': ('Auditory', 'Occipital'),
+}
+
+_PAIN_DOMAIN_V2_PATTERNS, _ = _merge_categories(
+    _ROI_V2_PATTERNS, _ROI_V2_DISPLAY, _PAIN_DOMAINS_V2)
+# Registered for the future, not for today -- see the note above.
+_PAIN_DOMAIN_V2_PATTERNS['Modulatory'] = (
+    list(_PAIN_DOMAIN_V2_PATTERNS['Modulatory']) + ['brain-stem', 'brainstem'])
+
+#: Display order follows the pathway: ascending sensory, the affective and
+#: cognitive domains it projects to, the descending modulatory arm, then the
+#: quasi-controls last so a reader meets them after the hypothesis.
+_PAIN_DOMAIN_V2_DISPLAY = ['Sensory', 'Affective', 'Cognitive', 'Modulatory',
+                           'Control']
+
 ROI_SCHEMES = {
     'default': {'patterns': _DEFAULT_PATTERNS, 'display': _DEFAULT_DISPLAY},
     'roi_v2': {'patterns': _ROI_V2_PATTERNS, 'display': _ROI_V2_DISPLAY},
@@ -312,6 +366,8 @@ ROI_SCHEMES = {
                    'display': _ROI_V2_OFC_DISPLAY},
     'pain_domains': {'patterns': _PAIN_DOMAIN_PATTERNS,
                      'display': _PAIN_DOMAIN_DISPLAY},
+    'pain_domains_v2': {'patterns': _PAIN_DOMAIN_V2_PATTERNS,
+                        'display': _PAIN_DOMAIN_V2_DISPLAY},
 }
 
 DEFAULT_ROI_SCHEME = 'default'

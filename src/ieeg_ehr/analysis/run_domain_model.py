@@ -105,17 +105,28 @@ VC_DOMAIN = {
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
 
+MODULATORY_CAVEAT = (
+    'THE MODULATORY DOMAIN IS M1 ALONE. Brainstem has zero contacts in this '
+    'cohort -- measured over 7,068 contacts in 51 subjects, no brain-stem, pons, '
+    'medulla, midbrain or periaqueductal label at all -- so the descending '
+    'modulatory arm of the framework is represented by one parcel, 82 contacts '
+    'and 20 subjects. It is the weakest row in every figure and the only domain '
+    'whose internal consistency cannot be checked, because one parcel has no '
+    'parcel-to-parcel agreement to inspect.')
+
 DOMAIN_CAVEAT = (
-    'Insula and Thalamus are NOT in any domain. The framework splits anterior '
-    'insula (affective) from posterior insula (sensory) and the ascending '
-    'thalamic pathway (VPL/VPM) from the medial nuclei, and Desikan-Killiany '
-    'gives one parcel for each structure -- so assigning either to a domain '
-    'would fabricate the distinction the domains rest on. They are a '
-    'pre-specified EXTENSION, pending a nucleus-level atlas for thalamus and the '
-    'Destrieux/a2009s assignment for insula. PCC, Parietal (other) and Lateral '
-    'Temporal are absent because they are not in the framework\'s region set; '
-    'PCC carries one of the larger low-frequency effects in this cohort, so that '
-    'is a real and deliberate loss.')
+    'INSULA is not in any domain, pending the Destrieux/a2009s anterior-'
+    'posterior split: the framework puts anterior insula in the affective '
+    'pathway and posterior insula in the sensory one, and Desikan-Killiany gives '
+    'one parcel, so assigning it either way would fabricate the distinction the '
+    'domains rest on. THALAMUS *is* in Sensory by assignment, and the same class '
+    'of caveat applies to it and is accepted rather than avoided: DK gives one '
+    'thalamus parcel, the ascending pathway is VPL/VPM specifically, so a Sensory '
+    'effect here partly reflects medial and dorsal nuclei that sit in the '
+    'affective pathway. Basal Ganglia, Hippocampus, PCC, Parietal (other), MTL '
+    '(other) and Lateral Temporal are UNASSIGNED and therefore dropped; PCC '
+    'carries one of the larger low-frequency effects in this cohort, so that is a '
+    'real and deliberate loss.')
 
 
 # ============================================================================
@@ -311,7 +322,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--band-set', choices=list(BAND_SETS),
                     default='paper_bands_6_hg200')
-    ap.add_argument('--roi-scheme', default='pain_domains',
+    ap.add_argument('--roi-scheme', default='pain_domains_v2',
                     help='Scheme whose DISPLAY names are the domains and whose '
                          'patterns are the atlas parcels.')
     ap.add_argument('--hemisphere-separate', action='store_true',
@@ -572,7 +583,7 @@ def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
              'reference slope and that domain\'s interaction term, with its SE '
              'from the fitted covariance. THE OMNIBUS -- whether the domains '
              f'differ FROM EACH OTHER -- is a separate question: {omni}. '
-             f'{DOMAIN_CAVEAT}\n{DISCLAIMER}',
+             f'{MODULATORY_CAVEAT} {DOMAIN_CAVEAT}\n{DISCLAIMER}',
              fontsize=6.4, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_domain_summary.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
