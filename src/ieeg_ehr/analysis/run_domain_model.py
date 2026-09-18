@@ -392,8 +392,15 @@ def omnibus_wald(res, domains, ref):
     return stat, len(terms), float(test.pvalue)
 
 
-def fit_band(df, domains, band, med=False):
-    """(record, contrast frame) for one band."""
+def fit_band(df, domains, band, med=False, out_dir=None):
+    """(record, contrast frame) for one band, written to disk as it completes.
+
+    `out_dir` makes the run INCREMENTAL. The first version of this script created
+    its run directory only after all six fits, so a job that died at band five
+    left nothing at all -- no folder, no partial result, 40 minutes unaccounted
+    for -- and there was nothing to look at while it ran. Each band now lands the
+    moment it is finished.
+    """
     formula, ref = domain_formula(domains, med=med)
     t0 = time.time()
     res, warn = mm.fit_cell(df, VC_DOMAIN, formula=formula)
@@ -447,6 +454,33 @@ def fit_band(df, domains, band, med=False):
                     r.term, r.domain, r.beta, r.se, r.z, r.p,
                     '   [ref]' if r.is_reference
                     else f'   vs ref {r.diff_from_ref:+.5f} p {r.diff_p:.3g}')
+
+    if out_dir is not None:
+        (out_dir / 'bands').mkdir(parents=True, exist_ok=True)
+        io.write_table(pd.DataFrame([rec]), out_dir / 'bands' / f'{band}.parquet',
+                       params={'band': band}, script=SCRIPT)
+        io.write_table(slopes, out_dir / 'bands' / f'{band}_slopes.parquet',
+                       params={'band': band}, script=SCRIPT)
+
+        # RESIDUALS, so the diagnostics figure needs no refit. A domain refit is
+        # 5-20 minutes, unlike a band cell's 2 seconds, so saving the frame to
+        # refit from would not have helped -- the fitted values themselves are
+        # what is expensive, and they are ~2 MB a band.
+        try:
+            from ieeg_ehr.analysis.plot_bandpower_checks import conditional_parts
+            fitted, resid = conditional_parts(res, df)
+            io.write_table(
+                pd.DataFrame({'subject': df['subject'].to_numpy(),
+                              'epoch_id': df['epoch_id'].to_numpy(),
+                              'domain': df['domain'].to_numpy(),
+                              'fitted': fitted.astype(np.float32),
+                              'resid': resid.astype(np.float32)}),
+                out_dir / 'bands' / f'{band}_residuals.parquet',
+                params={'band': band,
+                        'residual': 'conditional (y - Xb - Zu)'},
+                script=SCRIPT, float_dtype=np.float32)
+        except Exception as exc:                        # noqa: BLE001
+            logger.warning('could not save residuals for %s: %s', band, exc)
     return rec, slopes
 
 
@@ -481,6 +515,14 @@ def main():
                          'by domain.')
     ap.add_argument('--drug-set', choices=list(med_state.DRUG_SETS),
                     default='opioids')
+    ap.add_argument('--exclude-drug-set', choices=list(med_state.DRUG_SETS),
+                    default=None,
+                    help='DROP epochs dosed with this set but NOT with '
+                         '--drug-set. With --drug-set opioids '
+                         '--exclude-drug-set non_opioid_analgesics the contrast '
+                         'becomes opioid-dosed vs ANALGESIC-FREE, instead of '
+                         'opioid-dosed vs (nothing OR acetaminophen/NSAID). The '
+                         'dropped epochs are counted, never silently reassigned.')
     ap.add_argument('--med-window-hours', type=float,
                     default=med_state.DEFAULT_WINDOW_HOURS)
     ap.add_argument('--fdr-q', type=float, default=0.05)
@@ -564,9 +606,61 @@ def main():
             med_state=state['med_state'].astype(float))[
                 ['subject_id', 'session', 'epoch_id', 'med_state']]
 
+        if args.exclude_drug_set:
+            # The comparison stratum has to be free of the OTHER drug too, or
+            # "unmedicated" silently means "no opioid, but possibly paracetamol".
+            # An epoch dosed with BOTH stays in the medicated stratum: it did
+            # receive the drug under study, and dropping it would select against
+            # the patients who get combination analgesia.
+            other = med_state.epoch_med_state(
+                mdefs, med_state.load_admin_table(
+                    subclasses=med_state.DRUG_SETS[args.exclude_drug_set]),
+                hours=args.med_window_hours)
+            other = other.assign(
+                subject_id='sub-' + other['subject'].astype(str))[
+                    ['subject_id', 'session', 'epoch_id', 'med_state']].rename(
+                        columns={'med_state': 'other_state'})
+            before = len(med_lookup)
+            med_lookup = med_lookup.merge(
+                other, on=['subject_id', 'session', 'epoch_id'], how='left')
+            drop = (med_lookup['med_state'] == 0) & (
+                med_lookup['other_state'].fillna(False).astype(bool))
+            n_drop = int(drop.sum())
+            med_lookup = med_lookup.loc[~drop, ['subject_id', 'session',
+                                                'epoch_id', 'med_state']]
+            logger.warning('EXCLUSION: dropped %d of %d epochs dosed with %s but '
+                           'NOT with %s, so the comparison stratum is free of '
+                           'both. Remaining: %d medicated, %d unmedicated.',
+                           n_drop, before, args.exclude_drug_set, args.drug_set,
+                           int((med_lookup['med_state'] == 1).sum()),
+                           int((med_lookup['med_state'] == 0).sum()))
+            med_summary = med_summary.assign(
+                note=f'before excluding {args.exclude_drug_set}')
+
     kept, bands, notched = band_table(args.band_set, args.notch_half_width_hz,
                                       epoch_minutes)
     want = list(bands) if args.bands is None else [b for b in bands if b in args.bands]
+
+    from ieeg_ehr.views.view_config import ROI_SCHEME_CODES
+    scheme_code = ROI_SCHEME_CODES.get(args.roi_scheme, 'paindomains')
+    run_dir = config.analysis_run_dir(
+        question=QUESTION, output_type=OUTPUT_TYPE,
+        view_scheme='-'.join(
+            [args.band_set.replace('_', ''), scheme_code]
+            + ([args.drug_set] if args.med_model != 'none' else [])
+            + ([f'excl{args.exclude_drug_set}'] if args.exclude_drug_set else [])),
+        run_name=args.run_name)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    logger.info('run dir (created BEFORE fitting, results append per band): %s',
+                run_dir)
+    # A PROVISIONAL provenance, so a job that dies mid-run still leaves a record
+    # of what it was trying to do. The final write at the end overwrites it with
+    # the complete params, including everything only known after fitting.
+    io.write_run_provenance(
+        run_dir, script=SCRIPT, params={**vars(args), 'status': 'IN PROGRESS'},
+        subjects=sorted(subjects),
+        extra={'status': 'started, not finished -- if this text survives, the '
+                         'run did not complete and its tables are partial'})
 
     t0 = time.time()
     index, values = fullres_cells.load_all_parcels(
@@ -597,7 +691,8 @@ def main():
         df = mm.build_cell_frame(frame, extra_columns=tuple(extra))
         if med_lookup is not None:
             df = mm.add_med_components(df)
-        rec, slopes = fit_band(df, domains, band, med=med_lookup is not None)
+        rec, slopes = fit_band(df, domains, band, med=med_lookup is not None,
+                               out_dir=run_dir)
         records.append(rec)
         slope_parts.append(slopes)
 
@@ -628,17 +723,6 @@ def main():
         cells.loc[m, 'p_omnibus_bh'] = adj
         cells['p_omnibus_bh_reject'] = cells['p_omnibus_bh'] <= args.fdr_q
 
-    from ieeg_ehr.views.view_config import ROI_SCHEME_CODES
-    scheme_code = ROI_SCHEME_CODES.get(args.roi_scheme, 'paindomains')
-    run_dir = config.analysis_run_dir(
-        question=QUESTION, output_type=OUTPUT_TYPE,
-        view_scheme='-'.join(
-            [args.band_set.replace('_', ''), scheme_code]
-            + ([args.drug_set] if args.med_model != 'none' else [])),
-        run_name=args.run_name)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    logger.info('run dir: %s', run_dir)
-
     params = {'formula': domain_formula(domains)[0],
               'variance_components': VC_DOMAIN,
               'parcel_level': 'Desikan-Killiany, hemispheres '
@@ -650,6 +734,7 @@ def main():
               'drug_set': args.drug_set if args.med_model != 'none' else None,
               'med_window_hours': (args.med_window_hours
                                    if args.med_model != 'none' else None),
+              'exclude_drug_set': args.exclude_drug_set,
               'roi_scheme_contents': roi_schemes.scheme_provenance(args.roi_scheme),
               'notched_bins_excluded': notched, 'fdr_q': args.fdr_q,
               'epoch_minutes': epoch_minutes,
