@@ -328,11 +328,31 @@ def main():
     ap.add_argument('--notch-half-width-hz', type=float, default=None)
     ap.add_argument('--fdr-q', type=float, default=0.05)
     ap.add_argument('--run-name', default=RUN_NAME)
+    ap.add_argument('--replot', default=None,
+                    help='Re-render the figures from an existing run directory '
+                         'and exit. Nothing is refitted.')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     io.warn_if_dirty()
+
+    if args.replot:
+        run_dir = Path(args.replot)
+        cells = io.read_table(run_dir / 'domain_bands.parquet', on_stale='warn')
+        slopes = io.read_table(run_dir / 'domain_slopes.parquet', on_stale='warn')
+        coverage = io.read_table(run_dir / 'parcel_coverage.parquet',
+                                 on_stale='ignore')
+        domains = [d for d in view_tables.roi_regions_for(
+            {'roi_scheme': args.roi_scheme}) if d in set(slopes['domain'])]
+        per_domain = (coverage.groupby('domain')
+                      .agg(n_parcels=('parcel', 'nunique'),
+                           n_contacts=('channel', 'size'),
+                           n_subjects=('subject_id', 'nunique'))
+                      .reindex(domains))
+        summary_figure(run_dir, cells, slopes, per_domain, domains, args)
+        figure(run_dir, cells, slopes, per_domain, domains, args)
+        return
 
     ref_run = reference_run.load(args.reference_run)
     ref_run.describe()
@@ -449,11 +469,116 @@ def main():
                             extra={'status': DISCLAIMER,
                                    'domain_caveat': DOMAIN_CAVEAT,
                                    'mask_content': CONFOUND_CAVEAT})
+    summary_figure(run_dir, cells, slopes, per_domain, domains, args)
     figure(run_dir, cells, slopes, per_domain, domains, args)
     io.log_analysis('domain-level mixed models: pain x processing domain, one fit '
                     'per band, parcel as a nested random slope (EXPLORATORY)',
                     run_dir)
     print(run_dir)
+
+
+def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
+    """WHICH domains change, in WHICH bands, and which way -- the headline grid.
+
+    Deliberately NOT the omnibus. That test answers "do the domains differ from
+    each other", which is one number per band and a question about contrasts; this
+    answers "does this domain's power track pain at all in this band", which is
+    what a reader wants first. Each cell is the domain's MARGINAL slope tested
+    against ZERO, so a significant Control cell is not a contradiction -- it is
+    the quasi-control firing, and it argues for a global or artifactual driver
+    rather than nociception.
+
+    30 cells, so the numbers are printed. A heatmap with a colourbar and no
+    values would make a reader estimate a beta off a colour ramp when the exact
+    value fits in the cell.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from ieeg_ehr.features import common
+
+    bands = list(cells['band'])
+    piv = (slopes.pivot_table(index='domain', columns='band', values='beta_pain')
+           .reindex(index=domains, columns=bands))
+    rej = (slopes.assign(_r=slopes['p_bh_reject'].fillna(False).astype(bool))
+           .pivot_table(index='domain', columns='band', values='_r')
+           .reindex(index=domains, columns=bands).fillna(0).astype(bool))
+    pval = (slopes.pivot_table(index='domain', columns='band', values='p')
+            .reindex(index=domains, columns=bands))
+
+    arr = piv.to_numpy(dtype=float)
+    cap = float(np.nanmax(np.abs(arr)))
+    cm = plt.get_cmap('RdBu_r').copy()
+    cm.set_bad('0.85')
+
+    fig, ax = plt.subplots(figsize=(1.55 * len(bands) + 4.2,
+                                    0.78 * len(domains) + 4.4))
+    im = ax.imshow(arr, aspect='auto', cmap=cm, vmin=-cap, vmax=cap,
+                   interpolation='nearest')
+    common.draw_mask_outline(ax, rej.to_numpy(), linewidth=2.4)
+
+    for i in range(len(domains)):
+        for j in range(len(bands)):
+            v, p, sig = arr[i, j], pval.to_numpy()[i, j], rej.to_numpy()[i, j]
+            if not np.isfinite(v):
+                continue
+            # White text on the saturated ends, where black would vanish.
+            shade = 'white' if abs(v) > 0.62 * cap else 'black'
+            stars = ('***' if p < 1e-3 else '**' if p < 1e-2 else
+                     '*' if p < 0.05 else '')
+            ax.text(j, i - 0.13, f'{v:+.4f}', ha='center', va='center',
+                    fontsize=9.5, color=shade,
+                    fontweight='bold' if sig else 'normal')
+            ax.text(j, i + 0.20, stars if sig else ('(ns)' if not stars else stars),
+                    ha='center', va='center', fontsize=8, color=shade,
+                    fontweight='bold' if sig else 'normal')
+
+    ax.set_xticks(range(len(bands)))
+    ax.set_xticklabels([f'{b}\n{BAND_SETS[args.band_set][b][0]}-'
+                        f'{BAND_SETS[args.band_set][b][1]} Hz' for b in bands],
+                       fontsize=9)
+    ax.set_yticks(range(len(domains)))
+    ax.set_yticklabels([f'{d}\n{int(per_domain.loc[d, "n_parcels"])} parcels, '
+                        f'{int(per_domain.loc[d, "n_contacts"])} contacts, '
+                        f'{int(per_domain.loc[d, "n_subjects"])} subj'
+                        for d in domains], fontsize=8.5)
+    ax.set_xlabel('')
+    cb = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.02)
+    cb.set_label('d log10 band power per pain point', fontsize=9)
+    cb.ax.tick_params(labelsize=8)
+
+    n_sig = int(rej.to_numpy().sum())
+    ctrl = (int(rej.loc['Control'].sum()) if 'Control' in rej.index else 0)
+    fig.suptitle('Which processing domains track pain, and in which bands\n'
+                 f'{n_sig} of {arr.size} domain x band cells significant '
+                 f'(BH q={args.fdr_q:g}); bold + outlined = significant',
+                 fontsize=12.5)
+    fig.tight_layout(rect=(0, 0.16, 1, 0.90))
+
+    omni = ' · '.join(f'{r.band} p={r.p_omnibus:.3g}' for r in cells.itertuples())
+    fig.text(0.01, 0.005,
+             'EACH CELL IS THAT DOMAIN\'S MARGINAL PAIN SLOPE TESTED AGAINST '
+             'ZERO -- not against the Control domain. A significant Control cell '
+             'is therefore not a contradiction: Occipital and Auditory are the '
+             'quasi-controls, and an effect there argues for a global or '
+             'artifactual driver rather than nociception, so read that row first. '
+             f'CONTROL ROW: {ctrl} of {len(bands)} cells significant. Stars are '
+             'the uncorrected p (* <0.05, ** <0.01, *** <0.001); bold and the '
+             f'outline are BH at q={args.fdr_q:g} over all {arr.size} cells. '
+             'Slopes come from ONE mixed model per band over every parcel at '
+             'once, with domain as a fixed effect and the atlas parcel as a '
+             'random slope nested in subject, so no domain is carried by a single '
+             'well-sampled parcel; each value is a linear combination of the '
+             'reference slope and that domain\'s interaction term, with its SE '
+             'from the fitted covariance. THE OMNIBUS -- whether the domains '
+             f'differ FROM EACH OTHER -- is a separate question: {omni}. '
+             f'{DOMAIN_CAVEAT}\n{DISCLAIMER}',
+             fontsize=6.4, va='bottom', ha='left', color='0.35', wrap=True)
+    out = run_dir / 'fig_domain_summary.png'
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    logger.info('wrote %s', out)
+    return out
 
 
 def figure(run_dir, cells, slopes, per_domain, domains, args):
