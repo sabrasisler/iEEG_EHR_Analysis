@@ -148,14 +148,51 @@ def load_frame(run_dir, cell_index):
     return io.read_table(path, on_stale='ignore')
 
 
+def _explicit_conditional_fit(res):
+    """Xb + Zu rebuilt from the model's OWN design matrices.
+
+    Mirrors `MixedLMResults.fittedvalues` (statsmodels 0.14.6,
+    `regression/mixed_linear_model.py:2418`), which sums the fixed part with the
+    random part of EVERY variance component:
+
+        mat = [exog_re_li[g]] + [exog_vc.mats[j][g] for j in range(k_vc)]
+        fit[rows(g)] += concat(mat, axis=1) @ random_effects[g]
+
+    Indexing by `k_vc` rather than by variance-component NAME is the whole point.
+    An earlier version matched hard-coded keys ('subj_int[Intercept]',
+    'subj_slope[NRS_within]', 'channel[C(channel_uid)[...]') and therefore
+    silently dropped any component it had not been told about -- which is exactly
+    what happened to the domain model's `subj_parcel_slope`
+    ('0 + C(parcel):NRS_within'): the reconstruction came up 0.25 log units short,
+    the mismatch guard fired, and the fallback returned the INCOMPLETE vector as
+    the conditional residual. Enumerating components makes that failure
+    impossible for any `vc_formula`.
+    """
+    model = res.model
+    fit = np.asarray(model.exog, dtype=float) @ np.asarray(res.fe_params, dtype=float)
+    re = res.random_effects
+    for group_ix, group in enumerate(model.group_labels):
+        rows = model.row_indices[group]
+        mat = []
+        if model.exog_re_li is not None:
+            mat.append(np.asarray(model.exog_re_li[group_ix], dtype=float))
+        for j in range(res.k_vc):
+            block = model.exog_vc.mats[j][group_ix]
+            block = block.toarray() if hasattr(block, 'toarray') else np.asarray(block)
+            mat.append(np.asarray(block, dtype=float))
+        fit[rows] += np.concatenate(mat, axis=1) @ np.asarray(re[group], dtype=float)
+    return fit
+
+
 def conditional_parts(res, df, tol=1e-6):
     """(conditional fitted Xb + Zu, conditional residuals y - Xb - Zu).
 
-    `MixedLMResults.fittedvalues` ALREADY CONTAINS THE RANDOM EFFECTS. Verified
-    against statsmodels 0.14.6 on this model (2026-09-17): it differs from
+    `MixedLMResults.fittedvalues` ALREADY CONTAINS THE RANDOM EFFECTS -- it is
+    defined as Xb + Zu over all variance components, so `res.resid` IS the
+    conditional residual and NOTHING needs subtracting. Verified against
+    statsmodels 0.14.6 on this model (2026-09-17): it differs from
     `exog @ fe_params` by up to 2.6 log units, and `res.resid` has SD 0.2140
-    against sqrt(scale) = 0.2165 and is uncorrelated with Xb to 1e-12. So `resid`
-    is the conditional residual already and NOTHING needs subtracting.
+    against sqrt(scale) = 0.2165 and is uncorrelated with Xb to 1e-12.
 
     An earlier version of this function believed the opposite and subtracted Zu a
     second time. That double-counted every channel intercept and produced a clean
@@ -163,43 +200,31 @@ def conditional_parts(res, df, tol=1e-6):
     like a failed transform and would have been reported as one.
 
     The random effects are still reconstructed here, purely to ASSERT that
-    reading. If a future statsmodels changes what `fittedvalues` means, this
-    warns and falls back to the explicit construction instead of silently drawing
-    the wrong diagnostic.
+    reading, so that a future statsmodels redefining `fittedvalues` is caught
+    rather than silently drawn. On disagreement the tie is broken by which
+    candidate's residual SD sits closer to sqrt(scale) -- a property neither
+    construction was fitted to match -- and BOTH numbers are logged so the choice
+    is auditable instead of assumed.
     """
     fitted = np.asarray(res.fittedvalues, dtype=float)
     y = df['log10_power'].to_numpy(dtype=float)
-
-    marginal = np.asarray(res.model.exog, dtype=float) @ np.asarray(res.fe_params,
-                                                                   dtype=float)
-    re = np.zeros(len(df), dtype=float)
-    subj = df['subject'].to_numpy()
-    uid = df['channel_uid'].to_numpy()
-    within = df['NRS_within'].to_numpy(dtype=float)
-    chan_effect = {}
-    for subject, eff in res.random_effects.items():
-        m = subj == subject
-        if not m.any():
-            continue
-        re[m] += float(eff.get('subj_int[Intercept]', 0.0))
-        re[m] += float(eff.get('subj_slope[NRS_within]', 0.0)) * within[m]
-        for key, val in eff.items():
-            if key.startswith('channel[C(channel_uid)['):
-                chan_effect[key.split('[C(channel_uid)[')[1].rstrip(']')] = float(val)
-    if chan_effect:
-        re += np.array([chan_effect.get(u, 0.0) for u in uid])
-    explicit = marginal + re
+    explicit = _explicit_conditional_fit(res)
 
     gap = float(np.nanmax(np.abs(fitted - explicit)))
-    if gap > tol:
-        logger.warning(
-            'res.fittedvalues does not match Xb + Zu (max |diff| = %.3g). Either '
-            'statsmodels changed what fittedvalues means, or a random-effect key '
-            'is unrecognised (%d of %d channels matched). Using the EXPLICIT '
-            'construction, which is what a conditional residual is.',
-            gap, len(chan_effect), df['channel_uid'].nunique())
-        return explicit, y - explicit
-    return fitted, y - fitted
+    if gap <= tol:
+        return fitted, y - fitted
+
+    target = float(np.sqrt(res.scale))
+    sd_fitted = float(np.nanstd(y - fitted))
+    sd_explicit = float(np.nanstd(y - explicit))
+    use_explicit = abs(sd_explicit - target) < abs(sd_fitted - target)
+    logger.warning(
+        'res.fittedvalues does not match the explicit Xb + Zu (max |diff| = %.3g) '
+        '-- statsmodels may have changed what fittedvalues means. residual SD: '
+        'fittedvalues %.4f, explicit %.4f, sqrt(scale) %.4f. Using %s.',
+        gap, sd_fitted, sd_explicit, target,
+        'the EXPLICIT construction' if use_explicit else 'res.fittedvalues')
+    return (explicit, y - explicit) if use_explicit else (fitted, y - fitted)
 
 
 def epoch_times(subjects, epoch_minutes=None):
