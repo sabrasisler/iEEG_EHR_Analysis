@@ -126,11 +126,42 @@ non-opioid-only epochs costs 16% of the rows and does three separable things:
   Cognitive −0.0036 vs −0.0076) and lose significance. Overall medication cells
   18/30 → 15/30, sign agreement only 87% — the term is the least stable of the
   three.
-- **The pain × opioid interaction SHARPENS, on less data.** Omnibus: theta
-  0.0028 → 5.5e-05, gamma 0.447 → **0.0097**, high_gamma 0.729 → **0.042**.
-  Significant cells 6/30 → 9/30. Expected direction — the old "unmedicated"
-  stratum was 23% analgesic-dosed, which blurred the very contrast the
-  interaction measures.
+- **The pain × opioid interaction SHARPENS, on less data — UNDER TEST.**
+  Omnibus: theta 0.0028 → 5.5e-05, gamma 0.447 → **0.0097**, high_gamma 0.729 →
+  **0.042**. Significant cells 6/30 → 9/30. Chi2 rises in all six bands while the
+  pain chi2 FALLS in all six, which is the right behaviour for a between-stratum
+  contrast being de-attenuated and for a main effect losing power — but a 3.6x
+  chi2 rise on 16% less data is strong enough to demand a control rather than a
+  story. See below.
+
+**The interaction result is not yet believed.** The decomposition says the move
+is entirely in the coefficients, not the precision:
+
+| term | median \|beta\| ratio (new/old) | median SE ratio |
+|---|---|---|
+| pain | 0.92 | 1.13 |
+| med | 1.11 | 1.07 |
+| pain x med | **1.34** | 1.06 |
+
+That is the signature of **non-differential exposure misclassification biasing
+toward the null**: 23% of the old "unmedicated" stratum was analgesic-dosed, and
+the interaction is a contrast BETWEEN strata, so a dirty reference stratum
+shrinks it. The pain main effect averages over both strata and does not care
+where the boundary sits — which is why it is unmoved at r=0.987. Coherent, and
+the magnitude is about right for 23% misclassification.
+
+But two other things also changed, and neither is analgesic-specific: the
+medicated fraction moved 34.7% → 40.8% (so the binary predictor's variance rose
+~6.6%), and `--exclude-drug-set` drops rows BEFORE `build_cell_frame` and
+`add_med_components` run, so `NRS_within` and `med_within` are RE-CENTRED on the
+retained epochs — they are literally different variables in the two runs, not the
+same variable with fewer rows.
+
+`--drop-random-unmedicated 356` (commit `0e04346`) is the negative control: it
+matches the exclusion on sample size, on the medicated fraction and on the
+re-centring, varying only WHICH epochs leave. Three seeds submitted 2026-09-18.
+If the interaction chi2 rises there too, the effect is resampling, not
+analgesics.
 
 Shape of the interaction: **positive at gamma/high-gamma** (Sensory +0.0064,
 Cognitive +0.0037, Control +0.0054 — pain's positive high-frequency slope gets
@@ -259,9 +290,10 @@ medication effect is at that patient's own average pain — **not** zero pain.
 1. Figure B for the five domain runs (~10 min each).
 2. Figure C for the domain model — needs a refit at `32df4d5`, since the only
    saved residuals are the invalid ones (`TASKS.md`).
-3. Beta band is unidentified in the domain fits (`var_subj_slope` 0.0227 vs
-   ~0.0003 elsewhere, Hessian not positive definite). Quote its omnibus, never a
-   per-domain beta pain slope, until that is pinned down (`TASKS.md`).
+3. The beta row of the opioid-vs-analgesic-free run is a FAILED FIT, omnibus
+   included — `var_subj_slope` 130x its value in the converging run, Hessian not
+   positive definite (`TASKS.md`). Add a `var_subj_slope`-vs-neighbours tripwire
+   to every domain fit.
 4. Blocked permutation before any permutation p is quoted.
 5. Decide whether the >100 Hz nominations are physiology or EMG (`TASKS.md`).
 6. Explain the Control domain's low-frequency behaviour — it carries both the

@@ -466,13 +466,17 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       uses the model's own `exog_vc.mats`); correct residuals need a refit,
       ~35 min for 6 bands. Coefficients, SEs, omnibus tests and both figures in
       that run are UNAFFECTED. (→ docs/labnotebook/2026-09-18.md)
-- [ ] **Treat the beta-band pain marginals in the domain runs as unidentified
-      until the fit is stabilised.** In the opioid-vs-analgesic-free run beta is
-      the only band that failed its first optimisation (lbfgs retry, Hessian not
-      positive definite) and its `var_subj_slope` is 0.0227 against ~0.0003 in
-      every other band — two orders of magnitude. The consequence is visible in
-      Figure A: the beta pain omnibus is p=6.4e-07 while every per-domain beta CI
-      spans about +/-0.04, i.e. the DIFFERENCES between domains are precise but
-      the levels are not. Quote the beta omnibus if anything, never a per-domain
-      beta pain slope, until the variance component is pinned down.
+- [ ] **Discard the whole beta row of the opioid-vs-analgesic-free domain run —
+      the fit failed.** Beta is the only band that newly failed to converge
+      (lbfgs retry, then Hessian not positive definite); the SAME band in the
+      un-excluded opioid run converged with only the routine boundary warning.
+      Its `var_subj_slope` went 0.000174 → 0.0227 (**130x**) and `var_subj_int`
+      0.373 → 0.745, while every other band's components moved by 1.0-1.5x. The
+      wide CIs in Figure A are the direct arithmetic consequence:
+      sqrt(0.0227/51)*1.96 = ±0.041, which is what the figure shows, against
+      ±0.003 for gamma. The optimiser dumped the pain signal into the
+      between-subject slope variance. The omnibus is NOT salvageable either — it
+      comes from the same non-PD Hessian. Refit with a better start (e.g. the
+      converged run's params) or drop beta from that run. Check every future
+      domain fit's `var_subj_slope` against its neighbours as a tripwire.
       (→ docs/labnotebook/2026-09-18.md)
