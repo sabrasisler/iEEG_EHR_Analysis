@@ -523,6 +523,19 @@ def main():
                          'becomes opioid-dosed vs ANALGESIC-FREE, instead of '
                          'opioid-dosed vs (nothing OR acetaminophen/NSAID). The '
                          'dropped epochs are counted, never silently reassigned.')
+    ap.add_argument('--drop-random-unmedicated', type=int, default=None,
+                    metavar='N',
+                    help='NEGATIVE CONTROL for --exclude-drug-set. Drop N '
+                         'unmedicated epochs chosen AT RANDOM instead of the '
+                         'ones dosed with the excluded drug. Matches the '
+                         'exclusion on sample size, on the medicated FRACTION '
+                         '(and so on the binary predictor variance), and on the '
+                         'fact that both predictors get re-centred on a smaller '
+                         'set -- everything except WHICH epochs leave. If the '
+                         'interaction still moves, the move is about resampling '
+                         'and re-centring, not about analgesics.')
+    ap.add_argument('--drop-seed', type=int, default=0,
+                    help='Seed for --drop-random-unmedicated.')
     ap.add_argument('--med-window-hours', type=float,
                     default=med_state.DEFAULT_WINDOW_HOURS)
     ap.add_argument('--fdr-q', type=float, default=0.05)
@@ -637,6 +650,26 @@ def main():
             med_summary = med_summary.assign(
                 note=f'before excluding {args.exclude_drug_set}')
 
+        if args.drop_random_unmedicated:
+            # The negative control for the exclusion above. Same number of
+            # unmedicated epochs leave, so the medicated fraction, the binary
+            # predictor's variance and the re-centring of BOTH predictors on a
+            # smaller set all move the same way -- only the SELECTION differs.
+            # Positional, not by index label: med_lookup reaches here with a
+            # different index depending on whether --exclude-drug-set ran.
+            unmed = np.flatnonzero((med_lookup['med_state'] == 0).to_numpy())
+            n_drop = min(args.drop_random_unmedicated, len(unmed))
+            rng = np.random.default_rng(args.drop_seed)
+            keep = np.ones(len(med_lookup), dtype=bool)
+            keep[rng.choice(unmed, size=n_drop, replace=False)] = False
+            med_lookup = med_lookup[keep]
+            logger.warning('RANDOM-DROP CONTROL: dropped %d of %d unmedicated '
+                           'epochs at random (seed %d). Remaining: %d medicated, '
+                           '%d unmedicated.',
+                           n_drop, len(unmed), args.drop_seed,
+                           int((med_lookup['med_state'] == 1).sum()),
+                           int((med_lookup['med_state'] == 0).sum()))
+
     kept, bands, notched = band_table(args.band_set, args.notch_half_width_hz,
                                       epoch_minutes)
     want = list(bands) if args.bands is None else [b for b in bands if b in args.bands]
@@ -648,7 +681,9 @@ def main():
         view_scheme='-'.join(
             [args.band_set.replace('_', ''), scheme_code]
             + ([args.drug_set] if args.med_model != 'none' else [])
-            + ([f'excl{args.exclude_drug_set}'] if args.exclude_drug_set else [])),
+            + ([f'excl{args.exclude_drug_set}'] if args.exclude_drug_set else [])
+            + ([f'randdrop{args.drop_random_unmedicated}s{args.drop_seed}']
+               if args.drop_random_unmedicated else [])),
         run_name=args.run_name)
     run_dir.mkdir(parents=True, exist_ok=True)
     logger.info('run dir (created BEFORE fitting, results append per band): %s',
@@ -735,6 +770,8 @@ def main():
               'med_window_hours': (args.med_window_hours
                                    if args.med_model != 'none' else None),
               'exclude_drug_set': args.exclude_drug_set,
+              'drop_random_unmedicated': args.drop_random_unmedicated,
+              'drop_seed': args.drop_seed,
               'roi_scheme_contents': roi_schemes.scheme_provenance(args.roi_scheme),
               'notched_bins_excluded': notched, 'fdr_q': args.fdr_q,
               'epoch_minutes': epoch_minutes,
