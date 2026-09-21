@@ -1191,6 +1191,35 @@ MED_FORMULA_NOTE = (
     '(1 | subject:channel). BOTH predictors are SUBJECT-MEAN-CENTRED, so every '
     'coefficient is read at the OTHER one\'s patient-specific mean. ')
 
+DX_FORMULA_NOTE = (
+    'log10_power ~ NRS_within * C(domain) * dx_state + NRS_submean + '
+    '(NRS_within || subject) + (NRS_within || subject:parcel) + '
+    '(1 | subject:channel). `dx_state` is a SUBJECT-LEVEL 0/1 constant and is '
+    'NOT subject-mean-centred -- unlike `med_within` it has no within-patient '
+    'part to centre -- so every coefficient here is read IN THE CONTROL '
+    'STRATUM, not at a patient\'s own average diagnosis state, which would be '
+    'meaningless. ')
+
+
+def formula_note(args):
+    """The formula THE RUN ACTUALLY FITTED, for a figure caption.
+
+    Keyed on the run's flags rather than on which term is being drawn. The
+    earlier version picked the medication note for medication terms and
+    otherwise fell back to the pain-only formula, which mislabelled two things:
+    a diagnosis run's captions claimed a model with no `dx_state` in it, and
+    even the `pain` panel of a med or dx run names a conditional slope whose
+    conditioning the pain-only string does not mention.
+    """
+    if args.dx_model != 'none':
+        return DX_FORMULA_NOTE
+    if args.med_model != 'none':
+        return MED_FORMULA_NOTE
+    return ('log10_power ~ NRS_within * C(domain) + NRS_submean + '
+            '(NRS_within || subject) + (NRS_within || subject:parcel) '
+            '+ (1 | subject:channel). ')
+
+
 SPECTRA_TERMS = {
     'pain': dict(
         out='fig_domain_spectra.png',
@@ -1213,6 +1242,48 @@ SPECTRA_TERMS = {
                 'medication effect evaluated at 6. Medication is also not '
                 'randomised -- it is given BECAUSE of pain -- so this is an '
                 'association with the dosed state, not a drug effect.'),
+    # The diagnosis pair. Deliberately NOT sharing a figure with the medication
+    # pair even though the shapes match: `med_within` is subject-mean-centred
+    # and `dx_state` is a raw subject-level 0/1, so a `med` coefficient is read
+    # at the patient's own average dosing while a `dx` coefficient is read in
+    # the control stratum. Same layout, different conditioning, so separate
+    # figures with separate captions.
+    #
+    # `pain_slope_by_stratum` is deliberately absent: it carries TWO rows per
+    # (band, domain) and this layout draws one marker per band, so it would
+    # silently plot whichever stratum happened to sort first. Both strata are in
+    # `fig_dx_domain.png` instead, which is built for the pairing.
+    'dx': dict(
+        out='fig_domain_spectra_dx.png',
+        omnibus='p_omnibus_dx',
+        title='MDD effect on power LEVEL by processing domain',
+        xlabel='d log10 power, MDD - control',
+        reading='Each marker is the difference in mean log10 power between '
+                'diagnosis strata, read AT THAT PATIENT\'S OWN MEAN PAIN '
+                '(NRS_within is subject-mean-centred, so NRS_within = 0 is the '
+                'patient\'s average NRS, not zero pain). TREAT THIS PANEL AS A '
+                'NUISANCE TERM, NOT A RESULT: absolute log power level is set '
+                'partly by electrode impedance, amplifier gain and where a '
+                'contact sits inside a parcel, all of which are multiplicative '
+                'in power and therefore ADDITIVE in log space -- the same place '
+                'this coefficient lives. A between-patient LEVEL contrast is '
+                'confounded with hardware in a way a within-patient SLOPE is '
+                'not, which is why the slope terms are the interpretable ones '
+                'and this one gets no BH family.'),
+    'pain_x_dx': dict(
+        out='fig_domain_spectra_dx_interaction.png',
+        omnibus='p_omnibus_pain_x_dx',
+        title='PAIN x MDD interaction by processing domain',
+        xlabel='change in the pain slope in MDD',
+        reading='Each marker is how much the within-patient pain slope DIFFERS '
+                'in MDD patients, in units of d log10 power per pain point. '
+                'Positive means the pain slope is more positive in MDD. This is '
+                'THE ESTIMAND of the diagnosis analysis -- the only term here '
+                'that tests a difference between strata rather than describing '
+                'one -- and it is a BETWEEN-PATIENT contrast, so its standard '
+                'errors are about twice the pain slope\'s on this cohort and it '
+                'is underpowered by construction. A null with a wide interval '
+                'is "not resolved at this n", not "no difference".'),
     'pain_x_med': dict(
         out='fig_domain_spectra_interaction.png',
         omnibus='p_omnibus_pain_x_med',
@@ -1528,10 +1599,7 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args,
     fig.text(0.01, 0.005,
              'SAME MODEL AND SAME NUMBERS as the by-band figure -- one fit '
              'per band, read down instead of across: '
-             + (MED_FORMULA_NOTE if term in ('med', 'pain_x_med')
-                else 'log10_power ~ NRS_within * C(domain) + NRS_submean + '
-                     '(NRS_within || subject) + (NRS_within || subject:parcel) '
-                     '+ (1 | subject:channel). ')
+             + formula_note(args)
              + spec['reading'] + ' The connecting line joins ORDINAL band '
              'categories of unequal width (delta 1-4 Hz, high_gamma 70-200 Hz) '
              'with gaps between them, and with the line-noise bins removed; it '
