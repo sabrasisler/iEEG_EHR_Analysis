@@ -49,10 +49,14 @@ EXCLUDE_REASON=${EXCLUDE_REASON:-}
 args=()
 [ -n "${EXCLUDE_REGIONS}" ] && args+=(--exclude-regions "${EXCLUDE_REGIONS}")
 [ -n "${EXCLUDE_REASON}" ] && args+=(--exclude-reason "${EXCLUDE_REASON}")
+# `${args[@]+...}` and NOT a bare "${args[@]}": under `set -u` bash treats an
+# EMPTY array's expansion as an unbound variable and kills the job before
+# python starts. It only bites when neither exclusion is passed, which is why
+# it survived every run that used them.
 
 echo "=== bandpower mixed models | $(date) ==="
 RUN_DIR=$(python -m ieeg_ehr.analysis.run_bandpower_mixed --stage fit \
-    "${args[@]}" ${EXTRA} | tail -1)
+    ${args[@]+"${args[@]}"} ${EXTRA} | tail -1)
 echo "    run: ${RUN_DIR}"
 python -m ieeg_ehr.analysis.run_bandpower_mixed --stage collect --run-dir "${RUN_DIR}"
 echo "=== done ($(date)) ==="
