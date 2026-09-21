@@ -480,3 +480,29 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       converged run's params) or drop beta from that run. Check every future
       domain fit's `var_subj_slope` against its neighbours as a tripwire.
       (→ docs/labnotebook/2026-09-18.md)
+- [ ] **Take the prefrontal-beta MDD cluster to the hold-out cohort, not to
+      another discovery re-slice.** dlPFC / IFG/vlPFC / dmPFC/SMA in beta all
+      show an MDD pain slope ~3x the control slope (+0.014 to +0.017), they are
+      in the top 8 of BOTH label windows, and the domain model's Cognitive row
+      nominates the same cluster. Nothing survives BH in discovery and nothing
+      will: re-balancing the strata from 17-vs-34 to 26-vs-25 left the median
+      interaction SE unchanged at 0.0064, so the binding constraint is total
+      subject count, not allocation. Gate on the `--split` flag per CLAUDE.md.
+      (→ docs/labnotebook/2026-09-20.md)
+- [ ] **Rebuild the medication admin table with the full taxonomy, not just
+      analgesics.** `admin_table_20260903-145332` has `level1 == 'Analgesics'`
+      and nothing else, so the antidepressant confound to the MDD analysis had
+      to be computed by re-scanning the raw `med-admin.csv` files ad hoc. It is
+      a real confound — MDD cases are 13.7x more likely to be on an
+      antidepressant in the EMU (29% vs 3%, Fisher p = 0.012) — and it will be
+      needed again for anticonvulsants and antipsychotics. Rebuild with all of
+      `med_taxonomy`, then add `--exclude-antidepressant-subjects` as the
+      sensitivity run (drops 5 of 17 cases, leaving 12).
+      (→ docs/labnotebook/2026-09-20.md)
+- [ ] **theta and delta are not usable in the domain model and should be
+      excluded or refit.** Their interaction SEs run 0.067-0.13 against ~0.005
+      in the other four bands (20x), and theta's own omnibus PAIN term is
+      p = 0.799 — the fit is not resolving the fixed effects at all, which is a
+      conditioning problem and not a null. Same tripwire as the beta-row task
+      above: check `var_subj_slope` against its neighbouring bands.
+      (→ docs/labnotebook/2026-09-20.md)

@@ -287,6 +287,17 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       whether a gate should eventually be adopted and what would justify its value.
       (→ analysis/cluster_permutation.py, docs/cluster_permutation.md)
 
+- **Should the surface figure's subcortical panel be real 3D meshes instead of
+      two axial cuts?** The cuts are legible and cost nothing, but they are a
+      different visual language from the three cortical views beside them, and a
+      reader has to switch between "inflated surface" and "slice" inside one
+      figure. Meshes would need marching cubes (scikit-image does not install
+      against this cluster's glibc 2.17) or a cached `mri_tessellate` artifact,
+      and the first attempt — a boundary-voxel point cloud — was rejected as
+      unreadable because the four structures nest inside each other and occlude
+      from every viewpoint. Worth revisiting only if the figure goes in a paper.
+      (→ docs/labnotebook/2026-09-19.md)
+
 ## Next steps (session-end dump — `/standup` reads this tomorrow)
 
 - [ ] Lab-notebook system is built but unexercised. The real test is whether
@@ -345,3 +356,24 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
       unmedicated stratum is the only place a pain effect is interpretable, which
       is a much smaller analysis (1570 epochs, and a compressed NRS range:
       unmedicated mean 2.22). (→ docs/labnotebook/2026-09-17.md)
+- The MDD label is 11-of-17 billing-code-only under the 90-day rule but only
+  6-of-26 under `ever`, and the two windows' interaction betas correlate at
+  r = 0.866. That combination is slightly surprising: if billing-only codes were
+  mostly noise, the better-supported `ever` label should have moved the estimates
+  more than it did. Two readings. Either the billing codes are actually decent
+  proxies (in which case source-tier sensitivity is not worth running), or both
+  labels are dominated by the same subset of subjects who carry codes of every
+  kind and the marginal subjects contribute little either way. The second is
+  checkable — look at whether the 9 subjects who switch arms between the two
+  windows have systematically smaller |per-subject slope| than the stable ones.
+  Worth resolving before spending the hold-out on this.
+- Rebalancing the strata bought exactly zero precision (median interaction SE
+  0.00643 at 17-vs-34, 0.00641 at 26-vs-25). Worth understanding properly rather
+  than just noting: for a between-subject moderator the SE should scale roughly
+  as sqrt(1/n1 + 1/n2), which predicts a ~15% improvement going from 17/34 to
+  26/25. Getting none of it suggests the between-subject slope variance
+  (`var_subj_slope`) rather than the allocation is what dominates, i.e. subjects
+  differ so much in their pain slope that grouping them barely helps. If that is
+  right it is a general statement about this cohort and applies to ANY
+  subject-level moderator we might try (sex, age, chronicity), not just MDD —
+  which would be worth knowing before designing the next one.
