@@ -710,6 +710,27 @@ def main():
 
     if args.replot:
         run_dir = Path(args.replot)
+        # Take the run's OWN parameters from its provenance, not from argparse
+        # defaults. A replot invoked without --drug-set would otherwise inherit
+        # the default 'opioids' and caption an analgesics figure as an opioid
+        # one -- a wrong label on a real figure, not a cosmetic slip.
+        prov_path = run_dir / 'provenance.json'
+        if prov_path.exists():
+            import json
+            prov = json.loads(prov_path.read_text())
+            prov = prov.get('params', prov)
+            for key in ('drug_set', 'exclude_drug_set', 'med_window_hours',
+                        'med_model', 'roi_scheme', 'band_set'):
+                if key in prov and prov[key] is not None:
+                    if getattr(args, key, None) != prov[key]:
+                        logger.info('replot: %s = %r (from provenance, '
+                                    'overriding %r)', key, prov[key],
+                                    getattr(args, key, None))
+                    setattr(args, key, prov[key])
+        else:
+            logger.warning('no provenance.json in %s -- captions will use '
+                           'argparse defaults and may name the wrong drug set',
+                           run_dir)
         cells = io.read_table(run_dir / 'domain_bands.parquet', on_stale='warn')
         slopes = io.read_table(run_dir / 'domain_slopes.parquet', on_stale='warn')
         coverage = io.read_table(run_dir / 'parcel_coverage.parquet',
@@ -723,7 +744,9 @@ def main():
                       .reindex(domains))
         summary_figure(run_dir, cells, slopes, per_domain, domains, args)
         figure(run_dir, cells, slopes, per_domain, domains, args)
-        figure_by_domain(run_dir, cells, slopes, per_domain, domains, args)
+        for _t in SPECTRA_TERMS:
+            figure_by_domain(run_dir, cells, slopes, per_domain,
+                             domains, args, term=_t)
         return
 
     ref_run = reference_run.load(args.reference_run)
@@ -989,7 +1012,9 @@ def main():
                                    'mask_content': CONFOUND_CAVEAT})
     summary_figure(run_dir, cells, slopes, per_domain, domains, args)
     figure(run_dir, cells, slopes, per_domain, domains, args)
-    figure_by_domain(run_dir, cells, slopes, per_domain, domains, args)
+    for _t in SPECTRA_TERMS:
+        figure_by_domain(run_dir, cells, slopes, per_domain, domains,
+                         args, term=_t)
     if args.dx_model != 'none':
         dx_domain_figure(run_dir, cells, slopes, domains, args)
     io.log_analysis('domain-level mixed models: pain x processing domain, one fit '
@@ -1117,6 +1142,69 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
     plt.close(fig)
     logger.info('wrote %s', out.name)
     return out
+
+
+#: Per-term specification for the by-domain spectral figures. Each term is its
+#: OWN figure with its OWN shared x scale, never a shared one: the units differ
+#: (per pain point / per dose-state switch / per pain point per dose-state
+#: switch), so one scale across terms would be the dual-axis mistake wearing a
+#: different hat. The omnibus column differs per term too -- it is a separate
+#: joint Wald on that term's interaction block.
+MED_FORMULA_NOTE = (
+    'log10_power ~ NRS_within * C(domain) * med_within + NRS_submean + '
+    'med_submean + (NRS_within || subject) + (NRS_within || subject:parcel) + '
+    '(1 | subject:channel). BOTH predictors are SUBJECT-MEAN-CENTRED, so every '
+    'coefficient is read at the OTHER one\'s patient-specific mean. ')
+
+SPECTRA_TERMS = {
+    'pain': dict(
+        out='fig_domain_spectra.png',
+        omnibus='p_omnibus_pain',
+        title='Pain-power SPECTRAL PROFILE by processing domain',
+        xlabel='d log10 power / pain point',
+        reading='Each marker is the WITHIN-PATIENT slope of log10 power on pain, '
+                'read at that patient\'s own average medication state -- NOT at '
+                'unmedicated.'),
+    'med': dict(
+        out='fig_domain_spectra_med.png',
+        omnibus='p_omnibus_med',
+        title='MEDICATION effect on power by processing domain',
+        xlabel='d log10 power when recently dosed',
+        reading='Each marker is the change in log10 power for a 0->1 dose-state '
+                'switch, read AT THAT PATIENT\'S OWN MEAN PAIN. Because '
+                'NRS_within is subject-mean-centred, that is the patient\'s '
+                'average NRS, which is NOT zero pain, NOT a pain-free baseline '
+                'and NOT the cohort mean: a patient averaging NRS 6 has their '
+                'medication effect evaluated at 6. Medication is also not '
+                'randomised -- it is given BECAUSE of pain -- so this is an '
+                'association with the dosed state, not a drug effect.'),
+    'pain_x_med': dict(
+        out='fig_domain_spectra_interaction.png',
+        omnibus='p_omnibus_pain_x_med',
+        title='PAIN x MEDICATION interaction by processing domain',
+        xlabel='change in the pain slope when dosed',
+        reading='Each marker is how much the within-patient pain slope CHANGES '
+                'for a 0->1 dose-state switch, in units of d log10 power per '
+                'pain point per switch. Positive means the pain slope becomes '
+                'more positive when dosed. This is the only one of the three '
+                'terms that is a contrast BETWEEN medication strata, so it is '
+                'the one most sensitive to what the comparison stratum contains '
+                '-- see --exclude-drug-set.'),
+}
+
+
+def term_slopes_frame(slopes, term):
+    """The rows for one term in a uniform shape, old schema or new.
+
+    Generalises `pain_slopes_frame`. Old runs carry only a pain slope and no
+    `term` column, so anything but 'pain' comes back EMPTY rather than raising --
+    the caller skips that figure and says so.
+    """
+    if 'beta_pain' in slopes.columns:
+        if term != 'pain':
+            return slopes.iloc[0:0].rename(columns={'beta_pain': 'beta'})
+        return slopes.rename(columns={'beta_pain': 'beta'})
+    return slopes[slopes['term'] == term].copy()
 
 
 def pain_slopes_frame(slopes):
@@ -1307,7 +1395,8 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
     logger.info('wrote %s', out)
 
 
-def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args):
+def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args,
+                     term='pain'):
     """`fig_domain_slopes.png` transposed: ONE PANEL PER DOMAIN, bands as rows.
 
     Same numbers, same model, different question. The by-band figure asks "at
@@ -1315,6 +1404,11 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args):
     omnibus, which is a within-band contrast ACROSS domains. This one asks
     "what is this network's SPECTRAL PROFILE?" -- a question the by-band layout
     can only answer by eye-hopping across six panels.
+
+    Drawn once per TERM of the medication design (`SPECTRA_TERMS`), each to its
+    own file with its own shared x scale. The three are never put on one scale:
+    the units are per pain point, per dose-state switch, and per pain point per
+    dose-state switch respectively.
 
     Three consequences of the transpose, all deliberate:
 
@@ -1326,7 +1420,8 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args):
       that reason.
     - The omnibus is a property of a BAND, not of a domain, so it cannot sit in
       a panel title here. It moves to the shared y axis, beside the band name,
-      where it annotates the row it actually describes and appears once.
+      where it annotates the row it actually describes and appears once. It is
+      the omnibus FOR THIS TERM -- three different joint Wald tests.
     - The x scale is shared across panels. Comparing networks is the entire
       point of this layout, and per-panel scales would make a weak domain look
       like a strong one.
@@ -1335,8 +1430,12 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
+    spec = SPECTRA_TERMS[term]
     bands = [b for b in cells['band']]
-    slopes = pain_slopes_frame(slopes)
+    slopes = term_slopes_frame(slopes, term)
+    if slopes.empty:
+        logger.info('no %r rows in this run -- skipping %s', term, spec['out'])
+        return
     fig, axes = plt.subplots(1, len(domains),
                              figsize=(2.65 * len(domains) + 1.8, 5.2),
                              sharey=True, sharex=True, squeeze=False)
@@ -1364,44 +1463,57 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args):
         ax.set_title(f'{dom}\n{n_p} parc, {n_c} chan, {n_s} subj', fontsize=9,
                      color=colour)
         ax.set_xlim(-xmax, xmax)
-        ax.set_xlabel('d log10 power / pain point', fontsize=8)
+        ax.set_xlabel(spec['xlabel'], fontsize=8)
         ax.tick_params(labelsize=7)
         if j == 0:
             labels = []
             for band in bands:
                 omni = cells[cells['band'] == band].iloc[0]
-                p_omni = omni.get('p_omnibus', omni.get('p_omnibus_pain', np.nan))
+                p_omni = omni.get(spec['omnibus'],
+                                  omni.get('p_omnibus', np.nan))
                 labels.append(f'{band}\nomnibus p = {p_omni:.3g}')
             ax.set_yticks(y)
             ax.set_yticklabels(labels, fontsize=7.5)
             ax.set_ylim(len(bands) - 0.5, -0.5)
 
     ref = cells['reference_domain'].iloc[0]
-    fig.suptitle('Pain-power SPECTRAL PROFILE by processing domain '
-                 '(the by-band figure, transposed)\n'
-                 'filled = BH-significant slope; the omnibus on each row tests '
-                 'whether the domains differ IN THAT BAND '
-                 f'(reference domain: {ref})', fontsize=11.5)
+    drug = getattr(args, 'drug_set', None)
+    excl = getattr(args, 'exclude_drug_set', None)
+    strat = ''
+    if term in ('med', 'pain_x_med') and drug:
+        strat = (f'\n{drug} within '
+                 f'{getattr(args, "med_window_hours", "?")} h of the score'
+                 + (f', compared against epochs free of {excl} too' if excl
+                    else ''))
+    fig.suptitle(f'{spec["title"]} (the by-band figure, transposed)\n'
+                 'filled = BH-significant within this term; the omnibus on each '
+                 'row tests whether the domains differ IN THAT BAND '
+                 f'(reference domain: {ref}){strat}', fontsize=11.5)
     fig.tight_layout(rect=(0, 0.17, 1, 0.90))
     fig.text(0.01, 0.005,
-             'SAME MODEL AND SAME NUMBERS as fig_domain_slopes.png -- one fit '
+             'SAME MODEL AND SAME NUMBERS as the by-band figure -- one fit '
              'per band, read down instead of across: '
-             'log10_power ~ NRS_within * C(domain) + NRS_submean + '
-             '(NRS_within || subject) + (NRS_within || subject:parcel) + '
-             '(1 | subject:channel). The connecting line joins ORDINAL band '
+             + (MED_FORMULA_NOTE if term in ('med', 'pain_x_med')
+                else 'log10_power ~ NRS_within * C(domain) + NRS_submean + '
+                     '(NRS_within || subject) + (NRS_within || subject:parcel) '
+                     '+ (1 | subject:channel). ')
+             + spec['reading'] + ' The connecting line joins ORDINAL band '
              'categories of unequal width (delta 1-4 Hz, high_gamma 70-200 Hz) '
              'with gaps between them, and with the line-noise bins removed; it '
              'is a reading aid for the profile, NOT an interpolated spectrum. '
              'THE OMNIBUS IS A PROPERTY OF THE ROW, not of a panel: it asks '
-             'whether domains differ within that band, so it is printed once on '
-             'the shared y axis. A panel with no significant marker is not '
+             'whether domains differ within that band FOR THIS TERM, so it is '
+             'printed once on the shared y axis -- the three terms have three '
+             'different omnibus tests. BH runs WITHIN this term, never pooled '
+             'across the three. A panel with no significant marker is not '
              'evidence of no effect -- see the per-domain n. Each marker is a '
-             'MARGINAL slope with the SE from the fitted covariance, not the '
+             'MARGINAL estimate with the SE from the fitted covariance, not the '
              'interaction coefficient, which is only the DIFFERENCE from the '
-             'reference. X SCALE IS SHARED so domains are comparable by eye. '
-             f'{DOMAIN_CAVEAT}\n{DISCLAIMER}',
+             'reference. X SCALE IS SHARED ACROSS PANELS so domains are '
+             'comparable by eye, but NOT across the three term figures -- their '
+             f'units differ. {DOMAIN_CAVEAT}\n{DISCLAIMER}',
              fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
-    out = run_dir / 'fig_domain_spectra.png'
+    out = run_dir / spec['out']
     fig.savefig(out, dpi=150, bbox_inches='tight')
     plt.close(fig)
     logger.info('wrote %s', out)
