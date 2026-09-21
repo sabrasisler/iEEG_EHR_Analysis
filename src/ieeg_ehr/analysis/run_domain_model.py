@@ -344,8 +344,8 @@ def parcel_domain_maps(paths, subjects, scheme, collapse_hemisphere=True):
     return per_subject, parcel_to_domain, coverage
 
 
-def roi_domain_maps(paths, subjects, domain_scheme, insula_threshold=None):
-    """({subject: {channel: ROI}}, {ROI: domain}, coverage, split report).
+def roi_domain_maps(roi_by_subject, subjects, domain_scheme):
+    """({subject: {channel: ROI}}, {ROI: domain}, coverage, unassigned counts).
 
     THE ROI-LEVEL UNIT. Same three return values as `parcel_domain_maps` and the
     same column names, so everything downstream -- the model frame, the coverage
@@ -370,16 +370,17 @@ def roi_domain_maps(paths, subjects, domain_scheme, insula_threshold=None):
     shows every ROI's own slope and how many subjects share its sign --
     including the ROIs no domain contains.
 
-    The insula split is applied inside `roi_maps`, driven by the base scheme's
-    `coordinate_regions`, which is why it does not appear here.
-    """
-    from ieeg_ehr.analysis.run_mixed_model_pilot import roi_maps
+    TAKES THE ROI MAP IT IS GIVEN rather than building one. `resolve_cohort`
+    already builds `{subject: {channel: ROI}}` for the base scheme -- and its
+    `no_roi` result already decided the cohort -- so rebuilding here would read
+    every channel_meta a second time, run the insula split a second time, and
+    leave two maps that could disagree. This function is pure: it filters that
+    map to the ROIs a domain claims.
 
+    The insula split therefore happens upstream, in `roi_maps`, driven by the
+    base scheme's `coordinate_regions` -- which is why it does not appear here.
+    """
     spec = roi_schemes.domain_scheme(domain_scheme)
-    report = {}
-    roi_by_subject, _ = roi_maps(paths, subjects, spec['base'],
-                                 insula_threshold=insula_threshold,
-                                 report=report)
     roi_to_domain = spec['roi_to_domain']
 
     per_subject, rows = {}, []
@@ -413,8 +414,7 @@ def roi_domain_maps(paths, subjects, domain_scheme, insula_threshold=None):
     if coverage.empty:
         raise SystemExit('no channel mapped to an ROI in a displayed domain')
     coverage['domain'] = coverage['parcel'].map(roi_to_domain)
-    report['rois_unassigned_dropped'] = unassigned
-    return per_subject, roi_to_domain, coverage, report
+    return per_subject, roi_to_domain, coverage, unassigned
 
 
 # ============================================================================
@@ -1039,19 +1039,37 @@ def main():
         mask_label=args.mask_label or ref_run.view_params.get('mask_label'),
         max_excluded_frac=ref_run.view_params.get('max_excluded_frac'),
         epoch_minutes=epoch_minutes)
-    paths, _, _, subjects, _, _ = resolve_cohort(ref_run, view_dir,
-                                                 cohort=args.cohort,
-                                                 roi_scheme=args.roi_scheme)
+    # `--unit roi` names a DOMAIN scheme, which `resolve_cohort` cannot resolve
+    # -- it wants the ROI scheme whose regions the domains are made of. The
+    # cohort gate ("does this subject contribute any labelled channel at all")
+    # belongs at that base level anyway.
+    split_report = {}
+    cohort_scheme = (roi_schemes.domain_scheme(args.roi_scheme)['base']
+                     if args.unit == 'roi' else args.roi_scheme)
+    paths, _, _, subjects, roi_by_subject, _ = resolve_cohort(
+        ref_run, view_dir, cohort=args.cohort, roi_scheme=cohort_scheme,
+        insula_threshold=args.insula_threshold, report=split_report)
     ref_run.assert_cohort_matches(subjects,
                                   allow_drift=args.allow_cohort_drift
                                   or args.cohort != 'reference')
 
-    split_report = {}
     if args.unit == 'roi':
-        parcel_of, parcel_to_domain, coverage, split_report = roi_domain_maps(
-            paths, subjects, args.roi_scheme,
-            insula_threshold=args.insula_threshold)
+        parcel_of, parcel_to_domain, coverage, unassigned = roi_domain_maps(
+            roi_by_subject, subjects, args.roi_scheme)
+        split_report['rois_unassigned_dropped'] = unassigned
         domain_display = roi_schemes.domain_scheme(args.roi_scheme)['display']
+        # A subject who passed the cohort gate on a region NO DOMAIN CLAIMS
+        # contributes nothing to this fit. Leaving them in `subjects` would put
+        # them in provenance as a participant in a run they are absent from --
+        # and `subjects[]` is the only sanctioned answer to "who was in this
+        # run", so it has to be the subjects who were.
+        contributing = set(coverage['subject_id'])
+        absent = sorted(set(subjects) - contributing)
+        if absent:
+            logger.warning('%d cohort subject(s) have no channel in ANY domain '
+                           'and are not in this fit: %s', len(absent), absent)
+            split_report['subjects_without_a_domain_channel'] = absent
+            subjects = {s for s in subjects if s in contributing}
     else:
         parcel_of, parcel_to_domain, coverage = parcel_domain_maps(
             paths, subjects, args.roi_scheme,
