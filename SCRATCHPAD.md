@@ -377,3 +377,12 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
   right it is a general statement about this cohort and applies to ANY
   subject-level moderator we might try (sex, age, chronicity), not just MDD —
   which would be worth knowing before designing the next one.
+- Cognitive/beta MDD+ vs MDD- is +0.0108 and lands on either side of q=0.05
+  depending purely on whether the family is 5 circuits (p_bh 0.034) or 30
+  circuit x band cells (p_bh 0.205). Before this is written up either way, the
+  question to settle is whether beta was pre-specified for the DIAGNOSIS
+  question specifically. Beta was pre-specified for the PAIN question (the
+  target paper's band set), but that is not the same commitment, and inheriting
+  a band choice from a different hypothesis is not pre-specification. If it
+  cannot be defended as pre-specified, the 30-cell number is the one to report
+  and the 5-circuit one should not appear even as a footnote.

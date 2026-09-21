@@ -130,7 +130,7 @@ DX_CAVEAT = (
     'SNRIs alter cortical oscillatory power directly, and treated MDD patients '
     'are by definition more likely to be on them, so a stratum difference '
     'confounds diagnosis with medication. The recency window also decides the '
-    'label -- subjects carrying an MDD code outside it fall into the CONTROL '
+    'label -- subjects carrying an MDD code outside it fall into the MDD- '
     'arm and dilute the contrast toward the null.')
 
 #: `paper_bands_6_hg200` is the DEFAULT rather than the published
@@ -470,7 +470,7 @@ def stage_fit(args):
             dx_all, condition=args.dx, window_days=args.dx_window_days,
             sources=args.dx_sources)
         # Cohort coverage, named rather than absorbed. A subject with no
-        # diagnoses table at all would otherwise read as a CONTROL, which is the
+        # diagnoses table at all would otherwise read as MDD-negative, which is the
         # same silent-default failure `med_state` refuses for dosing.
         missing = sorted(set(subjects) - set(dx_labels['subject_id']))
         if missing:

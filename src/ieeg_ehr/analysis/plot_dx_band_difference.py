@@ -183,9 +183,12 @@ def figure(both, diff, out_path, band, args, n_dx, n_non):
              'group was refitted alone. NO OMNIBUS HERE, deliberately: this '
              'figure asks whether each circuit\'s slope differs between groups, '
              'not whether circuits differ from each other. '
-             'THE LEFT PANEL CARRIES NO SIGNIFICANCE MARKS -- the '
-             f'{DX_DISPLAY} group is smaller and has wider intervals everywhere '
-             'from power alone, so "one group excludes zero and the other does '
+             'THE LEFT PANEL CARRIES NO SIGNIFICANCE MARKS -- '
+             + (f'{DX_DISPLAY} (n={n_dx}) and {NON_DX_DISPLAY} (n={n_non}) are '
+                'unequal groups, so their interval widths are not comparable, '
+                if n_dx != n_non else
+                'interval width tracks each group\'s own spread, ')
+             + 'so "one group excludes zero and the other does '
              'not" is the difference-of-significance fallacy. AND AN INTERVAL '
              'CLEAR OF ZERO IS NOT THE TEST: that is the uncorrected p < 0.05 '
              'boundary, which is why a cell can show a CI off zero and still '

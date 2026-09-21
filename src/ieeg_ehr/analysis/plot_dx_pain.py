@@ -33,10 +33,13 @@ Usage:
 
     python -m ieeg_ehr.analysis.plot_dx_pain --question mdd
     python -m ieeg_ehr.analysis.plot_dx_pain --dx-window-days 0   # 'ever'
+    # one standalone violin+scatter figure per metric, MDD coded EVER:
+    python -m ieeg_ehr.analysis.plot_dx_pain --dx-window-days 0 --figure violin
 """
 
 import argparse
 import logging
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +74,17 @@ METRICS = [
      'A floor effect concentrated in one arm would shorten its usable range '
      'without changing the SD much.'),
 ]
+
+
+def arm_labels(args, n_case, n_ctrl):
+    """x-tick labels for (control, case), in that order.
+
+    'control' is wrong here: the negative arm is not a matched control group,
+    it is everyone in the cohort without the code. MDD- / MDD+ says exactly
+    that and nothing more.
+    """
+    dx = args.dx.upper()
+    return [f'{dx}−\nn={n_ctrl}', f'{dx}+\nn={n_case}']
 
 
 def compare(pain, labels):
@@ -144,8 +158,7 @@ def figure(d, table, out_path, args, n_case, n_ctrl):
             ax.hlines(np.median(v), i - 0.22, i + 0.22, color='0.15', lw=1.0,
                       ls=':', zorder=4)
         ax.set_xticks([0, 1])
-        ax.set_xticklabels([f'control\nn={n_ctrl}',
-                            f'{args.dx.upper()}\nn={n_case}'], fontsize=9)
+        ax.set_xticklabels(arm_labels(args, n_case, n_ctrl), fontsize=9)
         ax.set_xlim(-0.55, 1.55)
         ax.set_title(label, fontsize=10)
         ax.tick_params(labelsize=8)
@@ -180,6 +193,108 @@ def figure(d, table, out_path, args, n_case, n_ctrl):
     return out_path
 
 
+def figure_violin(d, table, out_path, args, n_case, n_ctrl, metric='nrs_mean'):
+    """ONE metric, as a violin with every subject drawn on top of it.
+
+    The violin is a kernel density and at n = 17 vs 34 it is a smoothing
+    assumption, not data -- so the points stay on top of it and the mean and
+    median stay drawn as lines. The violin carries the shape; the scatter
+    carries the evidence.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    label = dict((c, lb) for c, lb, _ in METRICS)[metric]
+    ylabel = {'nrs_mean': 'Mean reported pain (NRS, 0-10)',
+              'nrs_sd': 'Within-subject SD of reported pain (NRS)',
+              'n_reports': 'Number of charted ratings',
+              'frac_zero': 'Fraction of ratings at NRS = 0'}.get(metric, label)
+    headline = {
+        'nrs_mean': 'report more pain?',
+        'nrs_sd': 'vary more in the pain they report?',
+        'n_reports': 'have more charted pain ratings?',
+        'frac_zero': 'report no pain more often?',
+    }.get(metric, f'differ in {label.lower()}?')
+    # Which caveat the reader needs depends on which metric is drawn: a mean
+    # difference is absorbed by NRS_submean, a spread difference is not.
+    caveat = ('A mean difference is largely absorbed by NRS_submean in the '
+              'slope models; the quantity that bears hardest on the slope '
+              'contrast is within-subject SPREAD, which is in the companion '
+              'table.'
+              if metric != 'nrs_sd' else
+              'THIS is the quantity that bears hardest on the slope contrast: '
+              'each patient\'s slope is estimated over the range they actually '
+              'span, so a systematic spread difference is a systematic '
+              'precision difference that can masquerade as a difference in '
+              'neural encoding.')
+
+    rng = np.random.default_rng(0)          # jitter only, fixed so it is stable
+    fig, ax = plt.subplots(figsize=(5.4, 5.6))
+    colors = {False: '#4a7fb5', True: '#b03a2e'}
+
+    values, positions = [], []
+    for i, state in enumerate((False, True)):
+        v = d.loc[d['dx_state'] == state, metric].dropna().to_numpy()
+        if not len(v):
+            continue
+        values.append(v)
+        positions.append(i)
+
+    parts = ax.violinplot(values, positions=positions, widths=0.72,
+                          showmeans=False, showmedians=False, showextrema=False)
+    for body, i in zip(parts['bodies'], positions):
+        body.set_facecolor(colors[bool(i)])
+        body.set_edgecolor(colors[bool(i)])
+        body.set_alpha(0.22)
+        body.set_linewidth(1.0)
+
+    for v, i in zip(values, positions):
+        x = i + rng.uniform(-0.10, 0.10, size=len(v))
+        ax.scatter(x, v, s=30, alpha=0.8, color=colors[bool(i)],
+                   edgecolor='white', linewidth=0.6, zorder=3)
+        ax.hlines(np.mean(v), i - 0.26, i + 0.26, color='0.15', lw=2.2, zorder=4)
+        ax.hlines(np.median(v), i - 0.20, i + 0.20, color='0.15', lw=1.0,
+                  ls=':', zorder=4)
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(arm_labels(args, n_case, n_ctrl), fontsize=10)
+    ax.set_xlim(-0.6, 1.6)
+    ax.set_ylabel(ylabel, fontsize=11)
+    ax.tick_params(labelsize=9)
+    ax.spines[['top', 'right']].set_visible(False)
+
+    row = table[table['metric'] == metric]
+    if len(row):
+        r = row.iloc[0]
+        ax.set_xlabel(f"diff {r['difference']:+.2f}   g={r['hedges_g']:+.2f}   "
+                      f"Welch p={r['welch_p']:.3g}   MW p={r['mannwhitney_p']:.3g}",
+                      fontsize=9)
+
+    window = (f'{args.dx_window_days} d before admission'
+              if args.dx_window_days else 'ever')
+    fig.suptitle(
+        f'Do {args.dx.upper()}+ patients {headline}  '
+        f'[{args.dx.upper()}+ = coded {window}, sources: {args.dx_sources}]\n'
+        'violin = kernel density, thick line = mean, dotted = median, '
+        'one point = one subject',
+        fontsize=11)
+    fig.tight_layout(rect=(0, 0.13, 1, 0.92))
+    # Wrapped explicitly rather than with wrap=True: this figure is narrow
+    # enough that matplotlib's auto-wrap runs the footnote off the right edge.
+    note = textwrap.fill(
+        'Every charted rating counts here, not only the epochs that survived '
+        'QC into a model -- that is the right denominator for "does this '
+        f'patient report more pain" and the wrong one for anything about '
+        f'power. {caveat} Two-sided tests, uncorrected across the '
+        f'{len(METRICS)} metrics in dx_pain_comparison.csv.', width=108)
+    fig.text(0.01, 0.005, f'{note}\n{DISCLAIMER}',
+             fontsize=6.5, va='bottom', ha='left', color='0.35')
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return out_path
+
+
 def main():
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -195,6 +310,15 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP),
                     help='Where the subject list comes from, so this figure '
                          'describes the SAME cohort the models are fitted on.')
+    ap.add_argument('--figure', choices=('panels', 'violin'), default='panels',
+                    help="'panels' = all four metrics in one strip-plot "
+                         "figure; 'violin' = ONE STANDALONE FIGURE PER "
+                         "--metric, each a violin with the subjects "
+                         "scattered on it.")
+    ap.add_argument('--metric', nargs='+', choices=[c for c, _, _ in METRICS],
+                    default=[c for c, _, _ in METRICS],
+                    help='Which metrics --figure violin draws, one figure '
+                         'each. Ignored for panels.')
     ap.add_argument('--question', default=QUESTION)
     ap.add_argument('--run-name', default=RUN_NAME)
     ap.add_argument('--run-dir', default=None)
@@ -224,7 +348,9 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
 
     params = {'condition': args.dx, 'window_days': args.dx_window_days,
-              'source_set': args.dx_sources,
+              'source_set': args.dx_sources, 'figure': args.figure,
+              'metrics': list(args.metric) if args.figure == 'violin' else
+                         [c for c, _, _ in METRICS],
               'denominator': 'every charted pain rating, not QC-surviving epochs'}
     io.write_table(table, run_dir / 'dx_pain_comparison.csv', params=params,
                    script=SCRIPT, extra={'caveat': dx_state.CONDITIONS[args.dx]
@@ -234,8 +360,16 @@ def main():
     io.write_table(dx_state.stratum_summary(labels, pain),
                    run_dir / 'dx_stratum_summary.csv', params=params, script=SCRIPT)
 
-    out = figure(d, table, run_dir / 'fig_dx_pain_levels.png', args, n_case, n_ctrl)
-    logger.info('wrote %s', out)
+    if args.figure == 'violin':
+        outs = [figure_violin(d, table,
+                              run_dir / f'fig_dx_pain_{m}_violin.png',
+                              args, n_case, n_ctrl, metric=m)
+                for m in args.metric]
+    else:
+        outs = [figure(d, table, run_dir / 'fig_dx_pain_levels.png',
+                       args, n_case, n_ctrl)]
+    for out in outs:
+        logger.info('wrote %s', out)
 
     io.write_run_provenance(
         run_dir, script=SCRIPT, params=params,
