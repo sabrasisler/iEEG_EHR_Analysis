@@ -58,5 +58,13 @@ echo "=== bandpower mixed models | $(date) ==="
 RUN_DIR=$(python -m ieeg_ehr.analysis.run_bandpower_mixed --stage fit \
     ${args[@]+"${args[@]}"} ${EXTRA} | tail -1)
 echo "    run: ${RUN_DIR}"
-python -m ieeg_ehr.analysis.run_bandpower_mixed --stage collect --run-dir "${RUN_DIR}"
+# ${EXTRA} MUST be passed to collect as well, not just to fit. The collect
+# stage re-derives the region list from --roi-scheme and re-reads --dx-model
+# to decide which figures and METHODS sections to write, so omitting it
+# silently falls back to the DEFAULT scheme -- which on a pain_domains_v2
+# run means looking for roi_v2 region names that are not in the cells
+# table, an empty pivot, and a numpy "zero-size array" crash after the
+# fits have already succeeded.
+python -m ieeg_ehr.analysis.run_bandpower_mixed --stage collect \
+    --run-dir "${RUN_DIR}" ${EXTRA}
 echo "=== done ($(date)) ==="
