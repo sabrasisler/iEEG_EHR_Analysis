@@ -63,10 +63,11 @@ DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
 
 #: One colour per domain, used ONLY to group rows. Nothing is encoded in it that
-#: is lost if a reader cannot separate two hues.
-DOMAIN_COLOURS = {'Sensory': '#b03a2e', 'Affective': '#8e44ad',
-                  'Cognitive': '#2b6ca3', 'Modulatory': '#e08214',
-                  'Memory': '#1b7837', 'Control': '0.45'}
+#: is lost if a reader cannot separate two hues -- which matters, because
+#: Cognitive and Affective are ~1.5 dE apart under deuteranopia. Imported from
+#: the fitting module rather than copied: the copy that used to live here drifted
+#: to the v1 domain names and painted Modulatory the same grey as Control.
+from ieeg_ehr.analysis.run_domain_model import DOMAIN_COLOURS  # noqa: E402
 
 TERM_LABELS = {
     'pain': ('PAIN\nd log10 power per pain point',
