@@ -1673,20 +1673,37 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
 #: switch), so one scale across terms would be the dual-axis mistake wearing a
 #: different hat. The omnibus column differs per term too -- it is a separate
 #: joint Wald on that term's interaction block.
-MED_FORMULA_NOTE = (
-    'log10_power ~ NRS_within * C(domain) * med_within + NRS_submean + '
-    'med_submean + (NRS_within || subject) + (NRS_within || subject:parcel) + '
-    '(1 | subject:channel). BOTH predictors are SUBJECT-MEAN-CENTRED, so every '
-    'coefficient is read at the OTHER one\'s patient-specific mean. ')
+def random_effects_note(args):
+    """The random-effects tail THE RUN ACTUALLY FITTED, as caption text.
 
-DX_FORMULA_NOTE = (
-    'log10_power ~ NRS_within * C(domain) * dx_state + NRS_submean + '
-    '(NRS_within || subject) + (NRS_within || subject:parcel) + '
-    '(1 | subject:channel). `dx_state` is a SUBJECT-LEVEL 0/1 constant and is '
-    'NOT subject-mean-centred -- unlike `med_within` it has no within-patient '
-    'part to centre -- so every coefficient here is read IN THE CONTROL '
-    'STRATUM, not at a patient\'s own average diagnosis state, which would be '
-    'meaningless. ')
+    Built rather than written out, because there are four places a formula
+    appears in a caption and `--drop-parcel-term` (which `--unit roi` implies)
+    removes a term from all of them. A hard-coded string gets one of the four
+    updated and leaves three captions naming a variance component the fit did
+    not estimate.
+    """
+    parts = ['(NRS_within || subject)']
+    if not getattr(args, 'drop_parcel_term', False):
+        parts.append('(NRS_within || subject:parcel)')
+    parts.append('(1 | subject:channel)')
+    return ' + '.join(parts) + '. '
+
+
+def med_formula_note(args):
+    return ('log10_power ~ NRS_within * C(domain) * med_within + NRS_submean + '
+            'med_submean + ' + random_effects_note(args)
+            + 'BOTH predictors are SUBJECT-MEAN-CENTRED, so every '
+            "coefficient is read at the OTHER one's patient-specific mean. ")
+
+
+def dx_formula_note(args):
+    return ('log10_power ~ NRS_within * C(domain) * dx_state + NRS_submean + '
+            + random_effects_note(args)
+            + '`dx_state` is a SUBJECT-LEVEL 0/1 constant and is '
+            'NOT subject-mean-centred -- unlike `med_within` it has no '
+            'within-patient part to centre -- so every coefficient here is read '
+            "IN THE CONTROL STRATUM, not at a patient's own average diagnosis "
+            'state, which would be meaningless. ')
 
 
 def formula_note(args):
@@ -1700,12 +1717,11 @@ def formula_note(args):
     conditioning the pain-only string does not mention.
     """
     if args.dx_model != 'none':
-        return DX_FORMULA_NOTE
+        return dx_formula_note(args)
     if args.med_model != 'none':
-        return MED_FORMULA_NOTE
+        return med_formula_note(args)
     return ('log10_power ~ NRS_within * C(domain) + NRS_submean + '
-            '(NRS_within || subject) + (NRS_within || subject:parcel) '
-            '+ (1 | subject:channel). ')
+            + random_effects_note(args))
 
 
 SPECTRA_TERMS = {
@@ -1974,14 +1990,19 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
                  f'differ at all (reference domain: {ref})', fontsize=11.5)
     fig.tight_layout(rect=(0, 0.17, 1, 0.90))
     fig.text(0.01, 0.005,
-             'ONE MODEL PER BAND over every parcel at once: '
-             'log10_power ~ NRS_within * C(domain) + NRS_submean + '
-             '(NRS_within || subject) + (NRS_within || subject:parcel) + '
-             '(1 | subject:channel). THE UNIT IS THE ATLAS PARCEL, not a '
-             'hand-built ROI -- parcel enters as a random SLOPE so each parcel '
-             'deviates around its domain rather than being averaged into it, '
-             'which is what keeps one well-sampled parcel from carrying a domain. '
-             'Each marker is a MARGINAL slope, a linear combination of the '
+             f'ONE MODEL PER BAND over every {unit_word(args, plural=False)} '
+             'at once: log10_power ~ NRS_within * C(domain) + NRS_submean + '
+             + random_effects_note(args)
+             + ('THE UNIT IS THE ROI, and the ROI is NOT IN THE MODEL -- it is '
+                'only the lookup that says which domain a channel is in. '
+                'Nothing here keeps one well-sampled ROI from carrying a '
+                'domain; the region-level consistency map is what does. '
+                if getattr(args, 'unit', 'parcel') == 'roi' else
+                'THE UNIT IS THE ATLAS PARCEL, not a hand-built ROI -- parcel '
+                'enters as a random SLOPE so each parcel deviates around its '
+                'domain rather than being averaged into it, which is what keeps '
+                'one well-sampled parcel from carrying a domain. ')
+             + 'Each marker is a MARGINAL slope, a linear combination of the '
              'reference slope and that domain\'s interaction term, with the SE '
              'from the fitted covariance -- not the interaction coefficient, '
              'which is only the DIFFERENCE from the reference. The omnibus is a '
