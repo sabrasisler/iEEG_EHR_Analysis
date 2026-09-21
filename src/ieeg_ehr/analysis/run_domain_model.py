@@ -256,6 +256,11 @@ DOMAIN_CAVEAT = (
 
 
 
+def unit_count(args, n, short=False):
+    """'4 ROIs' / '1 ROI'. Modulatory is one region and prints on every figure."""
+    return f'{int(n)} {unit_word(args, plural=int(n) != 1, short=short)}'
+
+
 def unit_word(args, plural=True, short=False):
     """What one row's region is CALLED, on a figure. Not cosmetic.
 
@@ -1871,8 +1876,7 @@ def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
                         f'{BAND_SETS[args.band_set][b][1]} Hz' for b in bands],
                        fontsize=9)
     ax.set_yticks(range(len(domains)))
-    _u = unit_word(args)
-    ax.set_yticklabels([f'{d}\n{int(per_domain.loc[d, "n_parcels"])} {_u}, '
+    ax.set_yticklabels([f'{d}\n{unit_count(args, per_domain.loc[d, "n_parcels"])}, '
                         f'{int(per_domain.loc[d, "n_contacts"])} contacts, '
                         f'{int(per_domain.loc[d, "n_subjects"])} subj'
                         for d in domains], fontsize=8.5)
@@ -1900,10 +1904,18 @@ def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
              f'CONTROL ROW: {ctrl} of {len(bands)} cells significant. Stars are '
              'the uncorrected p (* <0.05, ** <0.01, *** <0.001); bold and the '
              f'outline are BH at q={args.fdr_q:g} over all {arr.size} cells. '
-             'Slopes come from ONE mixed model per band over every parcel at '
-             'once, with domain as a fixed effect and the atlas parcel as a '
-             'random slope nested in subject, so no domain is carried by a single '
-             'well-sampled parcel; each value is a linear combination of the '
+             f'Slopes come from ONE mixed model per band over every '
+             f'{unit_word(args, plural=False)} at once, with domain as a fixed '
+             + ('effect and the ROI NOT IN THE MODEL AT ALL -- it is only the '
+                'lookup that says which domain a channel is in, so nothing here '
+                'guards against one well-sampled ROI carrying its domain; that '
+                'guard is the region-level consistency map, which fits every '
+                'ROI separately. '
+                if getattr(args, 'unit', 'parcel') == 'roi' else
+                'effect and the atlas parcel as a random slope nested in '
+                'subject, so no domain is carried by a single well-sampled '
+                'parcel. ')
+             + 'Each value is a linear combination of the '
              'reference slope and that domain\'s interaction term, with its SE '
              'from the fitted covariance. THE OMNIBUS -- whether the domains '
              f'differ FROM EACH OTHER -- is a separate question: {omni}. '
@@ -1950,8 +1962,8 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
         ax.tick_params(labelsize=7)
         if j == 0:
             ax.set_yticks(y)
-            _u = unit_word(args, short=True)
-            ax.set_yticklabels([f'{dom}\n{int(per_domain.loc[dom, "n_parcels"])} {_u}, '
+            ax.set_yticklabels([f'{dom}\n'
+                                f'{unit_count(args, per_domain.loc[dom, "n_parcels"], short=True)}, '
                                 f'{int(per_domain.loc[dom, "n_contacts"])} chan'
                                 for dom in domains], fontsize=7.5)
             ax.set_ylim(len(domains) - 0.5, -0.5)
@@ -2051,7 +2063,7 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args,
         n_p = int(per_domain.loc[dom, 'n_parcels'])
         n_c = int(per_domain.loc[dom, 'n_contacts'])
         n_s = int(per_domain.loc[dom, 'n_subjects'])
-        ax.set_title(f'{dom}\n{n_p} {unit_word(args, short=True)}, {n_c} chan, '
+        ax.set_title(f'{dom}\n{unit_count(args, n_p, short=True)}, {n_c} chan, '
                      f'{n_s} subj', fontsize=9,
                      color=colour)
         ax.set_xlim(-xmax, xmax)
