@@ -103,6 +103,26 @@ VC_DOMAIN = {
     'channel': '0 + C(channel_uid)',
 }
 
+#: `VC_DOMAIN` without the parcel-nested slope, for `--drop-parcel-term`.
+#:
+#: WHY THIS EXISTS. `subj_parcel_slope` is the smallest component in every band
+#: of every run so far — measured ratios to the residual variance run 1.6e-3 to
+#: 4.3e-2, against a `BOUNDARY_TOL` of 1e-3 — so it sits within an order of
+#: magnitude of the boundary throughout. `VC_CHANGE` already documents what that
+#: costs: asking for a variance the design has set to near zero flattens the
+#: likelihood in that direction, the optimiser never settles, and the fit reports
+#: trouble even though the fixed effects are fine. On the change-score grids
+#: dropping the analogous component took convergence from 3/10 to 10/10 at 1/24th
+#: the fit time.
+#:
+#: IT IS A HYPOTHESIS, NOT A FIX, and the comparison is the point: if the four
+#: well-conditioned bands' fixed effects barely move, the term is not
+#: load-bearing and dropping it is a safe simplification; if they do move, the
+#: term is carrying real parcel-level heterogeneity and the badly-conditioned
+#: bands need a different remedy. Never swap the default on one band's behaviour.
+VC_DOMAIN_NO_PARCEL = {k: v for k, v in VC_DOMAIN.items()
+                       if k != 'subj_parcel_slope'}
+
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
 
@@ -508,7 +528,8 @@ def omnibus_wald(res, domains, ref):
     return stat, len(terms), float(test.pvalue)
 
 
-def fit_band(df, domains, band, med=False, dx=False, out_dir=None):
+def fit_band(df, domains, band, med=False, dx=False, out_dir=None,
+             drop_parcel=False):
     """(record, contrast frame) for one band, written to disk as it completes.
 
     `out_dir` makes the run INCREMENTAL. The first version of this script created
@@ -518,8 +539,9 @@ def fit_band(df, domains, band, med=False, dx=False, out_dir=None):
     moment it is finished.
     """
     formula, ref = domain_formula(domains, med=med, dx=dx)
+    vc = VC_DOMAIN_NO_PARCEL if drop_parcel else VC_DOMAIN
     t0 = time.time()
-    res, warn = mm.fit_cell(df, VC_DOMAIN, formula=formula)
+    res, warn = mm.fit_cell(df, vc, formula=formula)
     elapsed = time.time() - t0
 
     chi2, ddf, p_omni = omnibus_wald(res, domains, ref)
@@ -553,7 +575,8 @@ def fit_band(df, domains, band, med=False, dx=False, out_dir=None):
     vc = mm.vcomp_by_name(res)
     rec = {
         'band': band, 'reference_domain': ref, 'med_model': bool(med),
-        'dx_model': bool(dx),
+        'dx_model': bool(dx), 'drop_parcel_term': bool(drop_parcel),
+        'variance_components': ','.join(sorted(vc)),
         **({'n_subjects_case':
             int(df.loc[df['dx_state'] == 1, 'subject'].nunique()),
             'n_subjects_control':
@@ -679,6 +702,15 @@ def main():
                          'per-domain differences in the `pain_x_dx` rows. '
                          'Cannot be combined with --med-model: that would be a '
                          'four-way design, which 17 cases cannot support.')
+    ap.add_argument('--drop-parcel-term', action='store_true',
+                    help='Fit WITHOUT the parcel-nested random slope '
+                         '(subj_parcel_slope). It is the smallest variance '
+                         'component in every band measured so far and sits '
+                         'within an order of magnitude of the boundary, which '
+                         'is a known cause of a flat likelihood direction and '
+                         'a non-positive-definite Hessian. Run it BESIDE the '
+                         'full spec and compare: if the well-conditioned bands '
+                         'barely move, the term is not load-bearing.')
     ap.add_argument('--question', default=QUESTION,
                     help="Level-2 folder. Pass 'mdd' to keep the diagnosis runs "
                          'out of the pain-physiology tree.')
@@ -722,7 +754,8 @@ def main():
             prov = prov.get('params', prov)
             for key in ('drug_set', 'exclude_drug_set', 'med_window_hours',
                         'med_model', 'roi_scheme', 'band_set',
-                        'dx_model', 'dx', 'dx_window_days', 'dx_sources'):
+                        'dx_model', 'dx', 'dx_window_days', 'dx_sources',
+                        'drop_parcel_term'):
                 if key in prov and prov[key] is not None:
                     if getattr(args, key, None) != prov[key]:
                         logger.info('replot: %s = %r (from provenance, '
@@ -888,6 +921,7 @@ def main():
             + ([args.drug_set] if args.med_model != 'none' else [])
             + ([f'{args.dx}{args.dx_window_days}d']
                if args.dx_model != 'none' else [])
+            + (['noparcel'] if args.drop_parcel_term else [])
             + ([f'excl{args.exclude_drug_set}'] if args.exclude_drug_set else [])
             + ([f'randdrop{args.drop_random_unmedicated}s{args.drop_seed}']
                if args.drop_random_unmedicated else [])),
@@ -939,7 +973,8 @@ def main():
         if med_lookup is not None:
             df = mm.add_med_components(df)
         rec, slopes = fit_band(df, domains, band, med=med_lookup is not None,
-                               dx=dx_lookup is not None, out_dir=run_dir)
+                               dx=dx_lookup is not None, out_dir=run_dir,
+                               drop_parcel=args.drop_parcel_term)
         records.append(rec)
         slope_parts.append(slopes)
 
@@ -978,7 +1013,9 @@ def main():
     params = {'formula': domain_formula(
                   domains, med=args.med_model != 'none',
                   dx=args.dx_model != 'none')[0],
-              'variance_components': VC_DOMAIN,
+              'variance_components': (VC_DOMAIN_NO_PARCEL
+                                      if args.drop_parcel_term else VC_DOMAIN),
+              'drop_parcel_term': args.drop_parcel_term,
               'dx_model': args.dx_model,
               'dx': args.dx if args.dx_model != 'none' else None,
               'dx_window_days': (args.dx_window_days
