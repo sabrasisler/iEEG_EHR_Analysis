@@ -506,3 +506,29 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       conditioning problem and not a null. Same tripwire as the beta-row task
       above: check `var_subj_slope` against its neighbouring bands.
       (→ docs/labnotebook/2026-09-20.md)
+- [ ] **Warm-start the domain model's three-way fits from the pain-only fit.**
+      The delta/theta non-positive-definite Hessians are optimiser instability,
+      not misspecification: `var_subj_slope` is genuinely ~1e-4, and a failed
+      fit lands on a spurious 0.05-0.07: WHICH band fails is arbitrary and
+      shifts with any design perturbation (delta is broken at the 90-day label
+      and fine under `ever` on identical data; dropping the parcel term fixes
+      delta and theta but breaks alpha and gamma). `mm.fit_cell` already takes
+      `start_params` and the permutation path already uses it. Either warm-start
+      from the converged simpler fit or use multiple starts and keep the best
+      llf. Until this is done, exclude bands whose warnings contain 'not
+      positive definite'. Three sightings now: this run, the `ever` run, and the
+      opioid-exclusion beta row. (→ docs/labnotebook/2026-09-21.md)
+- [ ] **BH-correct the `pain_x_dx` / `pain_x_med` omnibus across bands.**
+      `stage_collect` corrects `p_omnibus` (the pain omnibus) but the per-term
+      omnibus tests are reported raw. It matters: the `ever` run's beta
+      `p_omnibus_pain_x_dx` = 0.0197 reads as the first significant
+      circuit-level result and becomes p_bh = 0.118 over the six bands, i.e.
+      not significant. Corrected by hand this time; it should be in the code.
+      (→ docs/labnotebook/2026-09-21.md)
+- [ ] **Do NOT ship any number from a `--drop-parcel-term` run.** Kept for the
+      conditioning experiment only. Its omnibus is inflated by orders of
+      magnitude against the full spec (beta `p_omnibus_pain` 3.89e-06 ->
+      8.37e-20) while the marginal SEs go UP 8%, so the joint test is reacting
+      to a degraded covariance estimate, and alpha reports NOT CONVERGED in the
+      ever variant. If the flag survives, make it print this warning.
+      (→ docs/labnotebook/2026-09-21.md)
