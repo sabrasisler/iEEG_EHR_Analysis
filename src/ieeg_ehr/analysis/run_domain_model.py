@@ -78,7 +78,8 @@ from ieeg_ehr import config, io
 from ieeg_ehr.analysis import cluster_permutation as cp
 from ieeg_ehr.analysis import dx_state, fullres_cells, med_state, mixed_model as mm
 from ieeg_ehr.analysis import reference_run, view_tables
-from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS, band_table, aggregate
+from ieeg_ehr.analysis.run_bandpower_mixed import (BAND_SETS, DX_CAVEAT,
+                                                     band_table, aggregate)
 from ieeg_ehr.analysis.run_fullres_grid import CONFOUND_CAVEAT, resolve_cohort
 from ieeg_ehr.config import roi_schemes
 from ieeg_ehr.views import channel_meta
@@ -720,7 +721,8 @@ def main():
             prov = json.loads(prov_path.read_text())
             prov = prov.get('params', prov)
             for key in ('drug_set', 'exclude_drug_set', 'med_window_hours',
-                        'med_model', 'roi_scheme', 'band_set'):
+                        'med_model', 'roi_scheme', 'band_set',
+                        'dx_model', 'dx', 'dx_window_days', 'dx_sources'):
                 if key in prov and prov[key] is not None:
                     if getattr(args, key, None) != prov[key]:
                         logger.info('replot: %s = %r (from provenance, '
@@ -744,6 +746,8 @@ def main():
                       .reindex(domains))
         summary_figure(run_dir, cells, slopes, per_domain, domains, args)
         figure(run_dir, cells, slopes, per_domain, domains, args)
+        if args.dx_model != 'none':
+            dx_domain_figure(run_dir, cells, slopes, domains, args)
         for _t in SPECTRA_TERMS:
             figure_by_domain(run_dir, cells, slopes, per_domain,
                              domains, args, term=_t)
@@ -966,8 +970,25 @@ def main():
         cells.loc[m, 'p_omnibus_bh'] = adj
         cells['p_omnibus_bh_reject'] = cells['p_omnibus_bh'] <= args.fdr_q
 
-    params = {'formula': domain_formula(domains)[0],
+    # THE FORMULA THAT ACTUALLY RAN, with the same med/dx flags the fits used.
+    # It was previously recorded as the pain-only formula unconditionally, so a
+    # medication or diagnosis run wrote provenance naming a model it had not
+    # fitted -- the one kind of provenance error that cannot be caught later,
+    # because the file looks complete and self-consistent.
+    params = {'formula': domain_formula(
+                  domains, med=args.med_model != 'none',
+                  dx=args.dx_model != 'none')[0],
               'variance_components': VC_DOMAIN,
+              'dx_model': args.dx_model,
+              'dx': args.dx if args.dx_model != 'none' else None,
+              'dx_window_days': (args.dx_window_days
+                                 if args.dx_model != 'none' else None),
+              'dx_sources': (args.dx_sources if args.dx_model != 'none'
+                             else None),
+              'dx_n_case': (int(dx_labels['dx_state'].sum())
+                            if dx_labels is not None else None),
+              'dx_n_control': (int((~dx_labels['dx_state']).sum())
+                               if dx_labels is not None else None),
               'parcel_level': 'Desikan-Killiany, hemispheres '
                               + ('separate' if args.hemisphere_separate
                                  else 'collapsed'),
@@ -1009,7 +1030,9 @@ def main():
                             parents=[str(view_dir)], subjects=sorted(subjects),
                             extra={'status': DISCLAIMER,
                                    'domain_caveat': DOMAIN_CAVEAT,
-                                   'mask_content': CONFOUND_CAVEAT})
+                                   'mask_content': CONFOUND_CAVEAT,
+                                   **({'dx_caveat': DX_CAVEAT}
+                                      if args.dx_model != 'none' else {})})
     summary_figure(run_dir, cells, slopes, per_domain, domains, args)
     figure(run_dir, cells, slopes, per_domain, domains, args)
     for _t in SPECTRA_TERMS:
@@ -1059,16 +1082,28 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
     n_ctrl = int(cells['n_subjects_control'].max())
 
     fig, axs = plt.subplots(2, len(bands), figsize=(2.9 * len(bands), 8.6),
-                            squeeze=False, sharey='row')
+                            squeeze=False, sharey='row')  # x NOT shared: see band_limit
     y = np.arange(len(doms))
     colors = {'control': '#4a7fb5', 'case': '#b03a2e'}
 
-    sl_max = float(np.nanmax(np.abs(np.concatenate(
-        [(ss['beta'] + 1.96 * ss['se']).to_numpy(dtype=float),
-         (ss['beta'] - 1.96 * ss['se']).to_numpy(dtype=float)])))) * 1.05
-    df_max = float(np.nanmax(np.abs(np.concatenate(
-        [(diff['beta'] + 1.96 * diff['se']).to_numpy(dtype=float),
-         (diff['beta'] - 1.96 * diff['se']).to_numpy(dtype=float)])))) * 1.05
+    def band_limit(frame, band):
+        """x-limit from THIS band only.
+
+        PER BAND, not shared. delta and theta are badly conditioned on this
+        cohort -- their interaction SEs run ~20x the other four bands -- and a
+        shared scale set by them squashes alpha through high_gamma into a
+        vertical line, hiding the only bands with usable precision. The cost is
+        that panels are no longer visually comparable across bands, so each
+        carries its own axis and the reader is told here rather than left to
+        assume otherwise.
+        """
+        d = frame[frame['band'] == band]
+        if not len(d):
+            return 1.0
+        hi = np.nanmax(np.abs(np.concatenate(
+            [(d['beta'] + 1.96 * d['se']).to_numpy(dtype=float),
+             (d['beta'] - 1.96 * d['se']).to_numpy(dtype=float)])))
+        return float(hi) * 1.08 if np.isfinite(hi) and hi > 0 else 1.0
 
     for j, band in enumerate(bands):
         # --- row 0: both strata, paired
@@ -1082,7 +1117,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
                         label=f'{stratum} (n={n_ctrl if stratum == "control" else n_case})'
                         if j == 0 else None)
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
-        ax.set_xlim(-sl_max, sl_max)
+        ax.set_xlim(-band_limit(ss, band), band_limit(ss, band))
         row = cells[cells['band'] == band]
         p_omni = (float(row['p_omnibus_pain_x_dx'].iloc[0])
                   if len(row) and 'p_omnibus_pain_x_dx' in row else np.nan)
@@ -1106,7 +1141,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
         ax.errorbar(b[rej], y[rej], xerr=1.96 * se[rej], fmt='o', ms=6,
                     lw=1.6, capsize=2, color='#7d3c98')
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
-        ax.set_xlim(-df_max, df_max)
+        ax.set_xlim(-band_limit(diff, band), band_limit(diff, band))
         ax.set_title(f'{band}: case - control', fontsize=8.5)
         ax.tick_params(labelsize=7)
         if j == 0:
