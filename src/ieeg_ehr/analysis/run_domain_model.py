@@ -1165,7 +1165,6 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
                      color=DOMAIN_COLOURS.get(dom, '0.2'))
         ax.tick_params(labelsize=7.5)
         ax.spines[['top', 'right']].set_visible(False)
-        ax.set_xlabel('d log10 power / pain point', fontsize=8)
         if j == 0:
             ax.set_yticks(y)
             ax.set_yticklabels(
@@ -1196,7 +1195,11 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
         f'({n_case} cases, {n_ctrl} controls)\n'
         'both strata from ONE three-way fit; * = BH-significant DIFFERENCE '
         f'at q={args.fdr_q}', fontsize=12)
-    fig.tight_layout(rect=(0, 0.16, 1, 0.90))
+    # ONE x label, on the CENTRE panel's own axis. Five copies overlap each
+    # other, and a figure-level supxlabel lands in the caption block below the
+    # tight_layout rect -- attaching it to an axis keeps it clear of both.
+    axes[0][len(doms) // 2].set_xlabel('d log10 power / pain point', fontsize=9)
+    fig.tight_layout(rect=(0, 0.17, 1, 0.90))
     fig.text(0.01, 0.005,
              'SAME FIT AND SAME NUMBERS as fig_dx_domain.png, transposed: '
              'panels are circuits and the axis is frequency, so each panel is '
