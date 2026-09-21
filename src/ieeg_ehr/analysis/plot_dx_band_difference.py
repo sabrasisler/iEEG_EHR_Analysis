@@ -49,8 +49,8 @@ import pandas as pd
 from ieeg_ehr import io
 from ieeg_ehr.analysis import cluster_permutation as cp
 from ieeg_ehr.analysis.run_domain_model import (DISCLAIMER, DX_LABEL,
-                                                NON_DX_LABEL, DOMAIN_COLOURS,
-                                                norm_strata)
+                                                NON_DX_LABEL, DX_DISPLAY,
+                                                NON_DX_DISPLAY, norm_strata)
 from ieeg_ehr.analysis.run_bandpower_mixed import DX_CAVEAT
 
 logger = logging.getLogger(__name__)
@@ -121,13 +121,15 @@ def figure(both, diff, out_path, band, args, n_dx, n_non):
 
     # --- left: the two strata, no per-arm significance marks
     ax = axs[0][0]
-    for stratum, off, colour in ((NON_DX_LABEL, -0.15, '#4a7fb5'),
-                                 (DX_LABEL, +0.15, '#b03a2e')):
+    for stratum, disp, off, colour in (
+            (NON_DX_LABEL, NON_DX_DISPLAY, -0.15, '#4a7fb5'),
+            (DX_LABEL, DX_DISPLAY, +0.15, '#b03a2e')):
         d = (both[both['stratum'] == stratum].set_index('domain').reindex(doms))
         n = n_dx if stratum == DX_LABEL else n_non
         ax.errorbar(d['beta'].to_numpy(dtype=float), y + off,
                     xerr=1.96 * d['se'].to_numpy(dtype=float), fmt='o', ms=6,
-                    lw=1.5, capsize=3, color=colour, label=f'{stratum} (n={n})')
+                    lw=1.5, capsize=3, color=colour,
+                    label=f'{disp} (n={n})')
     ax.axvline(0, color='0.4', lw=1.0, ls='--')
     ax.set_yticks(y)
     ax.set_yticklabels(doms, fontsize=10)
@@ -157,9 +159,9 @@ def figure(both, diff, out_path, band, args, n_dx, n_non):
                     xy=(1.02, i), xycoords=('axes fraction', 'data'),
                     va='center', fontsize=8.5,
                     color='#7d3c98' if star else '0.35')
-    ax.set_xlabel(f'{DX_LABEL} - {NON_DX_LABEL} difference in the {band} '
+    ax.set_xlabel(f'{DX_DISPLAY} - {NON_DX_DISPLAY} difference in the {band} '
                   'pain slope', fontsize=9)
-    ax.set_title(f'{band}: the DIFFERENCE  ({DX_LABEL} - {NON_DX_LABEL})\n'
+    ax.set_title(f'{band}: the DIFFERENCE  ({DX_DISPLAY} - {NON_DX_DISPLAY})\n'
                  f'purple = BH-significant among the {len(doms)} circuits '
                  f'in {band}, q={args.fdr_q}', fontsize=10.5)
     ax.spines[['top', 'right']].set_visible(False)
@@ -169,8 +171,8 @@ def figure(both, diff, out_path, band, args, n_dx, n_non):
     n_rej_band = int(diff['reject_band'].sum())
     n_rej_grid = int(diff['reject_grid'].fillna(False).sum())
     fig.suptitle(
-        f'Does the {band}-band pain slope differ in {DX_LABEL}?  '
-        f'{n_dx} {DX_LABEL} vs {n_non} {NON_DX_LABEL}\n'
+        f'Does the {band}-band pain slope differ in MDD?  '
+        f'{n_dx} {DX_DISPLAY} vs {n_non} {NON_DX_DISPLAY}\n'
         f'{n_rej_band} of {len(doms)} circuits significant correcting within '
         f'{band}; {n_rej_grid} correcting over all 30 circuit x band cells',
         fontsize=12.5)
@@ -182,7 +184,7 @@ def figure(both, diff, out_path, band, args, n_dx, n_non):
              'figure asks whether each circuit\'s slope differs between groups, '
              'not whether circuits differ from each other. '
              'THE LEFT PANEL CARRIES NO SIGNIFICANCE MARKS -- the '
-             f'{DX_LABEL} group is smaller and has wider intervals everywhere '
+             f'{DX_DISPLAY} group is smaller and has wider intervals everywhere '
              'from power alone, so "one group excludes zero and the other does '
              'not" is the difference-of-significance fallacy. AND AN INTERVAL '
              'CLEAR OF ZERO IS NOT THE TEST: that is the uncorrected p < 0.05 '
@@ -258,7 +260,7 @@ def main():
     out = figure(both, diff, run_dir / f'fig_dx_{args.band}_difference.png',
                  args.band, args, n_dx, n_non)
     logger.info('wrote %s', out)
-    io.log_analysis(f'{DX_LABEL} vs {NON_DX_LABEL} difference in the '
+    io.log_analysis(f'{DX_DISPLAY} vs {NON_DX_DISPLAY} difference in the '
                     f'{args.band}-band pain slope, per circuit (EXPLORATORY)',
                     run_dir)
     print(out)

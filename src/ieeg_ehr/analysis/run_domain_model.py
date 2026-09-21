@@ -101,10 +101,19 @@ RUN_NAME = 'domain_mixedlm'
 # stratum colour on the same figure and made it unreadable.
 REFERENCE_DOMAIN = 'Control'
 
-#: Diagnosis stratum labels. Used as DATA VALUES in the slopes table and as
-#: figure labels, so they are defined once and never spelled inline.
+#: Diagnosis stratum labels. These are the DATA VALUES in the slopes table:
+#: ASCII, stable, and already written into stored artifacts, so they do not
+#: change for presentation reasons.
 DX_LABEL = 'MDD'
 NON_DX_LABEL = 'non-MDD'
+
+#: What a FIGURE calls them, following `plot_dx_pain.arm_labels`: the negative
+#: arm is not a matched control group, it is everyone in the cohort without the
+#: code, and `MDD+` / `MDD-` says that and nothing more. Kept separate from the
+#: data values above so a stored table stays ASCII and greppable while the
+#: figures use the typographic minus.
+DX_DISPLAY = 'MDD+'
+NON_DX_DISPLAY = 'MDD−'
 
 #: Runs written before 2026-09-21 stored 'case'/'control'. `--replot` has to
 #: keep working on them, so the old values are mapped on READ rather than the
@@ -1190,8 +1199,8 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
             ax.plot(b, y + off, '-', color=colours[stratum], lw=1.0, alpha=0.30)
             ax.errorbar(b, y + off, xerr=1.96 * se, fmt='o', ms=4.6, lw=1.3,
                         capsize=2, color=colours[stratum],
-                        label=(f'{stratum} '
-                               f'(n={n_case if stratum == DX_LABEL else n_ctrl})')
+                        label=(f'{DX_DISPLAY if stratum == DX_LABEL else NON_DX_DISPLAY}'
+                               f' (n={n_case if stratum == DX_LABEL else n_ctrl})')
                         if j == 0 else None)
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
         ax.set_xlim(-xmax, xmax)
@@ -1225,8 +1234,8 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
     dropped = (f'  Bands EXCLUDED for an ill-conditioned fit: {", ".join(bad)}.'
                if bad else '')
     fig.suptitle(
-        f'Pain slope in {DX_LABEL} vs {NON_DX_LABEL}, one panel per circuit  '
-        f'({n_case} {DX_LABEL}, {n_ctrl} {NON_DX_LABEL})\n'
+        f'Pain slope in {DX_DISPLAY} vs {NON_DX_DISPLAY}, one panel per '
+        f'circuit  ({n_case} {DX_DISPLAY}, {n_ctrl} {NON_DX_DISPLAY})\n'
         'both strata from ONE three-way fit; * = BH-significant DIFFERENCE '
         f'at q={args.fdr_q}', fontsize=12)
     # ONE x label, on the CENTRE panel's own axis. Five copies overlap each
@@ -1325,8 +1334,8 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
             ax.errorbar(d['beta'].to_numpy(dtype=float), y + off,
                         xerr=1.96 * d['se'].to_numpy(dtype=float), fmt='o',
                         ms=4.5, lw=1.2, capsize=2, color=colors[stratum],
-                        label=(f'{stratum} '
-                               f'(n={n_case if stratum == DX_LABEL else n_ctrl})')
+                        label=(f'{DX_DISPLAY if stratum == DX_LABEL else NON_DX_DISPLAY}'
+                               f' (n={n_case if stratum == DX_LABEL else n_ctrl})')
                         if j == 0 else None)
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
         ax.set_xlim(-band_limit(ss, band), band_limit(ss, band))
@@ -1360,7 +1369,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
                     lw=1.6, capsize=2, color='#7d3c98')
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
         ax.set_xlim(-band_limit(diff, band), band_limit(diff, band))
-        ax.set_title(f'{band}: {DX_LABEL} - {NON_DX_LABEL}', fontsize=8.5)
+        ax.set_title(f'{band}: {DX_DISPLAY} - {NON_DX_DISPLAY}', fontsize=8.5)
         ax.tick_params(labelsize=7)
         if j == 0:
             ax.set_yticks(y)
@@ -1371,23 +1380,37 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
                          pd.Series(dtype=bool)).fillna(False).sum())
     fig.suptitle(
         f'Are different circuits changed by {args.dx.upper()}?  '
-        f'{n_case} {DX_LABEL} vs {n_ctrl} {NON_DX_LABEL}\n'
+        f'{n_case} {DX_DISPLAY} vs {n_ctrl} {NON_DX_DISPLAY}\n'
         'TOP: each circuit\'s pain slope per stratum.   '
         f'BOTTOM: the difference, {n_rej} BH-significant at q={args.fdr_q}',
         fontsize=12)
     fig.tight_layout(rect=(0, 0.11, 1, 0.92))
+    # The omnibus sentence has to track whether the omnibus is actually shown.
+    # Left unconditional it described a number that --hide-omnibus had removed.
+    omni_note = (
+        'THE OMNIBUS IS NOT SHOWN on this figure (--hide-omnibus). It is the '
+        'joint Wald over the whole three-way block and is the only test of "do '
+        'circuits differ FROM EACH OTHER in how MDD changes pain encoding"; '
+        'without it, each per-circuit row should be read as its own contrast '
+        'and nothing here speaks to differences between circuits. '
+        if getattr(args, 'hide_omnibus', False) else
+        'The omnibus in each top title is the joint Wald over the whole '
+        'three-way block and is the actual test of "do circuits differ FROM '
+        'EACH OTHER in how MDD changes pain encoding"; per-circuit rows read '
+        'after a non-significant omnibus are exploratory. ')
     fig.text(0.01, 0.005,
              'One fit per band: log10_power ~ NRS_within * domain * dx_state + '
              'NRS_submean, with the parcel-nested random slope unchanged. Both '
-             'strata come from that ONE fit as linear combinations with SEs '
-             'from the fitted covariance -- neither arm was refitted alone, '
-             'which is the point: comparing which arm reaches significance is '
-             'the difference-of-significance fallacy, and the case arm is half '
-             'the size so its intervals are wider everywhere regardless. The '
-             'omnibus in each top title is the joint Wald over the whole '
-             'three-way block and is the actual test of "do circuits differ in '
-             'how depression changes pain encoding"; per-circuit rows read '
-             'after a non-significant omnibus are exploratory.\n'
+             'groups come from that ONE fit as linear combinations with SEs '
+             'from the fitted covariance -- neither group was refitted alone, '
+             'which is the point: comparing which group reaches significance '
+             f'is the difference-of-significance fallacy, and {DX_DISPLAY} is '
+             'the smaller group here so its intervals are wider everywhere '
+             'regardless. AN INTERVAL CLEAR OF ZERO IS NOT THE TEST either -- '
+             'that is the uncorrected p < 0.05 boundary, while the outlines '
+             'are BH-corrected over all 30 circuit x band cells, which is why '
+             'a difference can sit off zero and still not be outlined. '
+             + omni_note + '\n'
              f'{DOMAIN_CAVEAT}\n{MODULATORY_CAVEAT}\n{DISCLAIMER}',
              fontsize=6.2, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_dx_domain.png'
