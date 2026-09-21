@@ -781,6 +781,7 @@ def main():
         figure(run_dir, cells, slopes, per_domain, domains, args)
         if args.dx_model != 'none':
             dx_domain_figure(run_dir, cells, slopes, domains, args)
+            dx_circuit_figure(run_dir, cells, slopes, domains, args)
         for _t in SPECTRA_TERMS:
             figure_by_domain(run_dir, cells, slopes, per_domain,
                              domains, args, term=_t)
@@ -1077,10 +1078,145 @@ def main():
                          args, term=_t)
     if args.dx_model != 'none':
         dx_domain_figure(run_dir, cells, slopes, domains, args)
+        dx_circuit_figure(run_dir, cells, slopes, domains, args)
     io.log_analysis('domain-level mixed models: pain x processing domain, one fit '
                     'per band, parcel as a nested random slope (EXPLORATORY)',
                     run_dir)
     print(run_dir)
+
+
+def dx_circuit_figure(run_dir, cells, slopes, domains, args):
+    """ONE PANEL PER CIRCUIT: the pain slope in MDD vs non-MDD, across bands.
+
+    The same numbers as `fig_dx_domain.png` read the other way round. That
+    figure puts one panel per BAND with circuits down the axis, which answers
+    "within this band, which circuit differs". This one puts one panel per
+    CIRCUIT with bands down the axis, which answers "within this circuit, at
+    which frequency do the strata diverge" -- the spectral profile of the
+    diagnosis effect, per network. Both come from the identical fit; neither is
+    a re-analysis.
+
+    THE X SCALE IS SHARED ACROSS PANELS, deliberately, and this is the opposite
+    choice from `fig_dx_domain.png`. There, panels were bands and the badly
+    conditioned low-frequency fits forced per-band scales or nothing else was
+    readable. Here panels are CIRCUITS and comparing circuits is the entire
+    point of the layout, so a per-panel scale would make a weak circuit look
+    like a strong one. Any band whose fit did not produce a positive-definite
+    Hessian is therefore DROPPED rather than plotted, because a single 0.08 SE
+    would otherwise flatten every honest interval in the figure -- and plotting
+    it would imply its interval means something.
+
+    NO PER-STRATUM SIGNIFICANCE MARKS, same as every other figure in this
+    analysis. What is marked is the DIFFERENCE, from the `pain_x_dx` rows and
+    their own BH family: a filled band label means the strata differ there.
+    Whether one arm's interval happens to exclude zero is not that test.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    ss = slopes[slopes['term'] == 'pain_slope_by_stratum']
+    diff = slopes[slopes['term'] == 'pain_x_dx']
+    if not len(ss):
+        logger.info('no per-stratum slope rows -- skipping fig_dx_circuit.png')
+        return
+
+    # Bands whose fit was ill-conditioned are excluded BY NAME, and the caption
+    # says which. `cells.warnings` carries the statsmodels text; a non-positive-
+    # definite Hessian means the SEs came out of a non-invertible curvature
+    # estimate and are not interval estimates at all.
+    bad = sorted(cells.loc[cells['warnings'].astype(str)
+                 .str.contains('not positive definite'), 'band'])
+    bands = [b for b in BAND_SETS[args.band_set]
+             if b in set(ss['band']) and b not in bad]
+    if not bands:
+        logger.warning('every band ill-conditioned -- skipping fig_dx_circuit.png')
+        return
+    doms = [d for d in domains if d in set(ss['domain'])]
+    n_case = int(cells['n_subjects_case'].max())
+    n_ctrl = int(cells['n_subjects_control'].max())
+
+    keep = ss[ss['band'].isin(bands)]
+    xmax = float(np.nanmax(np.abs(np.concatenate(
+        [keep['ci_lo'].to_numpy(dtype=float),
+         keep['ci_hi'].to_numpy(dtype=float)])))) * 1.10
+
+    fig, axes = plt.subplots(1, len(doms), figsize=(2.9 * len(doms) + 1.4, 5.6),
+                             sharey=True, sharex=True, squeeze=False)
+    y = np.arange(len(bands))
+    colours = {'control': '#4a7fb5', 'case': '#b03a2e'}
+
+    for j, dom in enumerate(doms):
+        ax = axes[0][j]
+        for stratum, off in (('control', -0.16), ('case', +0.16)):
+            d = (keep[(keep['domain'] == dom) & (keep['stratum'] == stratum)]
+                 .set_index('band').reindex(bands))
+            b = d['beta'].to_numpy(dtype=float)
+            se = d['se'].to_numpy(dtype=float)
+            ax.plot(b, y + off, '-', color=colours[stratum], lw=1.0, alpha=0.30)
+            ax.errorbar(b, y + off, xerr=1.96 * se, fmt='o', ms=4.6, lw=1.3,
+                        capsize=2, color=colours[stratum],
+                        label=(f'{"MDD" if stratum == "case" else "control"} '
+                               f'(n={n_case if stratum == "case" else n_ctrl})')
+                        if j == 0 else None)
+        ax.axvline(0, color='0.4', lw=0.9, ls='--')
+        ax.set_xlim(-xmax, xmax)
+        ax.set_title(dom, fontsize=10.5,
+                     color=DOMAIN_COLOURS.get(dom, '0.2'))
+        ax.tick_params(labelsize=7.5)
+        ax.spines[['top', 'right']].set_visible(False)
+        ax.set_xlabel('d log10 power / pain point', fontsize=8)
+        if j == 0:
+            ax.set_yticks(y)
+            ax.set_yticklabels(
+                [f'{b}\n{BAND_SETS[args.band_set][b][0]}-'
+                 f'{BAND_SETS[args.band_set][b][1]} Hz' for b in bands],
+                fontsize=8)
+            ax.set_ylim(len(bands) - 0.5, -0.5)
+            ax.legend(fontsize=7.5, loc='lower right', frameon=False)
+
+        # Mark the DIFFERENCE, not either arm. BH-corrected within its own
+        # family across the whole grid, which is why the flag is read off the
+        # `pain_x_dx` rows rather than recomputed here.
+        dd = diff[(diff['domain'] == dom) & (diff['band'].isin(bands))]
+        rej = dd.get('p_bh_reject')
+        if rej is not None:
+            for band in dd.loc[rej.fillna(False).astype(bool), 'band']:
+                if band in bands:
+                    ax.annotate('*', xy=(0.965, (bands.index(band) + 0.5)
+                                         / len(bands)),
+                                xycoords=('axes fraction', 'axes fraction'),
+                                ha='right', va='center', fontsize=17,
+                                color='#7d3c98')
+
+    dropped = (f'  Bands EXCLUDED for an ill-conditioned fit: {", ".join(bad)}.'
+               if bad else '')
+    fig.suptitle(
+        f'Pain slope in MDD vs non-MDD, one panel per circuit  '
+        f'({n_case} cases, {n_ctrl} controls)\n'
+        'both strata from ONE three-way fit; * = BH-significant DIFFERENCE '
+        f'at q={args.fdr_q}', fontsize=12)
+    fig.tight_layout(rect=(0, 0.16, 1, 0.90))
+    fig.text(0.01, 0.005,
+             'SAME FIT AND SAME NUMBERS as fig_dx_domain.png, transposed: '
+             'panels are circuits and the axis is frequency, so each panel is '
+             'one network\'s spectral profile. ' + formula_note(args)
+             + 'Each stratum\'s slope is a linear combination of that single '
+             'fit with its SE from the fitted covariance, NOT a separate fit '
+             'per arm. Neither arm carries significance marks, deliberately: '
+             'the MDD arm is the smaller one and has wider intervals '
+             'everywhere from power alone, so "one arm excludes zero and the '
+             'other does not" is the difference-of-significance fallacy. Only '
+             'the starred DIFFERENCE is a test.' + dropped + ' The connecting '
+             'line joins ordinal band categories of unequal width and is a '
+             'reading aid, NOT an interpolated spectrum.\n'
+             f'{DX_CAVEAT}\n{DOMAIN_CAVEAT}\n{MODULATORY_CAVEAT}\n{DISCLAIMER}',
+             fontsize=6.2, va='bottom', ha='left', color='0.35', wrap=True)
+    out = run_dir / 'fig_dx_circuit.png'
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    logger.info('wrote %s', out.name)
+    return out
 
 
 def dx_domain_figure(run_dir, cells, slopes, domains, args):
