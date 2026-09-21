@@ -678,6 +678,9 @@ def main():
                          'per-domain differences in the `pain_x_dx` rows. '
                          'Cannot be combined with --med-model: that would be a '
                          'four-way design, which 17 cases cannot support.')
+    ap.add_argument('--question', default=QUESTION,
+                    help="Level-2 folder. Pass 'mdd' to keep the diagnosis runs "
+                         'out of the pain-physiology tree.')
     ap.add_argument('--dx', choices=list(dx_state.CONDITIONS), default='mdd')
     ap.add_argument('--dx-window-days', type=int,
                     default=dx_state.DEFAULT_WINDOW_DAYS,
@@ -852,7 +855,7 @@ def main():
     from ieeg_ehr.views.view_config import ROI_SCHEME_CODES
     scheme_code = ROI_SCHEME_CODES.get(args.roi_scheme, 'paindomains')
     run_dir = config.analysis_run_dir(
-        question=QUESTION, output_type=OUTPUT_TYPE,
+        question=args.question, output_type=OUTPUT_TYPE,
         view_scheme='-'.join(
             [args.band_set.replace('_', ''), scheme_code]
             + ([args.drug_set] if args.med_model != 'none' else [])
