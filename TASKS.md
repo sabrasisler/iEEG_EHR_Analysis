@@ -532,3 +532,14 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       to a degraded covariance estimate, and alpha reports NOT CONVERGED in the
       ever variant. If the flag survives, make it print this warning.
       (→ docs/labnotebook/2026-09-21.md)
+- [ ] Run the ROI-unit domain model on `pain_domains_v2` (no insula) as the
+      control that separates "ROI level + no parcel term" from "insula added" --
+      `sbatch --export=ALL,EXTRA="--roi-scheme pain_domains_v2" sbatch/domain_model_roi.sbatch`
+      will not work as written (the sbatch pins v3 and a threshold); run
+      `python -m ieeg_ehr.analysis.run_domain_model --unit roi --roi-scheme pain_domains_v2`
+      instead. (→ docs/labnotebook/2026-09-21.md)
+- [ ] Replace the median-y insula split with the Destrieux/a2009s assignment
+      (G_insular_short vs S_circular_insula_ant/sup/inf) once channel_meta
+      carries a2009s labels. The coordinate hook (`coordinate_regions` +
+      `insula_ap.apply_split`) can then be retired for insula, or kept as the
+      fallback for subjects with no a2009s. (→ docs/labnotebook/2026-09-21.md)

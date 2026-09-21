@@ -386,3 +386,25 @@ Add with `/addscratch "<thought>"`. A trailing `(→ ...)` is its origin.
   a band choice from a different hypothesis is not pre-specification. If it
   cannot be defended as pre-specified, the 30-cell number is the one to report
   and the 5-circuit one should not appear even as a footnote.
+
+- **Is the ROI-level omnibus gain from the ROI unit, the dropped parcel term, or
+  the insula?** The 2026-09-21 run changed all three at once and the omnibus
+  moved a long way (delta p 0.18 -> 0.0021, beta 3.4e-10 -> 1.4e-38). A
+  `--unit roi --roi-scheme pain_domains_v2` run is the control that separates
+  "ROI level, no parcel term" from "insula added" -- v2 is already registered in
+  DOMAIN_SCHEMES, so it is one command and no new code.
+  (→ docs/labnotebook/2026-09-21.md)
+- **The Control domain is significant in delta** (-0.0111, p=0.003) in the
+  ROI-level run, alongside Sensory/Affective/Cognitive. Occipital+Auditory
+  sloping the same way as everything else is the signature of a global
+  low-frequency driver rather than nociception. Does the delta row survive any
+  normalization that removes a broadband shift, and is this the same thing the
+  PCC low-frequency effect is?  (→ docs/labnotebook/2026-09-21.md)
+- **How much does the insula A/P boundary matter?** The cut is this cohort's
+  median (y = -2.2), not a landmark, and the L/R contact split is lopsided in
+  opposite directions (L 154a/114p, R 97a/137p) so a pooled cut skews the right
+  hemisphere posterior. Worth checking whether the aIns/pIns beta dissociation
+  survives a per-hemisphere median and a +/-5 mm shift of the threshold --
+  `--per-hemisphere` and `--threshold` already exist on plot_insula_split, and
+  run_domain_model / run_bandpower_mixed both take `--insula-threshold`.
+  (→ docs/labnotebook/2026-09-21.md)

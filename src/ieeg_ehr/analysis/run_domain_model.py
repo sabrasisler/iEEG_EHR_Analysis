@@ -1367,9 +1367,15 @@ def main():
     if args.dx_model != 'none':
         dx_domain_figure(run_dir, cells, slopes, domains, args)
         dx_circuit_figure(run_dir, cells, slopes, domains, args)
-    io.log_analysis('domain-level mixed models: pain x processing domain, one fit '
-                    'per band, parcel as a nested random slope (EXPLORATORY)',
-                    run_dir)
+    # The index line has to name the model that ran. It was hard-coded to the
+    # parcel spec, so the first ROI-unit run indexed itself as having a
+    # "parcel as a nested random slope" it did not fit -- and analyses_run.md is
+    # append-only, so a wrong line there is permanent.
+    io.log_analysis(
+        'domain-level mixed models: pain x processing domain, one fit per band, '
+        + ('ROI unit, region NOT in the model' if args.unit == 'roi'
+           else 'parcel as a nested random slope')
+        + f' [{args.roi_scheme}] (EXPLORATORY)', run_dir)
     print(run_dir)
 
 
