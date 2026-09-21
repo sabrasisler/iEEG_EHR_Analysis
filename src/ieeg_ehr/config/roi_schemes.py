@@ -359,11 +359,66 @@ _PAIN_DOMAIN_V2_PATTERNS['Modulatory'] = (
 _PAIN_DOMAIN_V2_DISPLAY = ['Sensory', 'Affective', 'Cognitive', 'Modulatory',
                            'Control']
 
+# ---------------------------------------------------------------------------
+# COORDINATE-DERIVED REGIONS: the insula split (2026-09-21)
+# ---------------------------------------------------------------------------
+# `aIns` and `pIns` are the first regions in this module that CANNOT be derived
+# from an atlas label. DK has one `insula` parcel; the anterior/posterior split
+# comes from the contact's MNI y coordinate (`analysis.insula_ap`), which is a
+# different kind of fact from a substring match and is therefore computed
+# elsewhere.
+#
+# They are declared here as `coordinate_regions`, a map from the LABEL-derived
+# region they replace to the parts it splits into. Three things follow, and the
+# third is the one that makes this safe:
+#
+#   - `_validated` accepts them as display names even though they have no
+#     patterns, which the un-extended validator would reject (correctly -- a
+#     display row with no way to be filled is normally a bug).
+#   - `region_for_dk_label` still returns None for an insular label, because
+#     `Insula` is not in `display`. The label layer therefore cannot assign an
+#     insular contact to anything.
+#   - So a caller that FORGETS the coordinate step drops insula entirely, which
+#     is the honest status quo these schemes already had, rather than silently
+#     assigning every insular contact to one part. The failure mode is a missing
+#     region, not a wrong one.
+#
+# `analysis.insula_ap.apply_split` is the one function that fills them in, and it
+# consumes `coordinate_regions()` so the two cannot name different parts.
+
+#: The label-derived region that the coordinate step replaces -> its parts.
+_INSULA_SPLIT = {'Insula': ('aIns', 'pIns')}
+
+
+def _with_coordinate_regions(patterns, display, coordinate_regions):
+    """(patterns, display) with each split region's parts in its display slot.
+
+    The patterns dict is UNCHANGED: the parent region keeps its patterns and
+    keeps matching labels, it simply stops being displayed. That is what makes
+    the un-split fallback drop insula rather than mislabel it.
+    """
+    out_display = []
+    for name in display:
+        out_display.extend(coordinate_regions.get(name, (name,)))
+    return dict(patterns), out_display
+
+
+_ROI_V2_INS_PATTERNS, _ROI_V2_INS_DISPLAY = _with_coordinate_regions(
+    _ROI_V2_PATTERNS, _ROI_V2_DISPLAY, _INSULA_SPLIT)
+_ROI_V2_OFC_INS_PATTERNS, _ROI_V2_OFC_INS_DISPLAY = _with_coordinate_regions(
+    _ROI_V2_OFC_PATTERNS, _ROI_V2_OFC_DISPLAY, _INSULA_SPLIT)
+
 ROI_SCHEMES = {
     'default': {'patterns': _DEFAULT_PATTERNS, 'display': _DEFAULT_DISPLAY},
     'roi_v2': {'patterns': _ROI_V2_PATTERNS, 'display': _ROI_V2_DISPLAY},
     'roi_v2_ofc': {'patterns': _ROI_V2_OFC_PATTERNS,
                    'display': _ROI_V2_OFC_DISPLAY},
+    'roi_v2_ins': {'patterns': _ROI_V2_INS_PATTERNS,
+                   'display': _ROI_V2_INS_DISPLAY,
+                   'coordinate_regions': _INSULA_SPLIT},
+    'roi_v2_ofc_ins': {'patterns': _ROI_V2_OFC_INS_PATTERNS,
+                       'display': _ROI_V2_OFC_INS_DISPLAY,
+                       'coordinate_regions': _INSULA_SPLIT},
     'pain_domains': {'patterns': _PAIN_DOMAIN_PATTERNS,
                      'display': _PAIN_DOMAIN_DISPLAY},
     'pain_domains_v2': {'patterns': _PAIN_DOMAIN_V2_PATTERNS,
@@ -371,6 +426,120 @@ ROI_SCHEMES = {
 }
 
 DEFAULT_ROI_SCHEME = 'default'
+
+# ---------------------------------------------------------------------------
+# DOMAIN SCHEMES -- the ROI layer kept, not fused away (2026-09-21)
+# ---------------------------------------------------------------------------
+# `_merge_categories` builds a domain scheme by FUSING ROI categories into one,
+# which is exactly right when the domain is the only level you need: the result
+# is an ordinary scheme and every label-based caller works unchanged. It has one
+# cost, and the cost is now load-bearing: the intermediate ROI names are GONE
+# from the fused dict, so a caller holding `pain_domains_v2` cannot ask which ROI
+# a contact is in -- only which domain.
+#
+# The parcel-level domain model did not need to ask, because it went straight
+# from the DK label to a parcel and carried the parcel itself as a random slope.
+# Modelling at the ROI LEVEL does need to ask: the ROI is the unit that maps to a
+# domain, and the same ROI assignment has to be available to the region-level
+# consistency map, which shows ROIs the domains do not contain at all.
+#
+# So a domain scheme is registered here as (base ROI scheme, ROI -> domain
+# membership, display order) rather than only as its fused product. The fused
+# product is still registered in ROI_SCHEMES for every caller that wants a
+# label -> domain map in one step; this is the same information with the middle
+# level left in.
+#
+# CONSISTENCY BETWEEN THE TWO IS NOT ASSUMED: `domain_scheme` rebuilds the fused
+# patterns from the members here, so a membership edit that forgot to update the
+# fused scheme is a failed lookup rather than two schemes quietly disagreeing.
+
+# -- pain_domains_v3: v2 with the insula split back in (2026-09-21) ----------
+# Sabra's assignment. The ONLY change from v2 is that insula returns, split by
+# coordinate rather than by label: aIns joins AFFECTIVE and pIns joins SENSORY,
+# which is the anterior/posterior dissociation the framework rests on and the
+# exact thing DK's single `insula` parcel made impossible to state. See
+# `analysis.insula_ap` for what the split actually is and how coarse it is --
+# a median cut on MNI y, not the Destrieux assignment.
+#
+# The caveat that blocked insula in v1 and v2 has NOT been dissolved, it has been
+# TRADED: the parcel is no longer being assigned wholesale to one domain it only
+# half belongs to, at the price of a boundary that is this cohort's median rather
+# than an anatomical landmark. That is the same class of trade v2 already made
+# for Thalamus, and it is accepted on the same terms -- deliberately, in writing,
+# with the threshold recorded as a number.
+_PAIN_DOMAINS_V3 = {
+    'Sensory': ('S1', 'S2/PO', 'Thalamus', 'pIns'),
+    'Affective': ('rACC', 'dACC', 'Amygdala', 'aIns'),
+    'Cognitive': ('mOFC', 'lOFC', 'dlPFC', 'IFG/vlPFC', 'dmPFC/SMA'),
+    'Modulatory': ('M1',),
+    'Control': ('Auditory', 'Occipital'),
+}
+
+#: Same pathway order as v2: ascending sensory, the affective and cognitive
+#: domains it projects to, the descending modulatory arm, quasi-controls last.
+_PAIN_DOMAIN_V3_DISPLAY = ['Sensory', 'Affective', 'Cognitive', 'Modulatory',
+                           'Control']
+
+DOMAIN_SCHEMES = {
+    'pain_domains': {'base': 'roi_v2_ofc', 'members': _PAIN_DOMAINS,
+                     'display': _PAIN_DOMAIN_DISPLAY},
+    'pain_domains_v2': {'base': 'roi_v2', 'members': _PAIN_DOMAINS_V2,
+                        'display': _PAIN_DOMAIN_V2_DISPLAY},
+    'pain_domains_v3': {'base': 'roi_v2_ins', 'members': _PAIN_DOMAINS_V3,
+                        'display': _PAIN_DOMAIN_V3_DISPLAY},
+}
+
+
+def domain_scheme(name):
+    """{'base', 'members', 'display', 'roi_to_domain', 'rois'} for a domain scheme.
+
+    `base` is the ROI scheme the members are ROIs OF -- resolve it to get the
+    label patterns and any coordinate regions. `roi_to_domain` is the inverted
+    membership, which is the direction every caller actually wants.
+
+    VALIDATED AGAINST THE BASE SCHEME, because the failure this prevents is
+    silent: a typo in a member name ('S2/P0' for 'S2/PO') would simply never
+    match a contact, and the domain would come back one ROI light with no error
+    anywhere. An ROI named here that the base scheme does not display is a hard
+    error instead.
+    """
+    if name not in DOMAIN_SCHEMES:
+        raise ValueError(f'Unknown domain scheme {name!r}. '
+                         f'Known: {sorted(DOMAIN_SCHEMES)}')
+    spec = DOMAIN_SCHEMES[name]
+    base_regions = set(roi_regions(spec['base']))
+    roi_to_domain = {roi: dom for dom, rois in spec['members'].items()
+                     for roi in rois}
+    unknown = sorted(r for r in roi_to_domain if r not in base_regions)
+    if unknown:
+        raise ValueError(
+            f'domain scheme {name!r}: ROIs {unknown} are not displayed regions of '
+            f'its base scheme {spec["base"]!r}. Known: {sorted(base_regions)}')
+    missing = [d for d in spec['display'] if d not in spec['members']]
+    if missing:
+        raise ValueError(f'domain scheme {name!r}: display names {missing} have '
+                         'no member ROIs')
+    return {'name': name, 'base': spec['base'],
+            'members': {k: tuple(v) for k, v in spec['members'].items()},
+            'display': list(spec['display']), 'roi_to_domain': roi_to_domain,
+            'rois': [r for r in roi_regions(spec['base']) if r in roi_to_domain]}
+
+
+def domain_scheme_provenance(name):
+    """A domain scheme's full contents, for a run's provenance.
+
+    Includes the BASE scheme's contents, because "which ROIs are in Sensory" is
+    only half the story -- which atlas labels are in S1 is the other half, and a
+    run recording only the domain membership could not be reproduced.
+    """
+    spec = domain_scheme(name)
+    unassigned = [r for r in roi_regions(spec['base'])
+                  if r not in spec['roi_to_domain']]
+    return {'name': name, 'base_scheme': spec['base'],
+            'display': spec['display'],
+            'members': {k: list(v) for k, v in spec['members'].items()},
+            'unassigned_rois': unassigned,
+            'base_scheme_contents': scheme_provenance(spec['base'])}
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +582,20 @@ def _validated(scheme, origin):
         if key not in scheme:
             raise ValueError(f'ROI scheme from {origin} is missing {key!r}')
     patterns, display = scheme['patterns'], scheme['display']
+    coord = scheme.get('coordinate_regions') or {}
+    # A COORDINATE region is allowed to have no patterns -- that is the whole
+    # point of it -- but its PARENT must exist, or the coordinate step has
+    # nothing to replace and the region can never be filled either way.
+    missing_parent = [p for p in coord if p not in patterns]
+    if missing_parent:
+        raise ValueError(
+            f'ROI scheme from {origin}: coordinate_regions parents {missing_parent} '
+            f'are not categories of this scheme. Known: {sorted(patterns)}')
+    coord_parts = {part for parts in coord.values() for part in parts}
+
     # A display row with no patterns would be a permanently empty heatmap row --
     # far better to fail at config time than to ship a figure with a blank band.
-    unknown = [d for d in display if d not in patterns]
+    unknown = [d for d in display if d not in patterns and d not in coord_parts]
     if unknown:
         raise ValueError(
             f'ROI scheme from {origin}: display names {unknown} have no patterns, so '
@@ -424,12 +604,24 @@ def _validated(scheme, origin):
     empty = [k for k, v in patterns.items() if not v]
     if empty:
         raise ValueError(f'ROI scheme from {origin}: categories {empty} have no patterns')
-    return {'patterns': patterns, 'display': list(display), 'origin': origin}
+    return {'patterns': patterns, 'display': list(display), 'origin': origin,
+            'coordinate_regions': {k: tuple(v) for k, v in coord.items()}}
 
 
 def roi_regions(scheme=None):
     """Display-order ROI rows for a scheme."""
     return list(resolve_roi_scheme(scheme)['display'])
+
+
+def coordinate_regions(scheme=None):
+    """{parent region: (part, ...)} for regions that a COORDINATE step fills in.
+
+    Empty for every label-only scheme. A caller that handles coordinate regions
+    reads this rather than hard-coding 'Insula', so adding a second split later
+    (a thalamic one, say) does not mean finding every site that knew about the
+    first.
+    """
+    return dict(resolve_roi_scheme(scheme).get('coordinate_regions') or {})
 
 
 def scheme_provenance(scheme=None):
@@ -440,8 +632,12 @@ def scheme_provenance(scheme=None):
     ran.
     """
     resolved = resolve_roi_scheme(scheme)
-    return {'origin': resolved['origin'], 'display': resolved['display'],
-            'patterns': {k: list(v) for k, v in resolved['patterns'].items()}}
+    out = {'origin': resolved['origin'], 'display': resolved['display'],
+           'patterns': {k: list(v) for k, v in resolved['patterns'].items()}}
+    if resolved.get('coordinate_regions'):
+        out['coordinate_regions'] = {k: list(v) for k, v
+                                     in resolved['coordinate_regions'].items()}
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -462,14 +658,27 @@ def categorize_desikan_killiany(dk_label, scheme=None):
     return FALLBACK
 
 
-def region_for_dk_label(dk_label, scheme=None):
+def region_for_dk_label(dk_label, scheme=None, include_coordinate_parents=False):
     """One DK label -> a DISPLAYED ROI, or None if it falls outside the ROI set.
 
     None means "deliberately not analysed" (white matter, occipital, unlabeled,
     ...). Callers must drop those AND log how many, never silently exclude them --
     coverage is a confound in this dataset, so a shrinking denominator has to be
     visible.
+
+    `include_coordinate_parents` also returns the PARENT of a coordinate region
+    (`Insula`, which is never itself displayed), so a caller can hand those
+    channels to the coordinate step that splits them. It is off by default
+    because the returned name is then NOT a displayed region, and anything that
+    treats it as one -- a heatmap row, a domain lookup -- would be wrong. Turn it
+    on only immediately before calling `insula_ap.apply_split`, which is what
+    removes the parent names again.
     """
     resolved = resolve_roi_scheme(scheme)
     category = categorize_desikan_killiany(dk_label, resolved)
-    return category if category in resolved['display'] else None
+    if category in resolved['display']:
+        return category
+    if include_coordinate_parents and category in (
+            resolved.get('coordinate_regions') or {}):
+        return category
+    return None

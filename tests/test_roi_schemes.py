@@ -231,3 +231,177 @@ def test_display_name_without_patterns_is_rejected():
 def test_unknown_scheme_name_is_rejected():
     with pytest.raises(ValueError, match='Unknown ROI scheme'):
         roi_schemes.resolve_roi_scheme('not-a-scheme')
+
+
+# ---------------------------------------------------------------------------
+# Coordinate-derived regions and the domain registry (2026-09-21)
+# ---------------------------------------------------------------------------
+# The invariant worth pinning here is NOT "aIns exists". It is that the label
+# layer cannot assign an insular contact to anything, so a caller that forgets
+# the coordinate step loses insula rather than mislabelling it -- the failure
+# mode this design was chosen for.
+
+@pytest.mark.parametrize('scheme', ['roi_v2_ins', 'roi_v2_ofc_ins'])
+def test_split_scheme_displays_the_parts_and_not_the_parent(scheme):
+    display = roi_schemes.roi_regions(scheme)
+    assert 'aIns' in display and 'pIns' in display
+    assert 'Insula' not in display
+    # Displayed in the parent's slot, so the figure row order is unchanged
+    # apart from one row becoming two.
+    unsplit = 'roi_v2' if scheme == 'roi_v2_ins' else 'roi_v2_ofc'
+    base = roi_schemes.roi_regions(unsplit)
+    expected = []
+    for r in base:
+        expected.extend(('aIns', 'pIns') if r == 'Insula' else (r,))
+    assert display == expected
+
+
+@pytest.mark.parametrize('scheme', ['roi_v2_ins', 'roi_v2_ofc_ins'])
+def test_insular_label_reaches_no_region_without_the_coordinate_step(scheme):
+    assert roi_schemes.region_for_dk_label('ctx-lh-insula', scheme) is None
+    assert roi_schemes.region_for_dk_label(
+        'ctx-lh-insula', scheme, include_coordinate_parents=True) == 'Insula'
+
+
+def test_coordinate_regions_are_reported_and_empty_for_label_only_schemes():
+    assert roi_schemes.coordinate_regions('roi_v2_ins') == {'Insula': ('aIns', 'pIns')}
+    assert roi_schemes.coordinate_regions('roi_v2') == {}
+    assert roi_schemes.coordinate_regions('pain_domains_v2') == {}
+
+
+def test_a_coordinate_region_with_no_parent_is_rejected():
+    with pytest.raises(ValueError, match='coordinate_regions parents'):
+        roi_schemes.resolve_roi_scheme(
+            {'patterns': {'S1': ['postcentral']}, 'display': ['S1', 'aIns'],
+             'coordinate_regions': {'Insula': ['aIns']}})
+
+
+def test_splitting_a_scheme_does_not_change_any_other_region():
+    for label in ('ctx-lh-postcentral', 'Left-Thalamus', 'ctx-rh-precuneus',
+                  'ctx-lh-rostralanteriorcingulate', 'Left-Cerebral-White-Matter'):
+        assert (roi_schemes.region_for_dk_label(label, 'roi_v2_ins')
+                == roi_schemes.region_for_dk_label(label, 'roi_v2'))
+
+
+# -- the domain registry ----------------------------------------------------
+
+def test_domain_registry_reproduces_the_fused_schemes_assignment():
+    """label -> domain must be the same whether it goes via the ROI or not.
+
+    The fused scheme and the ROI membership are two spellings of one mapping.
+    They are built from different data, so if an edit to one is not mirrored in
+    the other this is what says so.
+    """
+    spec = roi_schemes.domain_scheme('pain_domains_v2')
+    labels = [p for pats in
+              roi_schemes.resolve_roi_scheme(spec['base'])['patterns'].values()
+              for p in pats]
+    for label in labels:
+        fused = roi_schemes.region_for_dk_label(label, 'pain_domains_v2')
+        roi = roi_schemes.region_for_dk_label(label, spec['base'])
+        assert fused == spec['roi_to_domain'].get(roi), label
+
+
+def test_pain_domains_v3_places_the_insula_halves_in_opposite_domains():
+    spec = roi_schemes.domain_scheme('pain_domains_v3')
+    assert spec['roi_to_domain']['aIns'] == 'Affective'
+    assert spec['roi_to_domain']['pIns'] == 'Sensory'
+    assert spec['base'] == 'roi_v2_ins'
+    # v3 is v2 plus the two insula halves and nothing else.
+    v2 = roi_schemes.domain_scheme('pain_domains_v2')
+    assert (set(spec['roi_to_domain']) - {'aIns', 'pIns'}
+            == set(v2['roi_to_domain']))
+
+
+def test_a_domain_member_the_base_scheme_lacks_is_rejected():
+    roi_schemes.DOMAIN_SCHEMES['_bad'] = {
+        'base': 'roi_v2', 'members': {'Sensory': ('S2/P0',)},
+        'display': ['Sensory']}
+    try:
+        with pytest.raises(ValueError, match='not displayed regions'):
+            roi_schemes.domain_scheme('_bad')
+    finally:
+        del roi_schemes.DOMAIN_SCHEMES['_bad']
+
+
+def test_domain_scheme_provenance_names_what_it_dropped():
+    prov = roi_schemes.domain_scheme_provenance('pain_domains_v3')
+    assert prov['base_scheme'] == 'roi_v2_ins'
+    # These are real regions of the base scheme that no domain claims. Their
+    # absence from the model is a result, so it is recorded, not inferred.
+    assert 'PCC' in prov['unassigned_rois']
+    assert 'Hippocampus' in prov['unassigned_rois']
+    assert 'aIns' not in prov['unassigned_rois']
+
+
+# ---------------------------------------------------------------------------
+# insula_ap.apply_split -- the coordinate step itself
+# ---------------------------------------------------------------------------
+
+def _maps():
+    return {'sub-001': {'A1-A2': 'Insula', 'B1-B2': 'S1', 'C1-C2': 'Insula'},
+            'sub-002': {'D1-D2': 'Insula'}}
+
+
+def test_apply_split_replaces_parents_and_leaves_everything_else():
+    from ieeg_ehr.analysis import insula_ap
+    maps = _maps()
+    contacts = pd.DataFrame({
+        'subject_id': ['sub-001', 'sub-001', 'sub-002'],
+        'channel': ['A1-A2', 'C1-C2', 'D1-D2'],
+        'ins_part': ['aIns', 'pIns', 'aIns']})
+    report = insula_ap.apply_split(maps, contacts, 'roi_v2_ins')
+    assert maps == {'sub-001': {'A1-A2': 'aIns', 'B1-B2': 'S1', 'C1-C2': 'pIns'},
+                    'sub-002': {'D1-D2': 'aIns'}}
+    assert report['n_by_part'] == {'aIns': 2, 'pIns': 1}
+    assert report['n_dropped_no_coordinate'] == 0
+
+
+def test_an_insular_channel_with_no_coordinate_is_dropped_not_guessed():
+    """The one behaviour that must never become a default.
+
+    An insular contact with no usable MNI coordinate cannot be placed on either
+    side of the cut. Defaulting it would put a contact in a DOMAIN on the
+    strength of nothing at all, so it leaves -- counted.
+    """
+    from ieeg_ehr.analysis import insula_ap
+    maps = _maps()
+    contacts = pd.DataFrame({'subject_id': ['sub-001'], 'channel': ['A1-A2'],
+                             'ins_part': ['aIns']})
+    report = insula_ap.apply_split(maps, contacts, 'roi_v2_ins')
+    assert maps['sub-001'] == {'A1-A2': 'aIns', 'B1-B2': 'S1'}
+    assert maps['sub-002'] == {}
+    assert report['n_dropped_no_coordinate'] == 2
+
+
+def test_apply_split_is_a_no_op_for_a_label_only_scheme():
+    from ieeg_ehr.analysis import insula_ap
+    maps = _maps()
+    before = {k: dict(v) for k, v in maps.items()}
+    assert insula_ap.apply_split(maps, None, 'roi_v2') == {'applied': False}
+    assert maps == before
+
+
+def test_median_split_tie_goes_posterior():
+    """Pinned because it is arbitrary: at odd n the median IS a contact."""
+    import numpy as np
+    from ieeg_ehr.analysis import insula_ap
+    contacts = pd.DataFrame({
+        'subject_id': ['s'] * 3, 'channel': list('abc'),
+        'mni_x': [-35.0, -35.0, -35.0], 'mni_y': [-10.0, 0.0, 10.0],
+        'mni_z': [0.0, 0.0, 0.0], 'hemisphere': ['L'] * 3})
+    out, desc = insula_ap.median_split(contacts)
+    assert desc['thresholds'] == {'all': 0.0}
+    assert list(out['ins_part']) == ['pIns', 'pIns', 'aIns']
+    assert np.isclose(desc['n_posterior'], 2)
+
+
+def test_median_split_can_be_pinned_to_an_earlier_runs_threshold():
+    from ieeg_ehr.analysis import insula_ap
+    contacts = pd.DataFrame({
+        'subject_id': ['s'] * 3, 'channel': list('abc'),
+        'mni_x': [-35.0] * 3, 'mni_y': [-10.0, 0.0, 10.0],
+        'mni_z': [0.0] * 3, 'hemisphere': ['L'] * 3})
+    out, desc = insula_ap.median_split(contacts, threshold=-20.0)
+    assert desc['threshold_source'] == 'pinned'
+    assert list(out['ins_part']) == ['aIns', 'aIns', 'aIns']

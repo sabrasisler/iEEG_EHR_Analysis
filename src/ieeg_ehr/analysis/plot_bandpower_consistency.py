@@ -11,18 +11,29 @@ answer it, at five different resolutions:
 
     signmap     The companion to fig_band_map, same grid: how many subjects
                 share the group's sign in each cell, against a SIGN-FLIP NULL.
+    percent     The same grid coloured by the RAW percentage instead of the
+                excess over that null, with the scale floored at the null so a
+                cell at the bottom is a cell at chance. The one to look at;
+                signmap is the one to quote.
     matrix      Every subject x region slope, one panel per band. No averaging
                 at all -- the honest version of "is it everyone or a few".
     profile     The spectral tilt, then ONE statistic against ONE null: each
                 subject's correlation with a LEAVE-ONE-OUT group map, ranked,
                 against a WITHIN-BAND permutation bound computed per subject.
                 Holding the tilt fixed makes this a claim about anatomy.
+    profile_v2  The SUPERSEDED version of the same question, kept so the two can
+                be compared: the tilt test and the topography test as the two
+                axes of a scatter. It shows the dissociation as a position
+                rather than a number, at the cost of giving equal billing to a
+                null that is nearly free to pass. Rendered with the CORRECTED
+                statistics, so the only difference from `profile` is
+                presentation -- see `fig_profile_v2`.
     network     One point per subject: limbic delta against sensorimotor beta.
                 Is this one syndrome in most patients, or two disjoint subsets?
     influence   Leave-one-subject-out jackknife: does any significant cell rest
                 on one patient?
 
-All five, plus the two tables behind them, are written into a `consistency/`
+All of them, plus the two tables behind them, are written into a `consistency/`
 subfolder of the run directory -- one self-contained set, kept together because
 it describes the SUBJECTS rather than the model that the run's own figures
 describe. `--out-subdir ''` puts them beside `band_cells.parquet` instead.
@@ -81,7 +92,12 @@ logger = logging.getLogger(__name__)
 
 SCRIPT = 'ieeg_ehr/analysis/plot_bandpower_consistency.py'
 
-FIGURES = ('signmap', 'matrix', 'profile', 'network', 'influence')
+#: `profile_v2` writes `fig_consistency_profile_v2.png` -- the superseded
+#: two-statistic scatter, kept so it can be held up against the current
+#: `profile`. It is in the default set on purpose: a comparison figure nobody
+#: regenerates goes stale against the run it claims to describe.
+FIGURES = ('signmap', 'percent', 'matrix', 'profile', 'profile_v2', 'network',
+           'influence')
 
 #: Everything lands in this subfolder of the run, not beside `band_cells.parquet`.
 #: These five figures and their two tables are one self-contained set describing
@@ -651,6 +667,113 @@ def fig_signmap(ctx, out):
     plt.close(fig)
 
 
+def fig_percent(ctx, out):
+    """The RAW percentage of subjects sharing the group's sign, per region x band.
+
+    THE LITERAL QUESTION, drawn literally: what fraction of the patients with a
+    fittable slope in this cell slope the way the group does. `fig_signmap`
+    answers the DEFENSIBLE version of the same question and is the one to quote
+    -- it subtracts each cell's own sign-flip null, because the group sign is
+    estimated from the subjects being counted and so is dragged toward whichever
+    sign the majority already has, which puts the null expectation well above
+    one half. But the raw percentage is what a reader wants to SEE, and reading
+    it off the annotations of a map coloured by something else is a figure
+    fighting its own caption.
+
+    So both exist, and this one is built to make its own limitation visible
+    rather than to hide it:
+
+      - THE COLOUR SCALE STARTS AT THE NULL, not at 0 and not at 0.5. The floor
+        is the mean sign-flip null across cells, so a cell rendered at the
+        bottom of the scale is a cell at chance -- not a cell at zero, which no
+        cell can be. Anything below the null is clipped to the floor and marked,
+        because "worse than chance agreement" is noise, not a finding.
+      - Each cell's OWN null is annotated under the percentage, since it varies
+        with n.
+      - The BH-significant outlines are the same ones as every other map in the
+        run, so the three overlay.
+    """
+    import matplotlib.pyplot as plt
+    from ieeg_ehr.features import common
+
+    regions, bands, edges = ctx['regions'], ctx['bands'], ctx['edges']
+    cc = ctx['cell_consistency']
+
+    def grid_of(col):
+        return (cc.pivot(index='region', columns='band', values=col)
+                .reindex(index=regions, columns=bands))
+
+    frac = grid_of('frac_sign')
+    nn = grid_of('n_with_slope')
+    match = grid_of('n_sign_match')
+    null = grid_of('null_frac_mean')
+    sig = grid_of('p_bh_reject').fillna(0).astype(bool)
+
+    arr = frac.to_numpy(dtype=float)
+    floor = float(np.nanmean(null.to_numpy(dtype=float)))
+    if not np.isfinite(floor):
+        floor = 0.5
+    # Sequential, NOT diverging: this quantity has a floor and a ceiling and no
+    # meaningful midpoint, so a diverging map would invent one. Different hue
+    # family again from both fig_band_map (RdBu_r) and fig_signmap (PRGn), so
+    # three maps on the same grid can never be confused for each other.
+    cm = plt.get_cmap('cividis').copy()
+    cm.set_bad('0.85')
+
+    fig, ax = plt.subplots(figsize=(8.6, 0.42 * len(regions) + 3.4))
+    im = ax.imshow(np.clip(arr, floor, 1.0), aspect='auto', cmap=cm,
+                   vmin=floor, vmax=1.0, interpolation='nearest')
+    common.draw_mask_outline(ax, sig.to_numpy())
+
+    n_below = 0
+    for i in range(len(regions)):
+        for j in range(len(bands)):
+            k, n = match.iat[i, j], nn.iat[i, j]
+            if not np.isfinite(k) or not n:
+                continue
+            f = float(arr[i, j])
+            below = f < floor
+            n_below += int(below)
+            shade = (f - floor) / max(1.0 - floor, 1e-9)
+            ax.text(j, i,
+                    f'{f:.0%}{"*" if below else ""}\n{int(k)}/{int(n)}\n'
+                    f'null {null.iat[i, j]:.0%}',
+                    ha='center', va='center', fontsize=5.2,
+                    color='white' if shade < 0.55 else '0.12')
+
+    ax.set_xticks(range(len(bands)))
+    ax.set_xticklabels([band_label(b, edges) for b in bands], fontsize=8)
+    ax.set_yticks(range(len(regions)))
+    ax.set_yticklabels(regions, fontsize=8)
+    ax.set_title('What PERCENTAGE of subjects slope the way the group does?\n'
+                 f'colour = raw fraction, scale floored at the mean sign-flip '
+                 f'null ({floor:.0%}), not at 0 or 50%',
+                 fontsize=11)
+    fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03,
+                 label='fraction of subjects sharing the group sign')
+    fig.tight_layout(rect=(0, 0.14, 1, 1))
+    _footnote(fig,
+              'Each cell: the raw percentage, then the count (subjects whose own unpooled OLS '
+              'slope has the sign of the group fixed effect, out of subjects with a fittable '
+              'slope there), then that cell\'s own sign-flip null. READ THE PERCENTAGE '
+              'AGAINST THE NULL, NEVER AGAINST 50%. The group sign is estimated from the very '
+              'subjects being counted, so it is pulled toward whichever sign the majority '
+              'already has and chance agreement sits well above one half -- here it averages '
+              f'{floor:.0%}. That is why the colour scale is floored there rather than at 0.5: '
+              'a cell at the bottom of this scale is a cell AT CHANCE. '
+              + (f'{n_below} cell(s) fall BELOW their null and are clipped to the floor and '
+                 'marked *; below-chance agreement is noise, not a reversed effect. '
+                 if n_below else '')
+              + 'fig_consistency_signmap is the same data with each cell\'s own null '
+              'SUBTRACTED, and it is the version to quote for a claim -- this one is the '
+              'version to look at. Black outlines are the same BH-significant cells as '
+              'fig_band_map, so all three grids overlay. A subject casts a full vote however '
+              'noisy their slope is, which is what makes the forest and caterpillar figures '
+              'the necessary companions: sign counting discards precision by construction.')
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def fig_matrix(ctx, out):
     import matplotlib.pyplot as plt
 
@@ -727,38 +850,20 @@ def fig_matrix(ctx, out):
     plt.close(fig)
 
 
-def fig_profile(ctx, out):
-    """Two panels: the spectral tilt, and tilt-vs-topography as ONE scatter.
+def _draw_tilt_panel(ax, ctx, title):
+    """Panel (a) of either profile version: the per-subject spectral tilt.
 
-    THE SECOND PANEL WAS A SORTED DOT PLOT AND THAT WAS MISLEADING. Sorting the
-    rows by full-map r and then dropping the region-pattern r onto whatever y
-    that sorting produced made the region series look like scatter -- i.e. like
-    noise -- when it is the more meaningful of the two measures. Plotting one
-    against the other removes the choice of which series gets to be sorted, and
-    makes the dissociation the caption was straining to describe visible
-    directly: a patient at r=0.7 on the tilt and ~0 on the topography is a point
-    in the lower right, not a red dot with a stray green circle beside it.
-
-    A marginal histogram of the same points went with it. It restated one axis
-    of the scatter and cost a third of the figure width; the medians it carried
-    are annotated lines here instead.
+    Shared rather than copied, because the two versions of the profile figure
+    exist side by side for comparison and a divergence between their (a) panels
+    would be a difference the reader would wrongly attribute to the version.
+    Returns the count of lines that leave the clipped view, for the caller's
+    title.
     """
-    import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
-
     regions, bands, edges = ctx['regions'], ctx['bands'], ctx['edges']
-    mat, subjects = ctx['mat'], ctx['subjects']
-    sim = ctx['similarity']
-    cells = ctx['cells']
+    mat, subjects, cells = ctx['mat'], ctx['subjects'], ctx['cells']
     n_reg, n_band = len(regions), len(bands)
     cube = mat.reshape(len(subjects), n_reg, n_band)
 
-    fig, axes = plt.subplots(1, 2, figsize=(13.6, 6.6),
-                             gridspec_kw={'width_ratios': [1.0, 1.08]})
-
-    # --- (a) spectral tilt, one line per subject
-    ax = axes[0]
     with np.errstate(invalid='ignore'):
         prof = np.nanmean(cube, axis=1)                      # (subj, band)
     x = np.arange(n_band)
@@ -810,11 +915,32 @@ def fig_profile(ctx, out):
     ax.text(0.015, 0.025, '↓ power DECREASES with pain',
             transform=ax.transAxes, fontsize=7.5, va='bottom', ha='left',
             color='0.30')
-    ax.set_title(f'(a) The spectral tilt the null in (b) HOLDS FIXED  '
-                 f'(y clipped to the middle 95%; {n_clipped} '
+    ax.set_title(f'{title}  (y clipped to the middle 95%; {n_clipped} '
                  f'line{"s" if n_clipped != 1 else ""} leave the view)',
                  fontsize=9.5)
     ax.legend(fontsize=7, loc='lower right')
+    return n_clipped
+
+
+def fig_profile(ctx, out):
+    """ONE statistic, ONE null: the ranked per-subject topography test.
+
+    THE CURRENT VERSION. `fig_profile_v2` keeps the previous two-statistic
+    scatter for side-by-side comparison; see its docstring for why this one
+    replaced it.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    subjects = ctx['subjects']
+    sim = ctx['similarity']
+
+    fig, axes = plt.subplots(1, 2, figsize=(13.6, 6.6),
+                             gridspec_kw={'width_ratios': [1.0, 1.08]})
+
+    _draw_tilt_panel(axes[0], ctx,
+                     '(a) The spectral tilt the null in (b) HOLDS FIXED')
 
     # --- (b) ONE statistic, ONE null, ranked
     ax = axes[1]
@@ -936,6 +1062,166 @@ def fig_profile(ctx, out):
               'coverage is not random across patients, so a low r can mean "this patient is '
               'atypical" or "this patient has three regions and two of them are '
               'quasi-controls" -- which is what the size encoding is for.')
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def fig_profile_v2(ctx, out):
+    """THE SUPERSEDED TWO-STATISTIC SCATTER, kept for side-by-side comparison.
+
+    Retained deliberately rather than deleted: the move to a single null was a
+    judgement call, not a bug fix, and a reader comparing the two should be able
+    to see what was given up. What this version shows that `fig_profile` cannot
+    is the DISSOCIATION -- a patient can sit at r=0.7 on the spectral tilt and
+    near zero on the regional topography, and here that is a point in the lower
+    right rather than a number in a footnote.
+
+    Why it was superseded: the x axis is a test whose null is nearly free to
+    pass. A free cross-band shuffle lets any patient with some delta-down /
+    beta-up shape through, and measured on this run 10 of 51 clear it while
+    failing the blocked null that actually tests anatomy. Putting that on an
+    equal footing with the y axis invites a reader to average the two, and the
+    average is dominated by the weaker claim.
+
+    THE NUMBERS HERE ARE THE CORRECTED ONES, not the ones this panel showed when
+    it was first drawn. Two real defects were fixed in between and are not
+    reproduced: the y-axis null shuffled ACROSS bands rather than within, which
+    made the bound ~11% too narrow, and the colouring compared every subject to
+    the MEDIAN bound rather than their own. Reproducing known-wrong numbers for
+    the sake of a faithful diff would make the comparison misleading, so the
+    only difference between this figure and `fig_profile` is presentation.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch, Rectangle
+
+    subjects = ctx['subjects']
+    sim = ctx['similarity']
+
+    fig, axes = plt.subplots(1, 2, figsize=(13.6, 6.6),
+                             gridspec_kw={'width_ratios': [1.0, 1.08]})
+
+    _draw_tilt_panel(axes[0], ctx, '(a) Spectral tilt, one line per subject')
+
+    # --- (b) tilt against topography
+    ax = axes[1]
+    d = sim.dropna(subset=['r_full', 'r_region'])
+    xv = d['r_full'].to_numpy(dtype=float)
+    yv = d['r_region'].to_numpy(dtype=float)
+    # Each axis carries its own median bound, because the two shuffles differ:
+    # free across cells for x, within band for y.
+    nx = float(np.nanmedian(d['r_full_null_p975']))
+    ny = float(np.nanmedian(d['r_region_null_p975']))
+
+    ax.add_patch(Rectangle((-nx, -ny), 2 * nx, 2 * ny, facecolor='0.87',
+                           edgecolor='0.62', lw=0.9, ls='--', zorder=0))
+    ax.axhline(0, color='0.45', lw=0.9, zorder=1)
+    ax.axvline(0, color='0.45', lw=0.9, zorder=1)
+
+    def _area(n):
+        return np.clip(np.asarray(n, dtype=float) * 1.9, 14, 190)
+
+    # Per-subject bounds for the colouring, as in `fig_profile`. The box is only
+    # a guide; comparing everyone to the median flatters low-coverage patients
+    # and penalises well-covered ones.
+    beats_x = xv > d['r_full_null_p975'].to_numpy(dtype=float)
+    beats_y = yv > d['r_region_null_p975'].to_numpy(dtype=float)
+    beats_both = beats_x & beats_y
+    ax.scatter(xv[beats_both], yv[beats_both], s=_area(d['n_cells'])[beats_both],
+               color=ACCENT_B, alpha=0.80, edgecolors='white', lw=0.7, zorder=4)
+    ax.scatter(xv[~beats_both], yv[~beats_both],
+               s=_area(d['n_cells'])[~beats_both], color=ACCENT_A, alpha=0.62,
+               edgecolors='white', lw=0.7, zorder=3)
+
+    med_x, med_y = float(np.median(xv)), float(np.median(yv))
+    ax.axvline(med_x, color='0.35', lw=1.2, ls=':', zorder=2)
+    ax.axhline(med_y, color='0.35', lw=1.2, ls=':', zorder=2)
+
+    xl = (min(xv.min(), -nx) - 0.10, max(xv.max(), nx) + 0.10)
+    yl = (min(yv.min(), -ny) - 0.10, max(yv.max(), ny) + 0.16)
+    ax.set_xlim(*xl)
+    ax.set_ylim(*yl)
+    ax.text(med_x + 0.012 * (xl[1] - xl[0]), yl[1] - 0.05 * (yl[1] - yl[0]),
+            f'median {med_x:.2f}', fontsize=7.2, color='0.30', va='top',
+            ha='left', rotation=90)
+    ax.text(xl[0] + 0.015 * (xl[1] - xl[0]), med_y + 0.012 * (yl[1] - yl[0]),
+            f'median {med_y:.2f}', fontsize=7.2, color='0.30', va='bottom',
+            ha='left')
+
+    q = {'++': int(((xv > 0) & (yv > 0)).sum()),
+         '-+': int(((xv < 0) & (yv > 0)).sum()),
+         '+-': int(((xv > 0) & (yv < 0)).sum()),
+         '--': int(((xv < 0) & (yv < 0)).sum())}
+    for key, (px, py, ha, va) in (
+            ('++', (xl[1], yl[1], 'right', 'top')),
+            ('-+', (xl[0], yl[1], 'left', 'top')),
+            ('+-', (xl[1], yl[0], 'right', 'bottom')),
+            ('--', (xl[0], yl[0], 'left', 'bottom'))):
+        ax.text(px, py, f'{q[key]}', fontsize=17, color='0.62', ha=ha, va=va,
+                fontweight='bold')
+
+    ax.set_xlabel('FULL MAP r  (free shuffle -- spectral tilt dominates)',
+                  fontsize=9)
+    ax.set_ylabel('REGION PATTERN r  (band means removed, within-band shuffle)',
+                  fontsize=9)
+    n_tilt_only = int((beats_x & ~beats_y).sum())
+    ax.set_title(f'(b) {int(beats_both.sum())}/{len(d)} subjects beat their OWN '
+                 f'null on both axes; {n_tilt_only} show the tilt WITHOUT the '
+                 f'topography', fontsize=9.5)
+    ax.legend(handles=[
+        Line2D([], [], ls='', marker='o', ms=8, mfc=ACCENT_B, mec='white',
+               label='beats own null on both axes'),
+        Line2D([], [], ls='', marker='o', ms=8, mfc=ACCENT_A, mec='white',
+               label='beats own null on one or neither'),
+        Patch(facecolor='0.87', edgecolor='0.62', ls='--',
+              label=f'MEDIAN null box ({nx:.2f} x, {ny:.2f} y) -- guide only'),
+        Line2D([], [], ls='', marker='o', ms=np.sqrt(_area(20)),
+               mfc='0.55', mec='white', label='20 cells'),
+        Line2D([], [], ls='', marker='o', ms=np.sqrt(_area(60)),
+               mfc='0.55', mec='white', label='60 cells'),
+        Line2D([], [], ls='', marker='o', ms=np.sqrt(_area(100)),
+               mfc='0.55', mec='white', label='100 cells')],
+        # Lifted clear of the bottom-right corner, which belongs to a quadrant
+        # count -- flush against the corner the legend hides it.
+        fontsize=6.5, loc='lower right', bbox_to_anchor=(1.0, 0.075),
+        labelspacing=0.5, borderpad=0.55, handletextpad=0.5, framealpha=0.92)
+
+    n_map = int((sim['r_map'] > sim['r_map_null_p975']).sum())
+    fig.suptitle('Does an individual patient show THE pattern?   '
+                 '[V2 -- SUPERSEDED, kept for comparison]', fontsize=13)
+    fig.text(0.5, 0.925,
+             f'{ctx["n_assessed"]} subjects with pain assessments  ->  '
+             f'{ctx["n_eligible"]} met the run\'s eligibility filter  ->  '
+             f'{len(subjects)} have a fittable slope in at least one cell and '
+             f'appear here  ->  {len(d)} enter panel (b)',
+             fontsize=8.5, ha='center', va='top', color='0.35')
+    fig.tight_layout(rect=(0, 0.20, 1, 0.905))
+    _footnote(fig,
+              'VERSION 2, SUPERSEDED BY fig_consistency_profile.png -- KEPT SO THE TWO CAN BE '
+              'COMPARED. What this version adds is the DISSOCIATION: x and y are two different '
+              f'questions, and the {n_tilt_only} points low and to the right are patients who '
+              'have the spectral tilt and NOT the regional topography -- visible here as a '
+              'position, whereas the current figure can only state it as a number. What it '
+              'costs is that the x axis is given equal billing despite being a far weaker test: '
+              'its null is a FREE shuffle across all cells, which destroys the shared '
+              'delta-down/beta-up shape in every permutation, so any patient carrying some '
+              'version of that shape beats it whatever their anatomy does. On this run 10 of 51 '
+              'clear the x null and fail the y null. Two axes of unequal strength invite a '
+              'reader to average them, and the average is governed by the weaker one, which is '
+              f'why the current figure plots the single blocked test ({n_map} of '
+              f'{len(sim)} subjects) and reports the rest in consistency_subjects.csv. '
+              'THE NUMBERS SHOWN ARE THE CORRECTED ONES, not what this panel displayed when it '
+              'was first drawn. Two genuine defects were fixed in between and are deliberately '
+              'NOT reproduced here: the y-axis null used to shuffle ACROSS bands rather than '
+              'within it, making the bound about 11% too narrow, and the colouring used to '
+              'compare every subject to the MEDIAN bound rather than to their own. Both are '
+              'fixed in this rendering, so the only difference between this figure and the '
+              'current one is how the same corrected statistics are presented. '
+              'Everything else matches the current figure: the reference is a LEAVE-ONE-OUT '
+              'group map so no subject is correlated against themselves; the box is the median '
+              'of the per-axis bounds and is a guide only, while the colouring uses each '
+              'subject\'s own bound; marker area is the number of cells the subject '
+              'contributes; and the attrition chain is printed above the panels.')
     fig.savefig(out, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
@@ -1150,8 +1436,10 @@ def fig_influence(ctx, out):
     plt.close(fig)
 
 
-BUILDERS = {'signmap': fig_signmap, 'matrix': fig_matrix, 'profile': fig_profile,
-            'network': fig_network, 'influence': fig_influence}
+BUILDERS = {'signmap': fig_signmap, 'percent': fig_percent,
+            'matrix': fig_matrix, 'profile': fig_profile,
+            'profile_v2': fig_profile_v2, 'network': fig_network,
+            'influence': fig_influence}
 
 
 # ============================================================================
@@ -1284,7 +1572,7 @@ def main():
                     help='A band-power mixed-model run written by '
                          'run_bandpower_mixed.py.')
     ap.add_argument('--figure', action='append', choices=FIGURES,
-                    help='Draw only these (repeatable). Default: all five.')
+                    help='Draw only these (repeatable). Default: all of them.')
     ap.add_argument('--n-perm', type=int, default=N_PERM,
                     help='Draws for the sign-flip and label-permutation nulls.')
     ap.add_argument('--seed', type=int, default=0)

@@ -148,8 +148,29 @@ def load_epoch_scores(paths):
     return pd.concat(frames, ignore_index=True)
 
 
-def roi_maps(paths, subjects, roi_scheme):
-    """{subject_id: {channel: ROI}} from the CACHED channel_meta tables."""
+def roi_maps(paths, subjects, roi_scheme, *, insula_threshold=None, report=None):
+    """{subject_id: {channel: ROI}} from the CACHED channel_meta tables.
+
+    THE ONE PLACE A CHANNEL BECOMES A REGION, which is why the coordinate-based
+    insula split is applied here rather than in each analysis: every region-level
+    run in the project reaches its region assignment through this function, so a
+    scheme that declares `coordinate_regions` gets them filled in once, for all
+    of them, instead of two scripts growing two nearly-identical hooks.
+
+    Whether the split happens is decided by the SCHEME, not by a flag: a scheme
+    with no coordinate regions takes the same path it always did.
+
+    `insula_threshold` pins the cut (a number, or {hemisphere: number}) instead
+    of re-deriving this cohort's median -- pass an earlier run's threshold to
+    reproduce its split exactly. `report` is an optional dict that receives the
+    split's description for the caller's provenance; it is an out-parameter
+    rather than a third return value only so that the existing callers, which
+    unpack two, keep working.
+    """
+    from ieeg_ehr.analysis import insula_ap
+    from ieeg_ehr.config import roi_schemes
+
+    split_parents = roi_schemes.coordinate_regions(roi_scheme)
     out, missing = {}, []
     for p in paths:
         subject, session = subject_session_of(p)
@@ -161,12 +182,33 @@ def roi_maps(paths, subjects, roi_scheme):
         except FileNotFoundError:
             missing.append(sid)
             continue
-        mapping = {c: r for c, r in channel_meta.region_map(meta, roi_scheme).items()
+        mapping = {c: r for c, r in channel_meta.region_map(
+                       meta, roi_scheme,
+                       include_coordinate_parents=bool(split_parents)).items()
                    if r is not None}
         if not mapping:
             missing.append(sid)
             continue
         out[sid] = mapping
+
+    if split_parents:
+        # MUST run whenever parents were included above, or the maps would carry
+        # region names ('Insula') that the scheme does not display -- a row no
+        # figure has a slot for and no domain claims.
+        contacts, desc = insula_ap.resolve_split(
+            sorted(out), roi_scheme, threshold=insula_threshold)
+        applied = insula_ap.apply_split(out, contacts, roi_scheme)
+        # A subject whose ONLY labelled channels were unsplittable insula is now
+        # empty, and an empty mapping downstream reads as "this subject is in no
+        # cell" without saying so.
+        emptied = [sid for sid, m in out.items() if not m]
+        for sid in emptied:
+            del out[sid]
+            missing.append(sid)
+        if report is not None:
+            report.update({'insula_split': desc, 'insula_split_applied': applied,
+                           'subjects_emptied_by_split': sorted(emptied)})
+
     if missing:
         logger.warning('%d subject(s) contribute NO ROI-labelled channel and cannot '
                        'enter any cell: %s', len(missing), sorted(missing))

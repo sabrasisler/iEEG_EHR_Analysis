@@ -15,16 +15,45 @@ Two stratified estimates cannot support a claim that they differ.
 ONE FIT PER BAND. Six fits over the whole cohort's rows, rather than one fit per
 (region, band) cell.
 
-THE PARCEL LEVEL IS THE POINT, AND IT IS WHY THE ROI LAYER IS GONE
-------------------------------------------------------------------
-The band-power runs used hand-built ROIs (S1, S2/PO, dlPFC...) that already
-collapse several atlas parcels each. Stacking a domain on top of those would
-average twice, and the second average would hide exactly what a domain claim
-needs to survive: whether every parcel in the domain agrees, or one
-well-sampled parcel is carrying it. So the intermediate layer is removed. The
-unit is the ATLAS PARCEL (Desikan-Killiany, hemispheres collapsed), the domain is
-the fixed effect, and parcel enters as a random SLOPE so each parcel deviates
-around its domain's mean instead of being averaged into it.
+TWO UNITS, `--unit parcel` (the original) AND `--unit roi`
+----------------------------------------------------------
+`--unit parcel` is the design this script was written for. The band-power runs
+used hand-built ROIs (S1, S2/PO, dlPFC...) that already collapse several atlas
+parcels each; stacking a domain on top of those averages twice, and the second
+average hides exactly what a domain claim needs to survive -- whether every
+parcel in the domain agrees, or one well-sampled parcel is carrying it. So the
+intermediate layer was removed: the unit is the ATLAS PARCEL (Desikan-Killiany,
+hemispheres collapsed), the domain is the fixed effect, and parcel enters as a
+random SLOPE so each parcel deviates around its domain's mean.
+
+`--unit roi` (2026-09-21) puts the ROI layer back and takes the region out of
+the model entirely. One row is still ONE CHANNEL x ONE EPOCH -- nothing is
+averaged, which is the difference from the design the ROI layer was originally
+rejected for -- but a channel's region is now the ROI, and the ROI's only job is
+to say which domain the channel is in:
+
+    log10_power ~ NRS_within * C(domain) + NRS_submean
+                  + (NRS_within || subject) + (1 | subject:channel)
+
+WHY. `subj_parcel_slope` is the smallest variance component in every band of
+every run measured (ratios to residual 1.6e-3 to 4.3e-2, against a boundary
+tolerance of 1e-3), which flattens the likelihood in that direction and is the
+documented cause of the non-positive-definite Hessians. Dropping it while
+keeping the ATLAS PARCEL as the unit would be the worst combination -- a unit
+finer than the claim needs, with nothing in the model acknowledging it. Moving
+to the ROI makes the unit match the level the domains are defined at.
+
+WHAT THAT GIVES UP, and where it went. With no region term, nothing in the fit
+guards against one well-sampled ROI carrying its domain. That guard does not
+disappear, it MOVES: the region-level consistency map
+(`run_bandpower_mixed` + `plot_bandpower_consistency`) fits every ROI separately
+and reports how many subjects share each one's sign, including the ROIs no
+domain contains. Read the two together; neither alone is the answer.
+
+`--unit roi` also needs a DOMAIN scheme (`pain_domains_v3`), which keeps the
+ROI->domain membership visible. `pain_domains_v2` fuses the ROI layer away into
+a label->domain map, which is the right shape for the parcel unit and the wrong
+one here.
 
 WHY `subject:parcel` AND NOT `domain:region`
 --------------------------------------------
@@ -186,6 +215,30 @@ MODULATORY_CAVEAT = (
     'whose internal consistency cannot be checked, because one parcel has no '
     'parcel-to-parcel agreement to inspect.')
 
+#: What `pain_domains_v3` has to say for itself instead. The v2 text below is
+#: NOT edited: it is stamped into artifacts that already exist, and a caveat
+#: that silently changes meaning is worse than two caveats.
+DOMAIN_CAVEAT_V3 = (
+    'INSULA IS IN, SPLIT BY COORDINATE RATHER THAN BY LABEL: aIns joins '
+    'Affective and pIns joins Sensory, which is the anterior/posterior '
+    'dissociation the framework rests on. The split is a MEDIAN CUT ON MNI y '
+    'over this cohort\'s insular contacts -- see analysis/insula_ap.py and the '
+    '`insula_split` block of this provenance for the threshold. It is coarse: '
+    'the threshold is this cohort\'s median and not an anatomical landmark, the '
+    'insula is folded so a plane normal to y is not its anterior-posterior '
+    'axis, and contacts near the line are near-arbitrary. It supports "on '
+    'average more anterior", not "this contact is in aIns"; the Destrieux/a2009s '
+    'assignment remains the correct fix. THALAMUS is in Sensory by assignment '
+    'and carries the same class of caveat, accepted rather than avoided: DK '
+    'gives one thalamus parcel while the ascending pathway is VPL/VPM '
+    'specifically, so a Sensory effect here partly reflects medial and dorsal '
+    'nuclei that sit in the affective pathway. Basal Ganglia, Hippocampus, PCC, '
+    'Parietal (other), MTL (other) and Lateral Temporal are UNASSIGNED and '
+    'therefore dropped from the model; PCC carries one of the larger '
+    'low-frequency effects in this cohort, so that is a real and deliberate '
+    'loss. Every one of them IS in the region-level consistency map, which is '
+    'where to look for them.')
+
 DOMAIN_CAVEAT = (
     'INSULA is not in any domain, pending the Destrieux/a2009s anterior-'
     'posterior split: the framework puts anterior insula in the affective '
@@ -199,6 +252,33 @@ DOMAIN_CAVEAT = (
     '(other) and Lateral Temporal are UNASSIGNED and therefore dropped; PCC '
     'carries one of the larger low-frequency effects in this cohort, so that is a '
     'real and deliberate loss.')
+
+
+
+
+def unit_word(args, plural=True, short=False):
+    """What one row's region is CALLED, on a figure. Not cosmetic.
+
+    A `--unit roi` run's domains are made of ROIs, not atlas parcels, and a tick
+    label reading "4 parcels" under Sensory would name a unit the run did not
+    use -- the exact confusion the ROI/parcel distinction exists to prevent.
+    """
+    word = 'ROI' if getattr(args, 'unit', 'parcel') == 'roi' else 'parcel'
+    if short:
+        word = 'ROI' if word == 'ROI' else 'parc'
+    if plural and word != 'parc':
+        word += 's'
+    return word
+
+
+def domain_caveat(roi_scheme):
+    """The caveat text this SCHEME earns, not a constant.
+
+    v3 puts insula in and has to say how; v2 leaves it out and has to say why.
+    Stamping v2's text onto a v3 artifact -- or onto a v3 FIGURE -- would
+    describe a model the run did not fit.
+    """
+    return DOMAIN_CAVEAT_V3 if roi_scheme == 'pain_domains_v3' else DOMAIN_CAVEAT
 
 
 # ============================================================================
@@ -262,6 +342,79 @@ def parcel_domain_maps(paths, subjects, scheme, collapse_hemisphere=True):
     coverage['domain'] = coverage['parcel'].map(
         {pat: dom for pat, dom in parcel_to_domain.items()})
     return per_subject, parcel_to_domain, coverage
+
+
+def roi_domain_maps(paths, subjects, domain_scheme, insula_threshold=None):
+    """({subject: {channel: ROI}}, {ROI: domain}, coverage, split report).
+
+    THE ROI-LEVEL UNIT. Same three return values as `parcel_domain_maps` and the
+    same column names, so everything downstream -- the model frame, the coverage
+    table, the figures -- is unchanged; only what a 'parcel' IS changes, from an
+    atlas label to the hand-built ROI that several labels collapse into.
+
+    WHY BOTH EXIST. The parcel version was written because stacking a domain on
+    top of ROIs averages twice and hides whether one well-sampled parcel carries
+    a domain -- so it kept the parcel and let it deviate as a random slope. That
+    random slope is the model's smallest variance component in every band
+    measured, sits within an order of magnitude of the boundary, and is the
+    documented cause of the ill-conditioned fits. Dropping it while KEEPING the
+    atlas parcel as the unit would be the worst of both: a finer unit than the
+    claim needs, with nothing in the model acknowledging it. Going to the ROI
+    makes the unit match the level the domains are actually defined at, and the
+    ROI then never enters the model at all -- it is only the lookup that says
+    which domain a channel is in.
+
+    WHAT IS GIVEN UP, stated rather than hidden: with no ROI term, nothing in
+    the fit guards against one well-sampled ROI carrying its domain. That guard
+    moves OUT of the model and into the region-level consistency map, which
+    shows every ROI's own slope and how many subjects share its sign --
+    including the ROIs no domain contains.
+
+    The insula split is applied inside `roi_maps`, driven by the base scheme's
+    `coordinate_regions`, which is why it does not appear here.
+    """
+    from ieeg_ehr.analysis.run_mixed_model_pilot import roi_maps
+
+    spec = roi_schemes.domain_scheme(domain_scheme)
+    report = {}
+    roi_by_subject, _ = roi_maps(paths, subjects, spec['base'],
+                                 insula_threshold=insula_threshold,
+                                 report=report)
+    roi_to_domain = spec['roi_to_domain']
+
+    per_subject, rows = {}, []
+    unassigned = {}
+    for sid, mapping in roi_by_subject.items():
+        if sid not in subjects:
+            continue
+        keep = {}
+        for ch, roi in mapping.items():
+            if roi in roi_to_domain:
+                keep[ch] = roi
+            else:
+                unassigned[roi] = unassigned.get(roi, 0) + 1
+        if keep:
+            per_subject[sid] = keep
+            rows.extend({'subject_id': sid, 'channel': ch, 'parcel': roi}
+                        for ch, roi in keep.items())
+
+    if unassigned:
+        # These are REAL regions of the base scheme that no domain claims --
+        # PCC, Hippocampus, Basal Ganglia and friends. Named with counts rather
+        # than dropped quietly, because "the domains do not cover the cohort's
+        # coverage" is a result about the framework, not a detail of the code.
+        logger.warning('%d contact(s) are in a region NO domain claims and are '
+                       'dropped from the model: %s',
+                       sum(unassigned.values()),
+                       ', '.join(f'{k} {v}' for k, v in
+                                 sorted(unassigned.items(), key=lambda kv: -kv[1])))
+
+    coverage = pd.DataFrame(rows)
+    if coverage.empty:
+        raise SystemExit('no channel mapped to an ROI in a displayed domain')
+    coverage['domain'] = coverage['parcel'].map(roi_to_domain)
+    report['rois_unassigned_dropped'] = unassigned
+    return per_subject, roi_to_domain, coverage, report
 
 
 # ============================================================================
@@ -682,11 +835,31 @@ def main():
     ap.add_argument('--band-set', choices=list(BAND_SETS),
                     default='paper_bands_6_hg200')
     ap.add_argument('--roi-scheme', default='pain_domains_v2',
-                    help='Scheme whose DISPLAY names are the domains and whose '
-                         'patterns are the atlas parcels.')
+                    help='Scheme whose DISPLAY names are the domains. With '
+                         "--unit parcel its patterns are the atlas parcels; with "
+                         '--unit roi it must name a DOMAIN scheme '
+                         '(pain_domains_v3), whose members are ROIs.')
+    ap.add_argument('--unit', choices=['parcel', 'roi'], default='parcel',
+                    help="What one channel's region IS. 'parcel' (the original) "
+                         'is the Desikan-Killiany label and enters the model as '
+                         'a nested random slope. "roi" is the hand-built region '
+                         '(S1, dACC, aIns...) and enters the model NOT AT ALL -- '
+                         'it is only the lookup that says which domain a channel '
+                         'is in, so --drop-parcel-term is implied. Use it with a '
+                         'DOMAIN scheme, which keeps the ROI layer visible; '
+                         'pain_domains_v2 fuses it away and cannot serve.')
+    ap.add_argument('--insula-threshold', type=float, default=None,
+                    help='Pin the anterior/posterior insula cut (MNI y, mm) '
+                         "instead of re-deriving this cohort's median. Only used "
+                         'by a scheme whose base declares coordinate regions '
+                         '(pain_domains_v3). PASS THE THRESHOLD FROM THE '
+                         'plot_insula_split RUN THAT WAS REVIEWED, so the model '
+                         'uses the split a human actually looked at.')
     ap.add_argument('--hemisphere-separate', action='store_true',
                     help='Keep left and right parcels distinct. Doubles the '
-                         'parcel count and halves the contacts behind each.')
+                         'parcel count and halves the contacts behind each. '
+                         '--unit roi ROIs are hemisphere-collapsed by '
+                         'construction, so this is refused there.')
     ap.add_argument('--bands', nargs='*', default=None,
                     help='Subset of bands, for a timing test.')
     ap.add_argument('--view-dir', default=None)
@@ -774,6 +947,31 @@ def main():
                         format='%(asctime)s %(levelname)s %(message)s')
     io.warn_if_dirty()
 
+    if args.unit == 'roi':
+        # Checked BEFORE the view load, which is minutes of work: a scheme name
+        # that cannot serve should cost a second, not a coffee.
+        if args.roi_scheme not in roi_schemes.DOMAIN_SCHEMES:
+            raise SystemExit(
+                f'--unit roi needs a DOMAIN scheme, whose members are ROIs. '
+                f'{args.roi_scheme!r} is not one. Known: '
+                f'{sorted(roi_schemes.DOMAIN_SCHEMES)}. (pain_domains_v2 is '
+                'registered as a fused ROI scheme too, but fusing is what '
+                'removes the ROI layer this unit needs.)')
+        roi_schemes.domain_scheme(args.roi_scheme)     # validates membership
+        if args.hemisphere_separate:
+            raise SystemExit('--hemisphere-separate is meaningless with '
+                             '--unit roi: ROIs are hemisphere-collapsed by '
+                             'construction.')
+        if not args.drop_parcel_term:
+            # Not an error, because it is what the flag combination MEANS rather
+            # than a mistake -- but it is set loudly, because a provenance file
+            # saying drop_parcel_term=false while the fit had no parcel term
+            # would be a lie about the model.
+            logger.info('--unit roi: the ROI does not enter the model, so '
+                        'the parcel-nested random slope is dropped '
+                        '(drop_parcel_term set to True).')
+            args.drop_parcel_term = True
+
     # Refused HERE rather than at the first fit: the view load ahead of it is
     # minutes of work, and failing after it would waste all of them.
     if args.med_model != 'none' and args.dx_model != 'none':
@@ -797,7 +995,7 @@ def main():
             for key in ('drug_set', 'exclude_drug_set', 'med_window_hours',
                         'med_model', 'roi_scheme', 'band_set',
                         'dx_model', 'dx', 'dx_window_days', 'dx_sources',
-                        'drop_parcel_term'):
+                        'drop_parcel_term', 'unit'):
                 if key in prov and prov[key] is not None:
                     if getattr(args, key, None) != prov[key]:
                         logger.info('replot: %s = %r (from provenance, '
@@ -812,8 +1010,11 @@ def main():
         slopes = io.read_table(run_dir / 'domain_slopes.parquet', on_stale='warn')
         coverage = io.read_table(run_dir / 'parcel_coverage.parquet',
                                  on_stale='ignore')
-        domains = [d for d in view_tables.roi_regions_for(
-            {'roi_scheme': args.roi_scheme}) if d in set(slopes['domain'])]
+        display = (roi_schemes.domain_scheme(args.roi_scheme)['display']
+                   if getattr(args, 'unit', 'parcel') == 'roi'
+                   else view_tables.roi_regions_for(
+                       {'roi_scheme': args.roi_scheme}))
+        domains = [d for d in display if d in set(slopes['domain'])]
         per_domain = (coverage.groupby('domain')
                       .agg(n_parcels=('parcel', 'nunique'),
                            n_contacts=('channel', 'size'),
@@ -845,13 +1046,22 @@ def main():
                                   allow_drift=args.allow_cohort_drift
                                   or args.cohort != 'reference')
 
-    parcel_of, parcel_to_domain, coverage = parcel_domain_maps(
-        paths, subjects, args.roi_scheme,
-        collapse_hemisphere=not args.hemisphere_separate)
-    domains = [d for d in view_tables.roi_regions_for({'roi_scheme': args.roi_scheme})
-               if d in set(coverage['domain'])]
-    logger.info('%d domains, %d parcels, %d contacts',
-                len(domains), coverage['parcel'].nunique(), len(coverage))
+    split_report = {}
+    if args.unit == 'roi':
+        parcel_of, parcel_to_domain, coverage, split_report = roi_domain_maps(
+            paths, subjects, args.roi_scheme,
+            insula_threshold=args.insula_threshold)
+        domain_display = roi_schemes.domain_scheme(args.roi_scheme)['display']
+    else:
+        parcel_of, parcel_to_domain, coverage = parcel_domain_maps(
+            paths, subjects, args.roi_scheme,
+            collapse_hemisphere=not args.hemisphere_separate)
+        domain_display = view_tables.roi_regions_for(
+            {'roi_scheme': args.roi_scheme})
+    domains = [d for d in domain_display if d in set(coverage['domain'])]
+    logger.info('%d domains, %d %ss, %d contacts',
+                len(domains), coverage['parcel'].nunique(), args.unit,
+                len(coverage))
     per_domain = (coverage.groupby('domain')
                   .agg(n_parcels=('parcel', 'nunique'),
                        n_contacts=('channel', 'size'),
@@ -961,6 +1171,7 @@ def main():
         question=args.question, output_type=OUTPUT_TYPE,
         view_scheme='-'.join(
             [args.band_set.replace('_', ''), scheme_code]
+            + (['roiunit'] if args.unit == 'roi' else [])
             + ([args.drug_set] if args.med_model != 'none' else [])
             + ([f'{args.dx}{args.dx_window_days}d']
                if args.dx_model != 'none' else [])
@@ -1069,9 +1280,16 @@ def main():
                             if dx_labels is not None else None),
               'dx_n_control': (int((~dx_labels['dx_state']).sum())
                                if dx_labels is not None else None),
-              'parcel_level': 'Desikan-Killiany, hemispheres '
-                              + ('separate' if args.hemisphere_separate
-                                 else 'collapsed'),
+              'unit': args.unit,
+              'parcel_level': (
+                  f'ROI ({roi_schemes.domain_scheme(args.roi_scheme)["base"]}), '
+                  'hemispheres collapsed; the ROI does NOT enter the model, it '
+                  'is only the domain lookup'
+                  if args.unit == 'roi' else
+                  'Desikan-Killiany, hemispheres '
+                  + ('separate' if args.hemisphere_separate else 'collapsed')),
+              'insula_threshold': args.insula_threshold,
+              **split_report,
               'reference_domain': domain_formula(domains)[1],
               'band_set': args.band_set, 'roi_scheme': args.roi_scheme,
               'med_model': args.med_model,
@@ -1081,7 +1299,10 @@ def main():
               'exclude_drug_set': args.exclude_drug_set,
               'drop_random_unmedicated': args.drop_random_unmedicated,
               'drop_seed': args.drop_seed,
-              'roi_scheme_contents': roi_schemes.scheme_provenance(args.roi_scheme),
+              'roi_scheme_contents': (
+                  roi_schemes.domain_scheme_provenance(args.roi_scheme)
+                  if args.unit == 'roi'
+                  else roi_schemes.scheme_provenance(args.roi_scheme)),
               'notched_bins_excluded': notched, 'fdr_q': args.fdr_q,
               'epoch_minutes': epoch_minutes,
               'omnibus': 'joint Wald chi2 on the interaction block; NOT an LRT, '
@@ -1092,10 +1313,12 @@ def main():
                    parents=[str(Path(args.reference_run) / 'provenance.json'),
                             str(view_dir)],
                    subjects=sorted(subjects), script=SCRIPT,
-                   extra={'status': DISCLAIMER, 'domain_caveat': DOMAIN_CAVEAT})
+                   extra={'status': DISCLAIMER,
+                          'domain_caveat': domain_caveat(args.roi_scheme)})
     io.write_table(slopes, run_dir / 'domain_slopes.parquet', params=params,
                    subjects=sorted(subjects), script=SCRIPT,
-                   extra={'status': DISCLAIMER, 'domain_caveat': DOMAIN_CAVEAT,
+                   extra={'status': DISCLAIMER,
+                          'domain_caveat': domain_caveat(args.roi_scheme),
                           'reading': 'beta_pain is each domain\'s marginal slope, a '
                                      'LINEAR COMBINATION of the reference slope and '
                                      'that domain\'s interaction term. diff_from_ref '
@@ -1109,7 +1332,7 @@ def main():
     io.write_run_provenance(run_dir, script=SCRIPT, params=params,
                             parents=[str(view_dir)], subjects=sorted(subjects),
                             extra={'status': DISCLAIMER,
-                                   'domain_caveat': DOMAIN_CAVEAT,
+                                   'domain_caveat': domain_caveat(args.roi_scheme),
                                    'mask_content': CONFOUND_CAVEAT,
                                    **({'dx_caveat': DX_CAVEAT}
                                       if args.dx_model != 'none' else {})})
@@ -1256,7 +1479,8 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
              'the starred DIFFERENCE is a test.' + dropped + ' The connecting '
              'line joins ordinal band categories of unequal width and is a '
              'reading aid, NOT an interpolated spectrum.\n'
-             f'{DX_CAVEAT}\n{DOMAIN_CAVEAT}\n{MODULATORY_CAVEAT}\n{DISCLAIMER}',
+             f'{DX_CAVEAT}\n{domain_caveat(args.roi_scheme)}\n{MODULATORY_CAVEAT}\n'
+             f'{DISCLAIMER}',
              fontsize=6.2, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_dx_circuit.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
@@ -1411,7 +1635,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
              'are BH-corrected over all 30 circuit x band cells, which is why '
              'a difference can sit off zero and still not be outlined. '
              + omni_note + '\n'
-             f'{DOMAIN_CAVEAT}\n{MODULATORY_CAVEAT}\n{DISCLAIMER}',
+             f'{domain_caveat(args.roi_scheme)}\n{MODULATORY_CAVEAT}\n{DISCLAIMER}',
              fontsize=6.2, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_dx_domain.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
@@ -1629,7 +1853,8 @@ def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
                         f'{BAND_SETS[args.band_set][b][1]} Hz' for b in bands],
                        fontsize=9)
     ax.set_yticks(range(len(domains)))
-    ax.set_yticklabels([f'{d}\n{int(per_domain.loc[d, "n_parcels"])} parcels, '
+    _u = unit_word(args)
+    ax.set_yticklabels([f'{d}\n{int(per_domain.loc[d, "n_parcels"])} {_u}, '
                         f'{int(per_domain.loc[d, "n_contacts"])} contacts, '
                         f'{int(per_domain.loc[d, "n_subjects"])} subj'
                         for d in domains], fontsize=8.5)
@@ -1664,7 +1889,7 @@ def summary_figure(run_dir, cells, slopes, per_domain, domains, args):
              'reference slope and that domain\'s interaction term, with its SE '
              'from the fitted covariance. THE OMNIBUS -- whether the domains '
              f'differ FROM EACH OTHER -- is a separate question: {omni}. '
-             f'{MODULATORY_CAVEAT} {DOMAIN_CAVEAT}\n{DISCLAIMER}',
+             f'{MODULATORY_CAVEAT} {domain_caveat(args.roi_scheme)}\n{DISCLAIMER}',
              fontsize=6.4, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_domain_summary.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
@@ -1707,7 +1932,8 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
         ax.tick_params(labelsize=7)
         if j == 0:
             ax.set_yticks(y)
-            ax.set_yticklabels([f'{dom}\n{int(per_domain.loc[dom, "n_parcels"])} parc, '
+            _u = unit_word(args, short=True)
+            ax.set_yticklabels([f'{dom}\n{int(per_domain.loc[dom, "n_parcels"])} {_u}, '
                                 f'{int(per_domain.loc[dom, "n_contacts"])} chan'
                                 for dom in domains], fontsize=7.5)
             ax.set_ylim(len(domains) - 0.5, -0.5)
@@ -1734,7 +1960,7 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
              'Parcel is NESTED in subject because statsmodels cannot fit a '
              'crossed parcel term -- it silently nests it instead -- so the '
              'domain SE does not account for a parcel deviating consistently '
-             f'across patients. {DOMAIN_CAVEAT}\n{DISCLAIMER}',
+             f'across patients. {domain_caveat(args.roi_scheme)}\n{DISCLAIMER}',
              fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_domain_slopes.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
@@ -1807,7 +2033,8 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args,
         n_p = int(per_domain.loc[dom, 'n_parcels'])
         n_c = int(per_domain.loc[dom, 'n_contacts'])
         n_s = int(per_domain.loc[dom, 'n_subjects'])
-        ax.set_title(f'{dom}\n{n_p} parc, {n_c} chan, {n_s} subj', fontsize=9,
+        ax.set_title(f'{dom}\n{n_p} {unit_word(args, short=True)}, {n_c} chan, '
+                     f'{n_s} subj', fontsize=9,
                      color=colour)
         ax.set_xlim(-xmax, xmax)
         ax.set_xlabel(spec['xlabel'], fontsize=8)
@@ -1855,7 +2082,7 @@ def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args,
              'interaction coefficient, which is only the DIFFERENCE from the '
              'reference. X SCALE IS SHARED ACROSS PANELS so domains are '
              'comparable by eye, but NOT across the three term figures -- their '
-             f'units differ. {DOMAIN_CAVEAT}\n{DISCLAIMER}',
+             f'units differ. {domain_caveat(args.roi_scheme)}\n{DISCLAIMER}',
              fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / spec['out']
     fig.savefig(out, dpi=150, bbox_inches='tight')

@@ -160,12 +160,16 @@ def channels_for_run(meta, run_id):
     return rows['channel'].tolist(), rows
 
 
-def region_map(meta, scheme=None):
+def region_map(meta, scheme=None, include_coordinate_parents=False):
     """{channel -> ROI or None}, deduplicated across runs.
 
     A pair name maps to one parcel regardless of run, so collapsing is safe; a
     conflict would mean the same electrode name meant two things, which is worth
     hearing about rather than silently resolving.
+
+    `include_coordinate_parents` is passed straight through to
+    `region_for_dk_label`; see its docstring for why it is off by default and
+    what has to happen next when it is on.
     """
     from ieeg_ehr.config import roi_schemes
     pairs = meta[['channel', 'dk_anode']].drop_duplicates()
@@ -175,7 +179,9 @@ def region_map(meta, scheme=None):
                        'taking the first: %s', int(conflicting.sum()),
                        sorted(pairs.loc[conflicting, 'channel'].unique())[:5])
         pairs = pairs.drop_duplicates('channel')
-    return {row.channel: roi_schemes.region_for_dk_label(row.dk_anode, scheme)
+    return {row.channel: roi_schemes.region_for_dk_label(
+                row.dk_anode, scheme,
+                include_coordinate_parents=include_coordinate_parents)
             for row in pairs.itertuples()}
 
 

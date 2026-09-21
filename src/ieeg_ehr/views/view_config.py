@@ -58,8 +58,10 @@ PAIN_BIN_CODES = {'subject_relative': 'relpain', 'absolute': 'abspain'}
 # REGION SETS and a figure of one must not land in the other's directory. The
 # default is spelled as '' so existing paths are unchanged and remain valid.
 ROI_SCHEME_CODES = {'default': '', 'roi_v2': 'roiv2', 'roi_v2_ofc': 'roiv2ofc',
+                    'roi_v2_ins': 'roiv2ins', 'roi_v2_ofc_ins': 'roiv2ofcins',
                     'pain_domains': 'paindomains',
-                    'pain_domains_v2': 'paindomainsv2'}
+                    'pain_domains_v2': 'paindomainsv2',
+                    'pain_domains_v3': 'paindomainsv3'}
 
 
 @dataclass(frozen=True)

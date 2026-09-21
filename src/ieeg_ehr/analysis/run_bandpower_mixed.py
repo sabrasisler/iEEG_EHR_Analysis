@@ -412,8 +412,13 @@ def stage_fit(args):
         epoch_minutes=epoch_minutes)
     logger.info('epoch-mean full-res view: %s', view_dir)
 
+    # A scheme with COORDINATE REGIONS (roi_v2_ofc_ins) has its insula split into
+    # aIns/pIns inside resolve_cohort; `split_report` carries what that did so
+    # provenance records the threshold, not just the scheme name.
+    split_report = {}
     paths, scores, diagnostics, subjects, roi_by_subject, no_roi = resolve_cohort(
-        ref, view_dir, cohort=args.cohort, roi_scheme=args.roi_scheme)
+        ref, view_dir, cohort=args.cohort, roi_scheme=args.roi_scheme,
+        insula_threshold=args.insula_threshold, report=split_report)
     ref.assert_cohort_matches(subjects, allow_drift=args.allow_cohort_drift
                               or args.cohort != 'reference')
 
@@ -658,6 +663,7 @@ def stage_fit(args):
                     'roi_scheme_contents': __import__(
                         'ieeg_ehr.config.roi_schemes', fromlist=['x']
                     ).scheme_provenance(roi_scheme),
+                    **split_report,
                     'cohort': args.cohort, 'epoch_minutes': epoch_minutes,
                     'notched_bins_excluded': notched,
                     'med_model': args.med_model,
@@ -922,6 +928,12 @@ def figures(run_dir, cells, args):
     bands = list(BAND_SETS[args.band_set])
     regions = [r for r in view_tables.roi_regions_for({'roi_scheme': args.roi_scheme})
                if r in set(cells['region'])]
+    if not regions:
+        raise SystemExit(
+            f'--roi-scheme {args.roi_scheme!r} names none of the regions in this '
+            f'run, which holds {sorted(set(cells["region"]))}. The collect stage '
+            'derives its region list from the flag, so it must be given the SAME '
+            '--roi-scheme the fit stage used.')
     beta = (cells.pivot_table(index='region', columns='band', values='beta_nrs_within')
             .reindex(index=regions, columns=bands))
     sig = (cells.assign(rej=cells['p_bh_reject'].fillna(False).astype(bool))
@@ -1487,6 +1499,12 @@ def main():
                          'threshold.')
     ap.add_argument('--exclude-reason', default=None,
                     help='Recorded verbatim in provenance beside --exclude-regions.')
+    ap.add_argument('--insula-threshold', type=float, default=None,
+                    help='Pin the anterior/posterior insula cut (MNI y, mm) '
+                         'instead of re-deriving this cohort\'s median. Only '
+                         'used by a scheme with coordinate regions '
+                         '(roi_v2_ofc_ins, roi_v2_ins). Pass an earlier run\'s '
+                         'threshold to reproduce its split exactly.')
     ap.add_argument('--roi-scheme', default='roi_v2_ofc',
                     help="Region set. Default 'roi_v2_ofc' = roi_v2 with mOFC and "
                          'lOFC fused into one OFC (20 regions). Pass roi_v2 to keep '
