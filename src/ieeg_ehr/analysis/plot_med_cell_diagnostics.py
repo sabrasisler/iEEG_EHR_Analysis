@@ -60,29 +60,49 @@ DEFAULT_CELLS = (('M1', 21), ('S1', 21), ('lOFC', 3), ('Insula', 30))
 #: quantities, and a label saying only "rel. subject mean" does not say which.
 XLABEL = 'pain score  -  that subject\'s mean pain   (points)'
 YLABEL = 'log10 power  -  that subject\'s mean log10 power'
+XLABEL_RAW = 'pain score, RAW 0-10 (not centred)'
 
 MED_COLOR = '#c1442f'
 UNMED_COLOR = '#2c6fad'
 
 
-def _grid(n, ncol, panel_w, panel_h):
-    """(fig, flat axes list). One row per `ncol` cells, unused panels hidden.
+def _grid(n, ncol, panel_w, panel_h, hist=False):
+    """(fig, main axes, hist axes). One row per `ncol` cells.
 
     A single row stops being readable somewhere around six cells, and the point
     of running 50 is to see how a shape CHANGES across frequency within a region
     -- which needs them adjacent, not strung out.
+
+    With `hist`, each cell gets a SECOND short axis beneath it sharing the x
+    scale, built from a gridspec rather than an inset. An inset with a negative
+    offset escapes its parent's bounding box and collides with the panel below
+    once there are rows; a gridspec row reserves the space properly.
     """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     ncol = max(1, min(ncol, n))
     nrow = int(np.ceil(n / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(panel_w * ncol, panel_h * nrow),
-                             squeeze=False)
-    flat = [ax for row in axes for ax in row]
-    for ax in flat[n:]:
-        ax.set_visible(False)
-    return fig, flat[:n]
+    if not hist:
+        fig, axes = plt.subplots(nrow, ncol, figsize=(panel_w * ncol,
+                                                      panel_h * nrow),
+                                 squeeze=False)
+        flat = [ax for row in axes for ax in row]
+        for ax in flat[n:]:
+            ax.set_visible(False)
+        return fig, flat[:n], None
+
+    fig = plt.figure(figsize=(panel_w * ncol, (panel_h + 0.7) * nrow))
+    gs = fig.add_gridspec(nrow * 2, ncol, height_ratios=[4, 1] * nrow,
+                          hspace=0.55, wspace=0.30)
+    mains, hists = [], []
+    for i in range(n):
+        r, c = divmod(i, ncol)
+        m = fig.add_subplot(gs[2 * r, c])
+        h = fig.add_subplot(gs[2 * r + 1, c], sharex=m)
+        mains.append(m)
+        hists.append(h)
+    return fig, mains, hists
 
 
 def load_cells(run_dir, cells, ref):
@@ -133,11 +153,16 @@ def epoch_level(df):
     return e
 
 
-def _subject_lines(ax, e, med_value, colour):
-    """Per-subject OLS fits within one medication state."""
+def _subject_lines(ax, e, med_value, colour, xcol='NRS_within'):
+    """Per-subject OLS fits within one medication state.
+
+    `xcol` switches between centred pain and the raw 0-10 score. The SLOPE is
+    identical either way -- centring is a horizontal shift and a shift cannot
+    change a tilt -- so this is a change of display, never of estimate.
+    """
     n = 0
     for _, g in e[e['med'] == med_value].groupby('subject'):
-        x = g['NRS_within'].to_numpy(dtype=float)
+        x = g[xcol].to_numpy(dtype=float)
         y = g['yc'].to_numpy(dtype=float)
         if len(np.unique(x)) < 2:
             continue
@@ -148,30 +173,41 @@ def _subject_lines(ax, e, med_value, colour):
     return n
 
 
-def fig_spaghetti(cells_data, records, out_path, ncol=4):
+def fig_spaghetti(cells_data, records, out_path, ncol=4, uncentred=False):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     items = list(cells_data.items())
-    fig, flat = _grid(len(items), ncol, 4.2, 3.6)
+    fig, flat, hists = _grid(len(items), ncol, 4.2, 3.6, hist=True)
     small = len(items) > 8
     for i, (cell, df) in enumerate(items):
         ax = flat[i]
         e = epoch_level(df)
-        n_un = _subject_lines(ax, e, 0.0, UNMED_COLOR)
-        n_med = _subject_lines(ax, e, 1.0, MED_COLOR)
+        xcol = 'NRS' if uncentred else 'NRS_within'
+        n_un = _subject_lines(ax, e, 0.0, UNMED_COLOR, xcol)
+        n_med = _subject_lines(ax, e, 1.0, MED_COLOR, xcol)
 
         rec = records.get(cell, {})
         base = rec.get('beta_nrs_within', np.nan)
         delta = rec.get('med_ix_beta', np.nan)
-        xlim = float(np.nanmax(np.abs(e['NRS_within']))) * 1.05
-        xs = np.array([-xlim, xlim])
+        if uncentred:
+            # Same slope, anchored at the COHORT's mean pain rather than each
+            # subject's own -- the fitted number is unchanged, only where the
+            # line is pinned horizontally.
+            x0 = float(np.nanmean(e['NRS']))
+            xs = np.array([0.0, 10.0])
+            ax.set_xlim(-0.3, 10.3)
+        else:
+            x0 = 0.0
+            xlim = float(np.nanmax(np.abs(e['NRS_within']))) * 1.05
+            xs = np.array([-xlim, xlim])
+            ax.set_xlim(-xlim, xlim)
         if np.isfinite(base):
-            ax.plot(xs, base * xs, color=UNMED_COLOR, lw=3, zorder=5,
+            ax.plot(xs, base * (xs - x0), color=UNMED_COLOR, lw=3, zorder=5,
                     label=f'group, unmedicated ({base:+.4f})')
         if np.isfinite(base) and np.isfinite(delta):
-            ax.plot(xs, (base + delta) * xs, color=MED_COLOR, lw=3, zorder=5,
+            ax.plot(xs, (base + delta) * (xs - x0), color=MED_COLOR, lw=3, zorder=5,
                     label=f'group, medicated ({base + delta:+.4f})')
         if not np.isfinite(base):
             # SAY SO. The subject lines still draw from the cell frame, so a
@@ -186,17 +222,27 @@ def fig_spaghetti(cells_data, records, out_path, ncol=4):
                     bbox=dict(boxstyle='round,pad=0.4', fc='white',
                               ec=MED_COLOR, alpha=0.9))
 
-        # THE RUG. Where the data actually is -- a fitted line across a range
-        # nobody occupies is an extrapolation wearing a fit's clothes.
-        lo = ax.get_ylim()[0]
-        for val, colour, off in ((0.0, UNMED_COLOR, 0.0), (1.0, MED_COLOR, 0.03)):
-            xr = e.loc[e['med'] == val, 'NRS_within'].to_numpy()
-            ax.plot(xr, np.full_like(xr, lo + off * abs(lo)), '|', color=colour,
-                    ms=6, alpha=0.25, zorder=1)
+        # WHERE THE DATA ACTUALLY IS, as a histogram on its own short axis. A
+        # fitted line across a range nobody occupies is an extrapolation wearing
+        # a fit's clothes, and a rug of overlapping ticks saturates long before
+        # it conveys a count.
+        hax = hists[i]
+        if uncentred:
+            hbins = np.arange(-0.5, 11.5, 1.0)      # NRS is integer-valued
+        else:
+            hbins = np.linspace(-xlim, xlim, 25)
+        for val, colour in ((0.0, UNMED_COLOR), (1.0, MED_COLOR)):
+            xr = e.loc[e['med'] == val, xcol].to_numpy()
+            if len(xr):
+                hax.hist(xr, bins=hbins, color=colour, alpha=0.55, lw=0)
+        hax.set_yticks([])
+        hax.tick_params(labelsize=6 if small else 8)
+        for side in ('top', 'right', 'left'):
+            hax.spines[side].set_visible(False)
+        ax.tick_params(labelbottom=False)
 
         ax.axhline(0, color='0.85', lw=0.7)
-        ax.axvline(0, color='0.85', lw=0.7)
-        ax.set_xlim(-xlim, xlim)
+        ax.axvline(x0, color='0.85', lw=0.7)
         ax.set_title(f'{cell[0]}  bin {cell[1]}\n'
                      f'{n_un} unmedicated / {n_med} medicated subject lines',
                      fontsize=10)
@@ -205,12 +251,17 @@ def fig_spaghetti(cells_data, records, out_path, ncol=4):
         if i % ncol == 0:
             ax.set_ylabel(YLABEL, fontsize=7 if small else 9)
         if i + ncol >= len(items):
-            ax.set_xlabel(XLABEL, fontsize=7 if small else 9)
+            hax.set_xlabel(XLABEL_RAW if uncentred else XLABEL,
+                           fontsize=7 if small else 9)
+        if i % ncol == 0:
+            hax.set_ylabel('n epochs', fontsize=6 if small else 8)
         if not small:
             ax.legend(fontsize=7, loc='upper left')
         ax.tick_params(labelsize=7 if small else 8)
 
-    fig.suptitle('Per-subject pain-power lines, split by medication state', fontsize=13)
+    fig.suptitle('Per-subject pain-power lines, split by medication state'
+                 + ('  --  RAW pain scale (uncentred)' if uncentred else ''),
+                 fontsize=13)
     fig.tight_layout(rect=(0, 0.09, 1, 0.94))
     fig.text(0.01, 0.01,
              'BOTH AXES ARE DEVIATIONS FROM THAT SUBJECT\'S OWN AVERAGE, of '
@@ -238,7 +289,7 @@ def fig_caterpillar(cells_data, fits, out_path, ncol=4):
     from scipy import stats
 
     items = list(cells_data.items())
-    fig, flat = _grid(len(items), ncol, 3.8, 4.0)
+    fig, flat, _ = _grid(len(items), ncol, 3.8, 4.0)
     small = len(items) > 8
     for i, (cell, df) in enumerate(items):
         ax = flat[i]
@@ -316,7 +367,7 @@ def fig_partial(cells_data, fits, out_path, ncol=4):
     from statsmodels.nonparametric.smoothers_lowess import lowess
 
     items = list(cells_data.items())
-    fig, flat = _grid(len(items), ncol, 4.2, 3.4)
+    fig, flat, _ = _grid(len(items), ncol, 4.2, 3.4)
     small = len(items) > 8
     for i, (cell, df) in enumerate(items):
         ax = flat[i]
@@ -390,6 +441,11 @@ def main():
                          'ask for 50 cells without naming 50 pairs.')
     ap.add_argument('--bins', default=None,
                     help='Comma-separated freq bin indices, crossed with --regions.')
+    ap.add_argument('--uncentred', action='store_true',
+                    help='Plot the spaghetti against the RAW 0-10 pain score '
+                         'instead of the subject-centred one. Purely a change of '
+                         'display: centring is a horizontal shift and cannot '
+                         'change a slope, so every fitted number is identical.')
     ap.add_argument('--ncol', type=int, default=4,
                     help='Panels per row. Raise it for large cell counts.')
     ap.add_argument('--out-dir', default=None,
@@ -444,8 +500,10 @@ def main():
         except mm.CellFitError as exc:
             logger.error('%s bin %d refit FAILED: %s', cell[0], cell[1], exc)
 
-    fig_spaghetti(data, records, out_dir / 'fig_spaghetti.png', ncol=args.ncol)
-    logger.info('wrote %s', out_dir / 'fig_spaghetti.png')
+    name = 'fig_spaghetti_uncentred.png' if args.uncentred else 'fig_spaghetti.png'
+    fig_spaghetti(data, records, out_dir / name, ncol=args.ncol,
+                  uncentred=args.uncentred)
+    logger.info('wrote %s', out_dir / name)
     fig_caterpillar(data, fits, out_dir / 'fig_caterpillar.png', ncol=args.ncol)
     logger.info('wrote %s', out_dir / 'fig_caterpillar.png')
     fig_partial(data, fits, out_dir / 'fig_partial_residual.png', ncol=args.ncol)

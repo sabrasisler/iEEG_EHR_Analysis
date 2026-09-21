@@ -393,7 +393,7 @@ def fit_dx_interaction(df, meta):
                 'n_epochs_control': int(df.loc[df['dx_state'] == 0]
                                         .groupby('subject')['epoch_id'].nunique().sum())})
 
-    logger.info('%-18s %-11s | DX  control %+.5f  case %+.5f  | diff %+.5f '
+    logger.info('%-18s %-11s | DX  non-MDD %+.5f  MDD %+.5f  | diff %+.5f '
                 '(p %.3g) | %d vs %d subj', meta['region'], meta['band'],
                 rec.get('slope_ref', np.nan), rec.get('slope_mod', np.nan),
                 rec.get('dx_ix_beta', np.nan), rec.get('dx_ix_p', np.nan),
@@ -1009,7 +1009,7 @@ def dx_report(cells, q):
     sig = d[d.get('dx_ix_p_bh_reject', pd.Series(dtype=object)) == True]  # noqa: E712
     logger.info('  interaction BH-significant at q=%.2f: %d', q, len(sig))
     for r in sig.sort_values('dx_ix_p').itertuples():
-        logger.info('    %-18s %-11s  control %+.5f  case %+.5f  diff %+.5f  '
+        logger.info('    %-18s %-11s  non-MDD %+.5f  MDD %+.5f  diff %+.5f  '
                     'p_bh %.4g', r.region, r.band, r.slope_ref, r.slope_mod,
                     r.dx_ix_beta, r.dx_ix_p_bh)
     if not len(sig):
@@ -1071,10 +1071,14 @@ def dx_figure(run_dir, cells, args):
     cm.set_bad('0.85')
 
     panels = [
-        (ctrl, slope_cap, None, f'CONTROL (no {args.dx.upper()} code)\n'
-                                f'{n_ctrl} subjects'),
-        (case, slope_cap, None, f'{args.dx.upper()} case\n{n_case} subjects'),
-        (ix, ix_cap, rej, 'DIFFERENCE (case - control)\n'
+        # 'non-MDD', never 'control'. The domain scheme has a PROCESSING
+        # DOMAIN called Control (Auditory + Occipital, the negative-control
+        # circuit), so 'control' for the undiagnosed group put two unrelated
+        # meanings of the word on neighbouring figures.
+        (ctrl, slope_cap, None, f'non-{args.dx.upper()}\n{n_ctrl} subjects'),
+        (case, slope_cap, None, f'{args.dx.upper()}\n{n_case} subjects'),
+        (ix, ix_cap, rej, f'DIFFERENCE ({args.dx.upper()} - '
+                          f'non-{args.dx.upper()})\n'
                           f'outlined: BH-significant at q={args.fdr_q}'),
     ]
     fig, axs = plt.subplots(1, 3, figsize=(16.5, 0.42 * len(regions) + 3.4),
@@ -1096,7 +1100,7 @@ def dx_figure(run_dir, cells, args):
 
     n_fit = int(np.isfinite(ix).sum())
     fig.suptitle(
-        f'Pain encoding by {args.dx.upper()} status: both strata from ONE '
+        f'Pain encoding by {args.dx.upper()} status: both groups from ONE '
         f'interaction fit\n{n_fit} of {ix.size} cells fitted; '
         f'{int(rej.sum())} BH-significant differences at q={args.fdr_q}',
         fontsize=12.5)
@@ -1108,7 +1112,8 @@ def dx_figure(run_dir, cells, args):
              'deliberately NOT outlined for significance: comparing which arm '
              'reaches significance is the difference-of-significance fallacy, '
              f'and the {args.dx.upper()} arm ({n_case} subjects) has wider SEs '
-             f'than the control arm ({n_ctrl}) everywhere from power alone. '
+             f'than the non-{args.dx.upper()} arm ({n_ctrl}) everywhere from '
+             'power alone. '
              'Only the right panel tests a difference. Grey = not fitted '
              f'(a stratum under {DX_MIN_SUBJECTS_PER_ARM} subjects).\n'
              f'{DX_CAVEAT}\n{WALD_CAVEAT} {DISCLAIMER}',
@@ -1366,8 +1371,8 @@ within-subject part, and `dx_within` would be a column of exact zeros.
 
 | term | question |
 |---|---|
-| `slope_ref` | the pain slope in CONTROLS (this is `NRS_within`) |
-| `slope_mod` | the pain slope in CASES (`NRS_within + NRS_within:dx_state`, SE from the fitted covariance, NOT the sum of variances) |
+| `slope_ref` | the pain slope in the non-MDD group (this is `NRS_within`) |
+| `slope_mod` | the pain slope in the MDD group (`NRS_within + NRS_within:dx_state`, SE from the fitted covariance, NOT the sum of variances) |
 | `dx_ix_beta` | **the estimand**: how much the pain slope DIFFERS in cases |
 | `dx_beta` | a nuisance between-subject difference in mean power; not a result, and deliberately given no BH family |
 
@@ -1392,7 +1397,7 @@ fitted by the pain-only model above.
 ### Result: {len(rej)} of {n_fit} fitted cells show a BH-significant difference
 """)
         if len(rej):
-            lines.append('\n| region | band | control slope | case slope | '
+            lines.append('\n| region | band | non-MDD slope | MDD slope | '
                          'difference | p_bh |\n|---|---|---|---|---|---|\n')
             for r in rej.sort_values('dx_ix_p').itertuples():
                 lines.append(f'| {r.region} | {r.band} | {r.slope_ref:+.5f} | '

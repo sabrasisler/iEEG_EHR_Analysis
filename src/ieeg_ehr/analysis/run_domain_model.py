@@ -91,8 +91,34 @@ QUESTION = 'bandpower'
 OUTPUT_TYPE = 'domain_model'
 RUN_NAME = 'domain_mixedlm'
 
-#: The domain that every contrast is read against.
+# The domain that every contrast is read against. `Control` here is a PROCESSING
+# DOMAIN -- Auditory + Occipital, the regions not expected to encode pain -- and
+# it is the reference precisely because it is the scheme's negative control.
+#
+# IT HAS NOTHING TO DO WITH THE NON-MDD GROUP. The diagnosis strata are named
+# `non-MDD` and `MDD` for exactly this reason: an earlier version called them
+# `control` and `case`, which put a "Control" circuit row and a "control"
+# stratum colour on the same figure and made it unreadable.
 REFERENCE_DOMAIN = 'Control'
+
+#: Diagnosis stratum labels. Used as DATA VALUES in the slopes table and as
+#: figure labels, so they are defined once and never spelled inline.
+DX_LABEL = 'MDD'
+NON_DX_LABEL = 'non-MDD'
+
+#: Runs written before 2026-09-21 stored 'case'/'control'. `--replot` has to
+#: keep working on them, so the old values are mapped on READ rather than the
+#: files being rewritten -- the stored tables are immutable artifacts.
+_LEGACY_STRATA = {'case': DX_LABEL, 'control': NON_DX_LABEL}
+
+
+def norm_strata(slopes):
+    """Map any legacy stratum values to the current labels, on a copy."""
+    if 'stratum' not in slopes.columns:
+        return slopes
+    out = slopes.copy()
+    out['stratum'] = out['stratum'].replace(_LEGACY_STRATA)
+    return out
 
 #: Random effects. `subj_parcel_slope` is the parcel term, nested in subject --
 #: see the module docstring for why it cannot be crossed here.
@@ -454,7 +480,7 @@ def domain_simple_slopes(res, domains, ref, moderator='dx_state'):
             logger.warning('domain simple slopes: missing %s terms for %r', d, dom)
             continue
 
-        for stratum, use_mod in (('control', False), ('case', True)):
+        for stratum, use_mod in ((NON_DX_LABEL, False), (DX_LABEL, True)):
             c = np.zeros(len(names))
             c[base] = 1.0
             if ix_dom is not None:
@@ -702,6 +728,13 @@ def main():
                          'per-domain differences in the `pain_x_dx` rows. '
                          'Cannot be combined with --med-model: that would be a '
                          'four-way design, which 17 cases cannot support.')
+    ap.add_argument('--hide-omnibus', action='store_true',
+                    help='Leave the per-band omnibus p out of the diagnosis '
+                         'figure titles. The omnibus tests whether circuits '
+                         'differ FROM EACH OTHER in how the diagnosis changes '
+                         'pain encoding, which is a different question from '
+                         '"does this circuit differ between groups" -- hide it '
+                         'when only the latter is being asked.')
     ap.add_argument('--drop-parcel-term', action='store_true',
                     help='Fit WITHOUT the parcel-nested random slope '
                          '(subj_parcel_slope). It is the smallest variance '
@@ -1115,6 +1148,7 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
+    slopes = norm_strata(slopes)
     ss = slopes[slopes['term'] == 'pain_slope_by_stratum']
     diff = slopes[slopes['term'] == 'pain_x_dx']
     if not len(ss):
@@ -1144,11 +1178,11 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
     fig, axes = plt.subplots(1, len(doms), figsize=(2.9 * len(doms) + 1.4, 5.6),
                              sharey=True, sharex=True, squeeze=False)
     y = np.arange(len(bands))
-    colours = {'control': '#4a7fb5', 'case': '#b03a2e'}
+    colours = {NON_DX_LABEL: '#4a7fb5', DX_LABEL: '#b03a2e'}
 
     for j, dom in enumerate(doms):
         ax = axes[0][j]
-        for stratum, off in (('control', -0.16), ('case', +0.16)):
+        for stratum, off in ((NON_DX_LABEL, -0.16), (DX_LABEL, +0.16)):
             d = (keep[(keep['domain'] == dom) & (keep['stratum'] == stratum)]
                  .set_index('band').reindex(bands))
             b = d['beta'].to_numpy(dtype=float)
@@ -1156,8 +1190,8 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
             ax.plot(b, y + off, '-', color=colours[stratum], lw=1.0, alpha=0.30)
             ax.errorbar(b, y + off, xerr=1.96 * se, fmt='o', ms=4.6, lw=1.3,
                         capsize=2, color=colours[stratum],
-                        label=(f'{"MDD" if stratum == "case" else "control"} '
-                               f'(n={n_case if stratum == "case" else n_ctrl})')
+                        label=(f'{stratum} '
+                               f'(n={n_case if stratum == DX_LABEL else n_ctrl})')
                         if j == 0 else None)
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
         ax.set_xlim(-xmax, xmax)
@@ -1191,8 +1225,8 @@ def dx_circuit_figure(run_dir, cells, slopes, domains, args):
     dropped = (f'  Bands EXCLUDED for an ill-conditioned fit: {", ".join(bad)}.'
                if bad else '')
     fig.suptitle(
-        f'Pain slope in MDD vs non-MDD, one panel per circuit  '
-        f'({n_case} cases, {n_ctrl} controls)\n'
+        f'Pain slope in {DX_LABEL} vs {NON_DX_LABEL}, one panel per circuit  '
+        f'({n_case} {DX_LABEL}, {n_ctrl} {NON_DX_LABEL})\n'
         'both strata from ONE three-way fit; * = BH-significant DIFFERENCE '
         f'at q={args.fdr_q}', fontsize=12)
     # ONE x label, on the CENTRE panel's own axis. Five copies overlap each
@@ -1246,6 +1280,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
+    slopes = norm_strata(slopes)
     ss = slopes[slopes['term'] == 'pain_slope_by_stratum']
     diff = slopes[slopes['term'] == 'pain_x_dx']
     if not len(ss) or not len(diff):
@@ -1260,7 +1295,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
     fig, axs = plt.subplots(2, len(bands), figsize=(2.9 * len(bands), 8.6),
                             squeeze=False, sharey='row')  # x NOT shared: see band_limit
     y = np.arange(len(doms))
-    colors = {'control': '#4a7fb5', 'case': '#b03a2e'}
+    colors = {NON_DX_LABEL: '#4a7fb5', DX_LABEL: '#b03a2e'}
 
     def band_limit(frame, band):
         """x-limit from THIS band only.
@@ -1284,20 +1319,27 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
     for j, band in enumerate(bands):
         # --- row 0: both strata, paired
         ax = axs[0][j]
-        for stratum, off in (('control', -0.16), ('case', +0.16)):
+        for stratum, off in ((NON_DX_LABEL, -0.16), (DX_LABEL, +0.16)):
             d = (ss[(ss['band'] == band) & (ss['stratum'] == stratum)]
                  .set_index('domain').reindex(doms))
             ax.errorbar(d['beta'].to_numpy(dtype=float), y + off,
                         xerr=1.96 * d['se'].to_numpy(dtype=float), fmt='o',
                         ms=4.5, lw=1.2, capsize=2, color=colors[stratum],
-                        label=f'{stratum} (n={n_ctrl if stratum == "control" else n_case})'
+                        label=(f'{stratum} '
+                               f'(n={n_case if stratum == DX_LABEL else n_ctrl})')
                         if j == 0 else None)
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
         ax.set_xlim(-band_limit(ss, band), band_limit(ss, band))
         row = cells[cells['band'] == band]
         p_omni = (float(row['p_omnibus_pain_x_dx'].iloc[0])
                   if len(row) and 'p_omnibus_pain_x_dx' in row else np.nan)
-        ax.set_title(f'{band}\nomnibus pain x dx p={p_omni:.3g}', fontsize=8.5)
+        # SUPPRESSIBLE, not deleted. The omnibus is the only test of "do
+        # circuits differ FROM EACH OTHER in how MDD changes pain encoding",
+        # so hiding it invites reading each per-circuit row as its own test.
+        # Opt-out, and the caption records that it is gone.
+        ax.set_title(band if getattr(args, 'hide_omnibus', False)
+                     else f'{band}\nomnibus pain x dx p={p_omni:.3g}',
+                     fontsize=8.5)
         ax.tick_params(labelsize=7)
         if j == 0:
             ax.set_yticks(y)
@@ -1318,7 +1360,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
                     lw=1.6, capsize=2, color='#7d3c98')
         ax.axvline(0, color='0.4', lw=0.9, ls='--')
         ax.set_xlim(-band_limit(diff, band), band_limit(diff, band))
-        ax.set_title(f'{band}: case - control', fontsize=8.5)
+        ax.set_title(f'{band}: {DX_LABEL} - {NON_DX_LABEL}', fontsize=8.5)
         ax.tick_params(labelsize=7)
         if j == 0:
             ax.set_yticks(y)
@@ -1329,7 +1371,7 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
                          pd.Series(dtype=bool)).fillna(False).sum())
     fig.suptitle(
         f'Are different circuits changed by {args.dx.upper()}?  '
-        f'{n_case} cases vs {n_ctrl} controls\n'
+        f'{n_case} {DX_LABEL} vs {n_ctrl} {NON_DX_LABEL}\n'
         'TOP: each circuit\'s pain slope per stratum.   '
         f'BOTTOM: the difference, {n_rej} BH-significant at q={args.fdr_q}',
         fontsize=12)

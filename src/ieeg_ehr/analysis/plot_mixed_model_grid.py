@@ -134,7 +134,7 @@ HET_NOTE_NONE = (
 def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
                  het_vmax=None, het_pct=95.0, het_mode='raw',
                  value_column='beta_nrs_within', value_label=None,
-                 reject_column='p_bh_reject'):
+                 reject_column='p_bh_reject', show_significance=True):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -144,7 +144,10 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     # Sign consistency and heterogeneity are always about NRS_within, so they are
     # NOT re-pointed -- they would be meaningless against an interaction term.
     beta = pivot(cells, value_column, regions, bins)
-    sig = pivot(cells, reject_column, regions, bins).fillna(False).astype(bool)
+    # Not pivoted at all when unused, so a --no-significance render works on a run
+    # whose reject column was never computed.
+    sig = (pivot(cells, reject_column, regions, bins).fillna(False).astype(bool)
+           if show_significance else None)
     value_label = value_label or 'pain fixed effect\nd log10 power per pain point'
     cons, cons_source = sign_consistency(run_dir, cells, blups, regions, bins)
 
@@ -158,12 +161,18 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     cons_span = float(np.nanmax(np.abs(cons.to_numpy(dtype=float) - 0.5)))
     cons_span = max(cons_span, 0.05) if np.isfinite(cons_span) else 0.5
 
-    heat = [
-        (beta, div, -vmax, vmax, value_label, True),
-        (beta.where(sig), div, -vmax, vmax,
-         f'the same, BH-significant only\n({int(sig.to_numpy().sum())} cells, q=0.05)',
-         False),
-    ]
+    # `show_significance=False` drops BOTH places significance appears -- the
+    # outline on panel 1 and the masked duplicate of it -- rather than one or the
+    # other, since an unoutlined effect map next to a "significant only" panel
+    # would still be a significance figure, just a less legible one. The effect
+    # sizes and their colour scale are untouched: vmax is set by `beta`, not by
+    # the masked copy, so the remaining panels are pixel-identical.
+    heat = [(beta, div, -vmax, vmax, value_label, show_significance)]
+    if show_significance:
+        heat.append(
+            (beta.where(sig), div, -vmax, vmax,
+             f'the same, BH-significant only\n({int(sig.to_numpy().sum())} cells, '
+             'q=0.05)', False))
 
     if het_mode != 'none':
         # Heterogeneity as an SD, in beta's units -- a variance is unreadable next
@@ -245,9 +254,13 @@ def fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, out_path,
     fig.tight_layout(rect=(0, 0.075, 1, 0.945))
     het_note = {'raw': HET_NOTE_RAW, 'normalized': HET_NOTE_NORM,
                 'none': HET_NOTE_NONE}[het_mode]
+    sig_note = ('Outlines on panel 1 mark cells surviving BH across the whole grid '
+                'at q=0.05. ' if show_significance else
+                'NO SIGNIFICANCE IS SHOWN in this version: every cell is drawn on '
+                'its effect size alone, with no BH threshold applied anywhere. '
+                'Colour is the estimate, not evidence that it differs from zero. ')
     fig.text(0.01, 0.005,
-             'Outlines on panel 1 mark cells surviving BH across the whole grid at '
-             f'q=0.05. {het_note} '
+             f'{sig_note}{het_note} '
              'The sign-consistency panel is centred at 0.5 because half the subjects '
              'agreeing IS chance, and is scaled to the observed spread rather than '
              '0-1: a fraction of 0 would mean every subject opposes the group, which '
@@ -271,13 +284,19 @@ def _cons_cmap(plt):
 
 
 def _outcome_map(base, implied, sig):
-    """(categorical outcome per cell, counts among significant cells).
+    """(categorical outcome per cell, counts over the cells `sig` selects).
 
     0 weaker, 1 stronger, 2 reversed. "Reversed" is checked FIRST and wins,
     because a slope that crossed zero has not become a smaller version of the
     same effect -- it is a different claim about the physiology, and folding it
     into "weaker" on the strength of |slope| alone would hide the sign change
     that is the interesting part.
+
+    `sig=None` counts every cell that has an outcome at all. The counting mask is
+    a significance label in its own right -- "12 stronger" means something
+    different when the denominator is the BH survivors -- so a no-significance
+    render has to widen it rather than keep a BH-restricted tally on an otherwise
+    unthresholded figure.
     """
     b = base.to_numpy(dtype=float)
     m = implied.to_numpy(dtype=float)
@@ -289,14 +308,15 @@ def _outcome_map(base, implied, sig):
     out[shrank] = 0
     out[grew] = 1
     out[flipped] = 2
-    s = sig.to_numpy()
+    s = np.isfinite(out) if sig is None else sig.to_numpy()
     counts = {'weaker': int((out[s] == 0).sum()),
               'stronger': int((out[s] == 1).sum()),
               'reversed': int((out[s] == 2).sum())}
     return pd.DataFrame(out, index=base.index, columns=base.columns), counts
 
 
-def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
+def fig_interaction_map(cells, regions, bins, bin_labels, out_path,
+                        show_significance=True):
     """The interaction model's two coefficients, and what they imply together.
 
     The medication interaction model estimates TWO things per cell, and showing
@@ -322,8 +342,12 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
     base = pivot(cells, 'beta_nrs_within', regions, bins)
     delta = pivot(cells, 'med_ix_beta', regions, bins)
     implied = base + delta
-    sig_base = pivot(cells, 'p_bh_reject', regions, bins).fillna(False).astype(bool)
-    sig_ix = pivot(cells, 'med_ix_bh_reject', regions, bins).fillna(False).astype(bool)
+    if show_significance:
+        sig_base = pivot(cells, 'p_bh_reject', regions, bins).fillna(False).astype(bool)
+        sig_ix = pivot(cells, 'med_ix_bh_reject',
+                       regions, bins).fillna(False).astype(bool)
+    else:
+        sig_base = sig_ix = None
 
     vmax = float(np.nanmax(np.abs(np.concatenate(
         [base.to_numpy(dtype=float).ravel(), delta.to_numpy(dtype=float).ravel(),
@@ -331,10 +355,12 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
     cmap = plt.get_cmap('RdBu_r').copy()
     cmap.set_bad('0.85')
 
+    delta_title = ('CHANGE when medicated\n(interaction)' if not show_significance
+                   else f'CHANGE when medicated\n(interaction; '
+                        f'{int(sig_ix.to_numpy().sum())} cells BH-significant)')
     panels = [
         (base, 'pain slope when UNMEDICATED\n(beta_NRS_within)', sig_base),
-        (delta, f'CHANGE when medicated\n(interaction; {int(sig_ix.to_numpy().sum())} '
-                'cells BH-significant)', sig_ix),
+        (delta, delta_title, sig_ix),
         (implied, 'implied slope when MEDICATED\n(baseline + change; derived)', None),
     ]
 
@@ -371,9 +397,11 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
     im = ax.imshow(outcome.to_numpy(dtype=float), aspect='auto', cmap=ocmap,
                    norm=BoundaryNorm([-0.5, 0.5, 1.5, 2.5], 3),
                    interpolation='nearest')
-    common.draw_mask_outline(ax, sig_ix.to_numpy())
+    if show_significance:
+        common.draw_mask_outline(ax, sig_ix.to_numpy())
+    denom = 'BH-significant cells' if show_significance else 'all cells with data'
     ax.set_title('does the effect STRENGTHEN, weaken, or REVERSE?\n'
-                 f'BH-significant cells: {counts["stronger"]} stronger, '
+                 f'{denom}: {counts["stronger"]} stronger, '
                  f'{counts["weaker"]} weaker, {counts["reversed"]} reversed',
                  fontsize=10)
     ax.set_xticks(range(len(bins)))
@@ -404,6 +432,15 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
                 ax.text(v + 0.02 * span, j, f'{int(v)}', va='center', fontsize=6.2,
                         color='0.3')
 
+    ix_sig_note = (
+        'Outlines are BH at q=0.05 within this model -- panel 1 against its own '
+        'family, panel 2 against the interaction family. '
+        if show_significance else
+        'NO SIGNIFICANCE IS SHOWN in this version: no BH outlines, and the '
+        'outcome tally counts every cell with data rather than only the BH '
+        'survivors, so it is a description of the estimates and not a count of '
+        'cells that passed a threshold. ')
+
     fig.suptitle('Medication x pain interaction: baseline slope, its change, and '
                  'the implied medicated slope', fontsize=13)
     fig.tight_layout(rect=(0, 0.075, 1, 0.945))
@@ -412,9 +449,8 @@ def fig_interaction_map(cells, regions, bins, bin_labels, out_path):
              'against the baseline it modifies: same-colour panels 1 and 2 mean the '
              'effect strengthens, opposite colours mean it weakens or reverses. '
              'Panel 3 is arithmetic (baseline + change), not a separate fit, so it '
-             'carries no significance of its own. Outlines are BH at q=0.05 within '
-             'this model -- panel 1 against its own family, panel 2 against the '
-             'interaction family. The last panel answers "stronger or weaker" '
+             f'carries no significance of its own. {ix_sig_note}'
+             'The last panel answers "stronger or weaker" '
              'directly, since comparing two diverging colourmaps by eye is exactly '
              'the comparison that goes wrong: RED IN PANEL 2 MEANS THE SLOPE MOVED '
              'POSITIVE, which strengthens a positive baseline and cancels a '
@@ -442,7 +478,8 @@ def _seq_cmap(plt):
 
 def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5,
                      value_column='beta_nrs_within', se_column='se',
-                     reject_column='p_bh_reject', value_label='beta'):
+                     reject_column='p_bh_reject', value_label='beta',
+                     show_significance=True):
     """Per-region spectrum of any coefficient.
 
     Parameterised because the frequency PROFILE is the most useful artifact test
@@ -473,8 +510,9 @@ def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5,
         ax.fill_between(hz, b - 1.96 * se, b + 1.96 * se, color='0.75', alpha=0.45,
                         lw=0)
         ax.plot(hz, b, color='black', lw=1.3)
-        star = d[reject_column].fillna(False).to_numpy(dtype=bool)
-        ax.scatter(hz[star], b[star], s=14, color='#c1442f', zorder=4)
+        if show_significance:
+            star = d[reject_column].fillna(False).to_numpy(dtype=bool)
+            ax.scatter(hz[star], b[star], s=14, color='#c1442f', zorder=4)
         ax.axhline(0, color='0.6', lw=0.8, ls='--')
         ax.set_xscale('log')
         ax.set_ylim(-ymax, ymax)
@@ -490,9 +528,10 @@ def fig_grid_spectra(cells, regions, bin_labels, out_path, ncol=5,
     for j in range(len(regions), nrow * ncol):
         axes[j // ncol][j % ncol].set_visible(False)
 
-    fig.suptitle(f'{value_label} vs frequency, per region\n'
-                 'black = estimate, band = 95% CI, red dots = BH-significant',
-                 fontsize=12)
+    legend = ('black = estimate, band = 95% CI, red dots = BH-significant'
+              if show_significance else
+              'black = estimate, band = 95% CI; no significance marked')
+    fig.suptitle(f'{value_label} vs frequency, per region\n{legend}', fontsize=12)
     fig.tight_layout(rect=(0, 0.045, 1, 0.94))
     fig.text(0.01, 0.005,
              'All panels share a y-scale so region amplitudes are comparable. The x '
@@ -536,6 +575,13 @@ def main():
                     help="'raw' = between-subject slope SD, not comparable ACROSS "
                          "frequency. 'normalized' = that divided by the residual SD, "
                          "which is. 'none' = drop the panel entirely.")
+    ap.add_argument('--no-significance', action='store_true',
+                    help='Render the effect sizes with NO significance anywhere: no '
+                         'BH outline on panel 1, no "BH-significant only" panel, no '
+                         'red dots on the spectra; under --interaction, no outlines '
+                         'and an outcome tally over all cells rather than the BH '
+                         'survivors. For showing the effect-size landscape on its '
+                         'own; --reject-column is then unused.')
     ap.add_argument('--suffix', default='',
                     help='Appended to figure filenames, e.g. --suffix _v2, so an '
                          'alternative scaling does not overwrite the first render.')
@@ -563,7 +609,8 @@ def main():
             raise SystemExit(f'{run_dir}/grid_cells.parquet has no med_ix_beta; '
                              'this is not an interaction run')
         out = run_dir / f'fig_interaction_map{args.suffix}.png'
-        fig_interaction_map(cells, regions, bins, bin_labels, out)
+        fig_interaction_map(cells, regions, bins, bin_labels, out,
+                            show_significance=not args.no_significance)
         logger.info('wrote %s', out)
         io.log_analysis('medication interaction map: baseline slope, its change, '
                         'and the implied medicated slope (EXPLORATORY)', run_dir)
@@ -580,12 +627,14 @@ def main():
     fig_grid_map(run_dir, cells, blups, regions, bins, bin_labels, map_path,
                  het_vmax=args.het_vmax, het_pct=args.het_pct,
                  het_mode=args.het_mode, value_column=args.value_column,
-                 value_label=args.value_label, reject_column=args.reject_column)
+                 value_label=args.value_label, reject_column=args.reject_column,
+                 show_significance=not args.no_significance)
     logger.info('wrote %s', map_path)
     fig_grid_spectra(cells, regions, bin_labels, spec_path,
                      value_column=args.value_column, se_column=args.se_column,
                      reject_column=args.reject_column,
-                     value_label=args.value_label or 'pain fixed effect')
+                     value_label=args.value_label or 'pain fixed effect',
+                     show_significance=not args.no_significance)
     logger.info('wrote %s', spec_path)
 
     io.log_analysis('mixed-model grid overview figures: region x frequency map and '
