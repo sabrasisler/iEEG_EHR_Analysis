@@ -76,7 +76,7 @@ import pandas as pd
 
 from ieeg_ehr import config, io
 from ieeg_ehr.analysis import cluster_permutation as cp
-from ieeg_ehr.analysis import fullres_cells, med_state, mixed_model as mm
+from ieeg_ehr.analysis import dx_state, fullres_cells, med_state, mixed_model as mm
 from ieeg_ehr.analysis import reference_run, view_tables
 from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS, band_table, aggregate
 from ieeg_ehr.analysis.run_fullres_grid import CONFOUND_CAVEAT, resolve_cohort
@@ -104,6 +104,22 @@ VC_DOMAIN = {
 
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
+
+# One palette for every domain figure in the project. Kept here, and imported by
+# plot_domain_model, so the two cannot drift: this module's private copy had gone
+# stale at the v1 domain names and still said 'Memory', which meant Modulatory
+# fell through to the '0.4' default and rendered in the SAME grey as Control.
+# Grey for Control is deliberate -- the reference domain should recede.
+#
+# Known limitation, deliberately not repainted: Cognitive and Affective are
+# ~1.5 dE apart under deuteranopia (validated 2026-09-18), i.e. indistinguishable
+# to a deuteranopic reader. That is tolerable ONLY because no domain figure uses
+# colour as its identity channel -- every domain carries a text label, as a panel
+# title in the by-domain figure and a row label in the by-band one. Do not add a
+# figure that relies on these hues alone to tell domains apart.
+DOMAIN_COLOURS = {'Sensory': '#b03a2e', 'Affective': '#8e44ad',
+                  'Cognitive': '#2b6ca3', 'Modulatory': '#e08214',
+                  'Control': '0.45'}
 
 MODULATORY_CAVEAT = (
     'THE MODULATORY DOMAIN IS M1 ALONE. Brainstem has zero contacts in this '
@@ -196,7 +212,7 @@ def parcel_domain_maps(paths, subjects, scheme, collapse_hemisphere=True):
 # THE MODEL
 # ============================================================================
 
-def domain_formula(domains, med=False):
+def domain_formula(domains, med=False, dx=False):
     """The fixed-effects formula, with `Control` as the reference if present.
 
     With `med=True` the design is the FULL THREE-WAY, pain x domain x medication:
@@ -219,9 +235,31 @@ def domain_formula(domains, med=False):
     """
     ref = REFERENCE_DOMAIN if REFERENCE_DOMAIN in domains else sorted(domains)[0]
     dom = f"C(domain, Treatment('{ref}'))"
+    if med and dx:
+        raise ValueError('--med-model and --dx-model together would be a FOUR-way '
+                         'design (pain x domain x medication x diagnosis). At 17 '
+                         'cases the three-way cells are already thin; a four-way '
+                         'is not estimable on this cohort. Run them separately.')
     if med:
         return (f'log10_power ~ NRS_within * {dom} * med_within '
                 '+ NRS_submean + med_submean'), ref
+    if dx:
+        # THE FULL THREE-WAY, pain x domain x diagnosis. Same shape as the
+        # medication version and the same reason for it: one fit answers all
+        # four questions -- does the pain slope differ by domain, is mean power
+        # different in cases, is the pain slope different in cases, and does
+        # THAT difference itself differ by domain, which is the circuit-level
+        # question ("are different circuits changed by depression?").
+        #
+        # `dx_state` enters RAW, with no within/between split, which is the one
+        # real difference from the medication design. A diagnosis is a
+        # subject-level constant, so it has no within-patient part to separate;
+        # `med_within`/`med_submean` exist because dosing varies inside a
+        # patient and correlates with their mean pain, and neither is true here.
+        # There is correspondingly no "at the patient's own average" reading: a
+        # coefficient read at dx_state = 0 is simply the control stratum.
+        return (f'log10_power ~ NRS_within * {dom} * dx_state '
+                '+ NRS_submean'), ref
     return f'log10_power ~ NRS_within * {dom} + NRS_submean', ref
 
 
@@ -339,6 +377,83 @@ def marginal_slopes(res, domains, ref):
     return pd.DataFrame(rows)
 
 
+def domain_simple_slopes(res, domains, ref, moderator='dx_state'):
+    """Each domain's pain slope IN EACH STRATUM, as explicit linear combinations.
+
+    For domain d the control slope is `NRS_within + NRS_within:domain[T.d]` and
+    the case slope adds `NRS_within:moderator` and the three-way
+    `NRS_within:domain[T.d]:moderator`. Four terms, so the SE needs the full
+    quadratic form `c' V c` -- summing variances would be wrong by the three
+    covariance pairs, and they are not small.
+
+    This exists so the circuit figure can draw both strata WITHOUT refitting
+    either arm on its own. Refitting arms separately is the thing the whole
+    interaction design is there to avoid.
+
+    Returns one row per (domain, stratum). `marginal_contrast` already gives the
+    control slope and the difference; this gives the CASE slope with an SE,
+    which neither of those does.
+    """
+    from scipy import stats
+
+    names = list(res.fe_params.index)
+    cov = np.asarray(res.cov_params())[:len(names), :len(names)]
+    beta = res.fe_params.to_numpy()
+
+    def find(*required, domain=None):
+        """Index of the term whose factor set is exactly `required` (+ domain)."""
+        want = set(required)
+        for i, n in enumerate(names):
+            parts = n.split(':')
+            dom_parts = [q for q in parts if '[T.' in q]
+            rest = {q for q in parts if '[T.' not in q}
+            if rest != want:
+                continue
+            if domain is None:
+                if not dom_parts:
+                    return i
+            else:
+                if len(dom_parts) == 1 and dom_parts[0].endswith(f'[T.{domain}]'):
+                    return i
+        return None
+
+    rows = []
+    for dom in domains:
+        d = None if dom == ref else dom
+        # (index, required) for the four pieces; a missing non-reference term is
+        # fatal for that domain rather than silently treated as zero.
+        base = find('NRS_within')
+        ix_dom = None if d is None else find('NRS_within', domain=d)
+        ix_mod = find('NRS_within', moderator)
+        ix_three = None if d is None else find('NRS_within', moderator, domain=d)
+        if base is None or ix_mod is None:
+            logger.warning('domain simple slopes: missing base terms, skipped')
+            return pd.DataFrame()
+        if d is not None and (ix_dom is None or ix_three is None):
+            logger.warning('domain simple slopes: missing %s terms for %r', d, dom)
+            continue
+
+        for stratum, use_mod in (('control', False), ('case', True)):
+            c = np.zeros(len(names))
+            c[base] = 1.0
+            if ix_dom is not None:
+                c[ix_dom] = 1.0
+            if use_mod:
+                c[ix_mod] = 1.0
+                if ix_three is not None:
+                    c[ix_three] = 1.0
+            est = float(c @ beta)
+            se = float(np.sqrt(c @ cov @ c))
+            z = est / se if se > 0 else np.nan
+            rows.append({'term': 'pain_slope_by_stratum', 'domain': dom,
+                         'stratum': stratum, 'is_reference': dom == ref,
+                         'beta': est, 'se': se, 'z': z,
+                         'p': (float(2 * stats.norm.sf(abs(z)))
+                               if np.isfinite(z) else np.nan),
+                         'ci_lo': est - 1.96 * se, 'ci_hi': est + 1.96 * se})
+    return pd.DataFrame(rows)
+
+
 def omnibus_block(res, domains, ref, base_term, label):
     """(chi2, df, p) for "does `base_term` differ across domains".
 
@@ -392,7 +507,7 @@ def omnibus_wald(res, domains, ref):
     return stat, len(terms), float(test.pvalue)
 
 
-def fit_band(df, domains, band, med=False, out_dir=None):
+def fit_band(df, domains, band, med=False, dx=False, out_dir=None):
     """(record, contrast frame) for one band, written to disk as it completes.
 
     `out_dir` makes the run INCREMENTAL. The first version of this script created
@@ -401,7 +516,7 @@ def fit_band(df, domains, band, med=False, out_dir=None):
     for -- and there was nothing to look at while it ran. Each band now lands the
     moment it is finished.
     """
-    formula, ref = domain_formula(domains, med=med)
+    formula, ref = domain_formula(domains, med=med, dx=dx)
     t0 = time.time()
     res, warn = mm.fit_cell(df, VC_DOMAIN, formula=formula)
     elapsed = time.time() - t0
@@ -415,8 +530,19 @@ def fit_band(df, domains, band, med=False, out_dir=None):
     if med:
         wanted += [('med_within', 'med'),
                    ('NRS_within:med_within', 'pain_x_med')]
+    if dx:
+        # `pain_x_dx` per domain IS the circuit-level question: within this
+        # circuit, how much does the pain slope differ between diagnosis
+        # strata? `dx` alone is the nuisance level difference in mean power.
+        wanted += [('dx_state', 'dx'),
+                   ('NRS_within:dx_state', 'pain_x_dx')]
     parts = [marginal_contrast(res, domains, ref, base, label)
              for base, label in wanted]
+    if dx:
+        # Both strata's slopes per domain, from THIS fit. Appended to the same
+        # long frame so the figure has one table to read, distinguished by the
+        # `stratum` column (NaN for every non-dx term).
+        parts.append(domain_simple_slopes(res, domains, ref))
     slopes = pd.concat([x for x in parts if len(x)], ignore_index=True)
     slopes.insert(0, 'band', band)
 
@@ -426,6 +552,11 @@ def fit_band(df, domains, band, med=False, out_dir=None):
     vc = mm.vcomp_by_name(res)
     rec = {
         'band': band, 'reference_domain': ref, 'med_model': bool(med),
+        'dx_model': bool(dx),
+        **({'n_subjects_case':
+            int(df.loc[df['dx_state'] == 1, 'subject'].nunique()),
+            'n_subjects_control':
+            int(df.loc[df['dx_state'] == 0, 'subject'].nunique())} if dx else {}),
         **{f'omnibus_{b["block"]}_chi2': b['chi2'] for b in blocks},
         **{f'omnibus_{b["block"]}_df': b['df'] for b in blocks},
         **{f'p_omnibus_{b["block"]}': b['p'] for b in blocks},
@@ -538,6 +669,22 @@ def main():
                     help='Seed for --drop-random-unmedicated.')
     ap.add_argument('--med-window-hours', type=float,
                     default=med_state.DEFAULT_WINDOW_HOURS)
+    ap.add_argument('--dx-model', choices=['none', 'interaction'], default='none',
+                    help='Add a subject-level diagnosis as a FULL THREE-WAY '
+                         'pain x domain x diagnosis interaction. The '
+                         'circuit-level question -- "are different circuits '
+                         'changed by depression?" -- is the omnibus over the '
+                         'three-way block, `p_omnibus_pain_x_dx`, with the '
+                         'per-domain differences in the `pain_x_dx` rows. '
+                         'Cannot be combined with --med-model: that would be a '
+                         'four-way design, which 17 cases cannot support.')
+    ap.add_argument('--dx', choices=list(dx_state.CONDITIONS), default='mdd')
+    ap.add_argument('--dx-window-days', type=int,
+                    default=dx_state.DEFAULT_WINDOW_DAYS,
+                    help='Days before session_start in which a code counts '
+                         '(default 90). 0 means EVER.')
+    ap.add_argument('--dx-sources', choices=list(dx_state.SOURCE_SETS),
+                    default='any')
     ap.add_argument('--fdr-q', type=float, default=0.05)
     ap.add_argument('--run-name', default=RUN_NAME)
     ap.add_argument('--replot', default=None,
@@ -548,6 +695,15 @@ def main():
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     io.warn_if_dirty()
+
+    # Refused HERE rather than at the first fit: the view load ahead of it is
+    # minutes of work, and failing after it would waste all of them.
+    if args.med_model != 'none' and args.dx_model != 'none':
+        raise SystemExit(
+            '--med-model and --dx-model together would be a FOUR-way design '
+            '(pain x domain x medication x diagnosis). At 17 diagnosis cases '
+            'the three-way cells are already thin and a four-way is not '
+            'estimable on this cohort. Run them separately.')
 
     if args.replot:
         run_dir = Path(args.replot)
@@ -564,6 +720,7 @@ def main():
                       .reindex(domains))
         summary_figure(run_dir, cells, slopes, per_domain, domains, args)
         figure(run_dir, cells, slopes, per_domain, domains, args)
+        figure_by_domain(run_dir, cells, slopes, per_domain, domains, args)
         return
 
     ref_run = reference_run.load(args.reference_run)
@@ -670,6 +827,24 @@ def main():
                            int((med_lookup['med_state'] == 1).sum()),
                            int((med_lookup['med_state'] == 0).sum()))
 
+    # ---- subject-level diagnosis label ---------------------------------
+    dx_lookup, dx_labels = None, None
+    if args.dx_model != 'none':
+        bare = sorted(s.replace('sub-', '') for s in subjects)
+        dx_all = dx_state.load_diagnoses(subjects=bare)
+        dx_labels, _ = dx_state.subject_labels(
+            dx_all, condition=args.dx, window_days=args.dx_window_days,
+            sources=args.dx_sources)
+        missing = sorted(set(subjects) - set(dx_labels['subject_id']))
+        if missing:
+            raise SystemExit(
+                f'{len(missing)} cohort subject(s) have no diagnoses table, so '
+                f'their status is unknown, not negative: {missing}.')
+        dx_labels = dx_labels[dx_labels['subject_id'].isin(subjects)]
+        logger.info('\n%s', dx_state.stratum_summary(
+            dx_labels, dx_state.pain_by_subject(subjects=bare)).to_string(index=False))
+        dx_lookup = dx_state.epoch_lookup(dx_labels)
+
     kept, bands, notched = band_table(args.band_set, args.notch_half_width_hz,
                                       epoch_minutes)
     want = list(bands) if args.bands is None else [b for b in bands if b in args.bands]
@@ -681,6 +856,8 @@ def main():
         view_scheme='-'.join(
             [args.band_set.replace('_', ''), scheme_code]
             + ([args.drug_set] if args.med_model != 'none' else [])
+            + ([f'{args.dx}{args.dx_window_days}d']
+               if args.dx_model != 'none' else [])
             + ([f'excl{args.exclude_drug_set}'] if args.exclude_drug_set else [])
             + ([f'randdrop{args.drop_random_unmedicated}s{args.drop_seed}']
                if args.drop_random_unmedicated else [])),
@@ -723,11 +900,16 @@ def main():
                                 on=['subject_id', 'session', 'epoch_id'],
                                 how='inner')
             extra.append('med_state')
+        if dx_lookup is not None:
+            # Subject-level: there is no session or epoch key, because the
+            # label does not vary across either.
+            frame = frame.merge(dx_lookup, on='subject_id', how='inner')
+            extra.append('dx_state')
         df = mm.build_cell_frame(frame, extra_columns=tuple(extra))
         if med_lookup is not None:
             df = mm.add_med_components(df)
         rec, slopes = fit_band(df, domains, band, med=med_lookup is not None,
-                               out_dir=run_dir)
+                               dx=dx_lookup is not None, out_dir=run_dir)
         records.append(rec)
         slope_parts.append(slopes)
 
@@ -804,10 +986,134 @@ def main():
                                    'mask_content': CONFOUND_CAVEAT})
     summary_figure(run_dir, cells, slopes, per_domain, domains, args)
     figure(run_dir, cells, slopes, per_domain, domains, args)
+    figure_by_domain(run_dir, cells, slopes, per_domain, domains, args)
+    if args.dx_model != 'none':
+        dx_domain_figure(run_dir, cells, slopes, domains, args)
     io.log_analysis('domain-level mixed models: pain x processing domain, one fit '
                     'per band, parcel as a nested random slope (EXPLORATORY)',
                     run_dir)
     print(run_dir)
+
+
+def dx_domain_figure(run_dir, cells, slopes, domains, args):
+    """Are different CIRCUITS changed by depression?
+
+    Two panels, because there are two distinct questions and conflating them is
+    the usual error:
+
+      LEFT   each circuit's pain slope in each stratum, as paired intervals.
+             This is the descriptive picture, and it carries NO significance
+             marks on the individual arms -- for the same reason the band
+             figure does not. Whether one arm's interval excludes zero is not a
+             test that the arms differ.
+      RIGHT  the per-circuit DIFFERENCE (case - control) with its own BH family.
+             This is the only panel that licenses a claim.
+
+    The title carries `p_omnibus_pain_x_dx`, the joint Wald over the whole
+    three-way block. THAT is the literal answer to "do different circuits
+    change differently in depression" -- a single test per band, asked before
+    any individual circuit is inspected, so reading the per-circuit panel after
+    a non-significant omnibus is exploration and is labelled as such.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    ss = slopes[slopes['term'] == 'pain_slope_by_stratum']
+    diff = slopes[slopes['term'] == 'pain_x_dx']
+    if not len(ss) or not len(diff):
+        logger.warning('no diagnosis contrasts in the slope table, no figure')
+        return
+
+    bands = [b for b in BAND_SETS[args.band_set] if b in set(ss['band'])]
+    doms = [d for d in domains if d in set(ss['domain'])]
+    n_case = int(cells['n_subjects_case'].max())
+    n_ctrl = int(cells['n_subjects_control'].max())
+
+    fig, axs = plt.subplots(2, len(bands), figsize=(2.9 * len(bands), 8.6),
+                            squeeze=False, sharey='row')
+    y = np.arange(len(doms))
+    colors = {'control': '#4a7fb5', 'case': '#b03a2e'}
+
+    sl_max = float(np.nanmax(np.abs(np.concatenate(
+        [(ss['beta'] + 1.96 * ss['se']).to_numpy(dtype=float),
+         (ss['beta'] - 1.96 * ss['se']).to_numpy(dtype=float)])))) * 1.05
+    df_max = float(np.nanmax(np.abs(np.concatenate(
+        [(diff['beta'] + 1.96 * diff['se']).to_numpy(dtype=float),
+         (diff['beta'] - 1.96 * diff['se']).to_numpy(dtype=float)])))) * 1.05
+
+    for j, band in enumerate(bands):
+        # --- row 0: both strata, paired
+        ax = axs[0][j]
+        for stratum, off in (('control', -0.16), ('case', +0.16)):
+            d = (ss[(ss['band'] == band) & (ss['stratum'] == stratum)]
+                 .set_index('domain').reindex(doms))
+            ax.errorbar(d['beta'].to_numpy(dtype=float), y + off,
+                        xerr=1.96 * d['se'].to_numpy(dtype=float), fmt='o',
+                        ms=4.5, lw=1.2, capsize=2, color=colors[stratum],
+                        label=f'{stratum} (n={n_ctrl if stratum == "control" else n_case})'
+                        if j == 0 else None)
+        ax.axvline(0, color='0.4', lw=0.9, ls='--')
+        ax.set_xlim(-sl_max, sl_max)
+        row = cells[cells['band'] == band]
+        p_omni = (float(row['p_omnibus_pain_x_dx'].iloc[0])
+                  if len(row) and 'p_omnibus_pain_x_dx' in row else np.nan)
+        ax.set_title(f'{band}\nomnibus pain x dx p={p_omni:.3g}', fontsize=8.5)
+        ax.tick_params(labelsize=7)
+        if j == 0:
+            ax.set_yticks(y)
+            ax.set_yticklabels(doms, fontsize=8)
+            ax.set_ylim(len(doms) - 0.5, -0.5)
+            ax.legend(fontsize=7, loc='lower right', frameon=False)
+
+        # --- row 1: the difference, BH-outlined
+        ax = axs[1][j]
+        d = diff[diff['band'] == band].set_index('domain').reindex(doms)
+        b = d['beta'].to_numpy(dtype=float)
+        se = d['se'].to_numpy(dtype=float)
+        rej = d.get('p_bh_reject', pd.Series(False, index=d.index)) \
+               .fillna(False).to_numpy(dtype=bool)
+        ax.errorbar(b[~rej], y[~rej], xerr=1.96 * se[~rej], fmt='o', ms=4.5,
+                    lw=1.2, capsize=2, color='0.55')
+        ax.errorbar(b[rej], y[rej], xerr=1.96 * se[rej], fmt='o', ms=6,
+                    lw=1.6, capsize=2, color='#7d3c98')
+        ax.axvline(0, color='0.4', lw=0.9, ls='--')
+        ax.set_xlim(-df_max, df_max)
+        ax.set_title(f'{band}: case - control', fontsize=8.5)
+        ax.tick_params(labelsize=7)
+        if j == 0:
+            ax.set_yticks(y)
+            ax.set_yticklabels(doms, fontsize=8)
+            ax.set_ylim(len(doms) - 0.5, -0.5)
+
+    n_rej = int(diff.get('p_bh_reject',
+                         pd.Series(dtype=bool)).fillna(False).sum())
+    fig.suptitle(
+        f'Are different circuits changed by {args.dx.upper()}?  '
+        f'{n_case} cases vs {n_ctrl} controls\n'
+        'TOP: each circuit\'s pain slope per stratum.   '
+        f'BOTTOM: the difference, {n_rej} BH-significant at q={args.fdr_q}',
+        fontsize=12)
+    fig.tight_layout(rect=(0, 0.11, 1, 0.92))
+    fig.text(0.01, 0.005,
+             'One fit per band: log10_power ~ NRS_within * domain * dx_state + '
+             'NRS_submean, with the parcel-nested random slope unchanged. Both '
+             'strata come from that ONE fit as linear combinations with SEs '
+             'from the fitted covariance -- neither arm was refitted alone, '
+             'which is the point: comparing which arm reaches significance is '
+             'the difference-of-significance fallacy, and the case arm is half '
+             'the size so its intervals are wider everywhere regardless. The '
+             'omnibus in each top title is the joint Wald over the whole '
+             'three-way block and is the actual test of "do circuits differ in '
+             'how depression changes pain encoding"; per-circuit rows read '
+             'after a non-significant omnibus are exploratory.\n'
+             f'{DOMAIN_CAVEAT}\n{MODULATORY_CAVEAT}\n{DISCLAIMER}',
+             fontsize=6.2, va='bottom', ha='left', color='0.35', wrap=True)
+    out = run_dir / 'fig_dx_domain.png'
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    logger.info('wrote %s', out.name)
+    return out
 
 
 def pain_slopes_frame(slopes):
@@ -940,8 +1246,7 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
                              sharey=True, squeeze=False)
     xmax = float(np.nanmax(np.abs(np.concatenate(
         [slopes['ci_lo'].to_numpy(), slopes['ci_hi'].to_numpy()])))) * 1.08
-    colours = {'Sensory': '#b03a2e', 'Affective': '#8e44ad',
-               'Cognitive': '#2b6ca3', 'Memory': '#e08214', 'Control': '0.45'}
+    colours = DOMAIN_COLOURS
     y = np.arange(len(domains))
 
     for j, band in enumerate(bands):
@@ -994,6 +1299,106 @@ def figure(run_dir, cells, slopes, per_domain, domains, args):
              f'across patients. {DOMAIN_CAVEAT}\n{DISCLAIMER}',
              fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_domain_slopes.png'
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    logger.info('wrote %s', out)
+
+
+def figure_by_domain(run_dir, cells, slopes, per_domain, domains, args):
+    """`fig_domain_slopes.png` transposed: ONE PANEL PER DOMAIN, bands as rows.
+
+    Same numbers, same model, different question. The by-band figure asks "at
+    this frequency, which domains respond?" and is the right shape for the
+    omnibus, which is a within-band contrast ACROSS domains. This one asks
+    "what is this network's SPECTRAL PROFILE?" -- a question the by-band layout
+    can only answer by eye-hopping across six panels.
+
+    Three consequences of the transpose, all deliberate:
+
+    - Rows are ordered by frequency, so a panel reads as a spectrum. A faint
+      line connects the estimates to make that profile legible. It joins ORDINAL
+      band categories, not a continuous axis -- the bands are unequal in width
+      (delta 1-4 Hz, high_gamma 70-200 Hz) and separated by gaps, so the line is
+      a reading aid and never an interpolation. Kept thin and pale for exactly
+      that reason.
+    - The omnibus is a property of a BAND, not of a domain, so it cannot sit in
+      a panel title here. It moves to the shared y axis, beside the band name,
+      where it annotates the row it actually describes and appears once.
+    - The x scale is shared across panels. Comparing networks is the entire
+      point of this layout, and per-panel scales would make a weak domain look
+      like a strong one.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    bands = [b for b in cells['band']]
+    slopes = pain_slopes_frame(slopes)
+    fig, axes = plt.subplots(1, len(domains),
+                             figsize=(2.65 * len(domains) + 1.8, 5.2),
+                             sharey=True, sharex=True, squeeze=False)
+    xmax = float(np.nanmax(np.abs(np.concatenate(
+        [slopes['ci_lo'].to_numpy(), slopes['ci_hi'].to_numpy()])))) * 1.08
+    y = np.arange(len(bands))
+
+    for j, dom in enumerate(domains):
+        ax = axes[0][j]
+        colour = DOMAIN_COLOURS.get(dom, '0.4')
+        d = slopes[slopes['domain'] == dom].set_index('band').reindex(bands)
+        ax.plot(d['beta'].to_numpy(), y, '-', color=colour, lw=1.0, alpha=0.30,
+                zorder=2)
+        for i, band in enumerate(bands):
+            r = d.loc[band]
+            sig = bool(r.get('p_bh_reject', False))
+            ax.errorbar(r['beta'], i, xerr=1.96 * r['se'], fmt='o',
+                        ms=8 if sig else 5.5, lw=1.8 if sig else 1.1, capsize=3,
+                        color=colour,
+                        markerfacecolor=colour if sig else 'white', zorder=3)
+        ax.axvline(0, color='0.5', lw=1.0, ls='--', zorder=1)
+        n_p = int(per_domain.loc[dom, 'n_parcels'])
+        n_c = int(per_domain.loc[dom, 'n_contacts'])
+        n_s = int(per_domain.loc[dom, 'n_subjects'])
+        ax.set_title(f'{dom}\n{n_p} parc, {n_c} chan, {n_s} subj', fontsize=9,
+                     color=colour)
+        ax.set_xlim(-xmax, xmax)
+        ax.set_xlabel('d log10 power / pain point', fontsize=8)
+        ax.tick_params(labelsize=7)
+        if j == 0:
+            labels = []
+            for band in bands:
+                omni = cells[cells['band'] == band].iloc[0]
+                p_omni = omni.get('p_omnibus', omni.get('p_omnibus_pain', np.nan))
+                labels.append(f'{band}\nomnibus p = {p_omni:.3g}')
+            ax.set_yticks(y)
+            ax.set_yticklabels(labels, fontsize=7.5)
+            ax.set_ylim(len(bands) - 0.5, -0.5)
+
+    ref = cells['reference_domain'].iloc[0]
+    fig.suptitle('Pain-power SPECTRAL PROFILE by processing domain '
+                 '(the by-band figure, transposed)\n'
+                 'filled = BH-significant slope; the omnibus on each row tests '
+                 'whether the domains differ IN THAT BAND '
+                 f'(reference domain: {ref})', fontsize=11.5)
+    fig.tight_layout(rect=(0, 0.17, 1, 0.90))
+    fig.text(0.01, 0.005,
+             'SAME MODEL AND SAME NUMBERS as fig_domain_slopes.png -- one fit '
+             'per band, read down instead of across: '
+             'log10_power ~ NRS_within * C(domain) + NRS_submean + '
+             '(NRS_within || subject) + (NRS_within || subject:parcel) + '
+             '(1 | subject:channel). The connecting line joins ORDINAL band '
+             'categories of unequal width (delta 1-4 Hz, high_gamma 70-200 Hz) '
+             'with gaps between them, and with the line-noise bins removed; it '
+             'is a reading aid for the profile, NOT an interpolated spectrum. '
+             'THE OMNIBUS IS A PROPERTY OF THE ROW, not of a panel: it asks '
+             'whether domains differ within that band, so it is printed once on '
+             'the shared y axis. A panel with no significant marker is not '
+             'evidence of no effect -- see the per-domain n. Each marker is a '
+             'MARGINAL slope with the SE from the fitted covariance, not the '
+             'interaction coefficient, which is only the DIFFERENCE from the '
+             'reference. X SCALE IS SHARED so domains are comparable by eye. '
+             f'{DOMAIN_CAVEAT}\n{DISCLAIMER}',
+             fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
+    out = run_dir / 'fig_domain_spectra.png'
     fig.savefig(out, dpi=150, bbox_inches='tight')
     plt.close(fig)
     logger.info('wrote %s', out)

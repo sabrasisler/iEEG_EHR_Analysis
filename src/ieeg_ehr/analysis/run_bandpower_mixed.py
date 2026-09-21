@@ -91,7 +91,7 @@ import pandas as pd
 
 from ieeg_ehr import config, io
 from ieeg_ehr.analysis import cluster_permutation as cp
-from ieeg_ehr.analysis import fullres_cells, med_state, mixed_model as mm
+from ieeg_ehr.analysis import dx_state, fullres_cells, med_state, mixed_model as mm
 from ieeg_ehr.analysis import reference_run, view_tables
 # The medication fits are REUSED, not reimplemented: these are the same two
 # models `run_mixed_model_med_strata` runs on the 50-log-bin grid, so a band
@@ -111,6 +111,27 @@ VIEW_SCHEME = 'paperbands6-roiv2ofc'
 RUN_NAME = 'paperbands6_mixedlm'
 
 FDR_Q = 0.05
+
+#: Subjects required IN EACH ARM before a diagnosis interaction is fitted for a
+#: cell. Deliberately the same number as `mm.MIN_SUBJECTS`, applied per stratum
+#: rather than in total: an interaction is a comparison of two groups, so the
+#: smaller group is what the estimate rests on and a total count hides it. On
+#: the reference cohort this refuses dACC, Occipital, rACC, Auditory and M1,
+#: whose MDD arms hold 4-7 subjects. Those cells become ROWS with a reason, not
+#: silent gaps -- and they are still fitted by the pain-only model beside them.
+DX_MIN_SUBJECTS_PER_ARM = mm.MIN_SUBJECTS
+
+#: What the diagnosis contrast does NOT control for, stated once and carried
+#: into provenance, METHODS and every figure this run writes.
+DX_CAVEAT = (
+    'THE DIAGNOSIS LABEL IS AN ADMINISTRATIVE ICD CODE, not a structured '
+    'clinical assessment, and most cases are labelled by a professional '
+    'billing code alone. ANTIDEPRESSANT EXPOSURE IS NOT CONTROLLED: SSRIs and '
+    'SNRIs alter cortical oscillatory power directly, and treated MDD patients '
+    'are by definition more likely to be on them, so a stratum difference '
+    'confounds diagnosis with medication. The recency window also decides the '
+    'label -- subjects carrying an MDD code outside it fall into the CONTROL '
+    'arm and dilute the contrast toward the null.')
 
 #: `paper_bands_6_hg200` is the DEFAULT rather than the published
 #: `paper_bands_6`: 170 Hz was the target paper's ceiling, not this dataset's,
@@ -307,6 +328,79 @@ def fit_one_cell(df, meta):
     return rec, slopes, blups
 
 
+def fit_dx_interaction(df, meta):
+    """The diagnosis-moderator fit for one cell: does the pain slope differ?
+
+    Same variance components as the pain-only fit (`mm.VC_FULL`), so the two are
+    directly comparable and the ONLY thing that changed is the fixed-effects
+    design. See `mm.FORMULA_DX_INTERACTION` for why there is no within/between
+    split of `dx_state` and why the random effects are left alone.
+
+    The record carries BOTH simple slopes as well as the interaction, computed
+    from this one fit via `mm.simple_slopes`. Nothing downstream should ever
+    refit an arm on its own to get them.
+    """
+    t0 = time.time()
+
+    # Structural refusals FIRST, so an unfittable cell becomes a row rather than
+    # a fit that "worked" on one stratum. A cell where every subject is a case
+    # (or none is) has no between-stratum contrast at all, and patsy would
+    # happily drop the aliased column and hand back a pain-only fit wearing an
+    # interaction model's name -- which is the failure mode worth spending an
+    # explicit branch on.
+    n_case = int(df.loc[df['dx_state'] == 1, 'subject'].nunique())
+    n_ctrl = int(df.loc[df['dx_state'] == 0, 'subject'].nunique())
+    if min(n_case, n_ctrl) < DX_MIN_SUBJECTS_PER_ARM:
+        rec = mm.failed_record(
+            meta['region'], meta['band_index'], meta['band_lo_hz'],
+            meta['band_hi_hz'],
+            f'dx strata too small: {n_case} case / {n_ctrl} control subjects, '
+            f'need {DX_MIN_SUBJECTS_PER_ARM} in each', df=df)
+        rec.update({k: meta[k] for k in ('band', 'cell_index')})
+        rec.update({'n_subjects_case': n_case, 'n_subjects_control': n_ctrl})
+        return rec
+
+    try:
+        res, warn = mm.fit_cell(df, mm.VC_FULL,
+                                formula=mm.FORMULA_DX_INTERACTION)
+    except mm.CellFitError as exc:
+        rec = mm.failed_record(meta['region'], meta['band_index'],
+                               meta['band_lo_hz'], meta['band_hi_hz'],
+                               f'dx interaction: {exc}', df=df,
+                               fit_seconds=time.time() - t0)
+        rec.update({k: meta[k] for k in ('band', 'cell_index')})
+        rec.update({'n_subjects_case': n_case, 'n_subjects_control': n_ctrl})
+        return rec
+    t_full = time.time() - t0
+
+    try:
+        res_red, warn_red = mm.fit_cell(df, mm.VC_REDUCED,
+                                        formula=mm.FORMULA_DX_INTERACTION)
+    except mm.CellFitError as exc:
+        res_red, warn_red = None, [f'reduced failed: {exc}']
+
+    rec = mm.cell_record(res, res_red, df, region=meta['region'],
+                         freq_bin_index=meta['band_index'],
+                         bin_low_hz=meta['band_lo_hz'],
+                         bin_high_hz=meta['band_hi_hz'], fit_seconds=t_full,
+                         warnings_full=warn, warnings_reduced=warn_red,
+                         extra_terms=mm.DX_INTERACTION_TERMS)
+    rec.update({k: meta[k] for k in ('band', 'cell_index')})
+    rec.update(mm.simple_slopes(res))
+    rec.update({'n_subjects_case': n_case, 'n_subjects_control': n_ctrl,
+                'n_epochs_case': int(df.loc[df['dx_state'] == 1]
+                                     .groupby('subject')['epoch_id'].nunique().sum()),
+                'n_epochs_control': int(df.loc[df['dx_state'] == 0]
+                                        .groupby('subject')['epoch_id'].nunique().sum())})
+
+    logger.info('%-18s %-11s | DX  control %+.5f  case %+.5f  | diff %+.5f '
+                '(p %.3g) | %d vs %d subj', meta['region'], meta['band'],
+                rec.get('slope_ref', np.nan), rec.get('slope_mod', np.nan),
+                rec.get('dx_ix_beta', np.nan), rec.get('dx_ix_p', np.nan),
+                n_case, n_ctrl)
+    return rec
+
+
 def stage_fit(args):
     ref = reference_run.load(args.reference_run)
     ref.describe()
@@ -367,6 +461,29 @@ def stage_fit(args):
             med_state=state['med_state'].astype(float))[
                 ['subject_id', 'session', 'epoch_id', 'med_state']]
 
+    # ---- subject-level diagnosis label ---------------------------------
+    dx_lookup, dx_labels, dx_detail, dx_summary = None, None, None, None
+    if args.dx_model != 'none':
+        bare = sorted(s.replace('sub-', '') for s in subjects)
+        dx_all = dx_state.load_diagnoses(subjects=bare)
+        dx_labels, dx_detail = dx_state.subject_labels(
+            dx_all, condition=args.dx, window_days=args.dx_window_days,
+            sources=args.dx_sources)
+        # Cohort coverage, named rather than absorbed. A subject with no
+        # diagnoses table at all would otherwise read as a CONTROL, which is the
+        # same silent-default failure `med_state` refuses for dosing.
+        missing = sorted(set(subjects) - set(dx_labels['subject_id']))
+        if missing:
+            raise SystemExit(
+                f'{len(missing)} cohort subject(s) have no diagnoses table, so '
+                f'their MDD status is unknown, not negative: {missing}. Refusing '
+                'rather than labelling them controls.')
+        dx_labels = dx_labels[dx_labels['subject_id'].isin(subjects)]
+        dx_summary = dx_state.stratum_summary(
+            dx_labels, dx_state.pain_by_subject(subjects=bare))
+        logger.info('\n%s', dx_summary.to_string(index=False))
+        dx_lookup = dx_state.epoch_lookup(dx_labels)
+
     run_dir = (Path(args.run_dir) if args.run_dir else
                config.analysis_run_dir(question=args.question,
                                        output_type=OUTPUT_TYPE,
@@ -423,12 +540,29 @@ def stage_fit(args):
                                 'and were dropped', region, band,
                                 before - len(frame), before)
                 extra = ('med_state',)
+            if dx_lookup is not None:
+                # Joined on SUBJECT only -- the label is a subject-level
+                # constant, so there is no session or epoch key to match on.
+                # `how='inner'` and the cohort check above together guarantee no
+                # row survives with an invented label.
+                before = len(frame)
+                frame = frame.merge(dx_lookup, on='subject_id', how='inner')
+                if len(frame) < before:
+                    logger.warning('%s %s: %d of %d rows had no diagnosis label '
+                                   'and were dropped', region, band,
+                                   before - len(frame), before)
+                extra = tuple(extra) + ('dx_state',)
             df = mm.build_cell_frame(frame, region=region,
                                      freq_bin_index=meta['band_index'],
                                      extra_columns=extra)
             rec, slopes, blups = fit_one_cell(df, meta)
             rec['model'] = 'pain'
             records.append(rec)
+
+            if args.dx_model == 'interaction':
+                dx_rec = fit_dx_interaction(df, meta)
+                dx_rec['model'] = f'dx_{args.dx}'
+                records.append(dx_rec)
 
             if args.med_model in ('decomposed', 'both'):
                 dec, _ = fit_decomposed(df, {**meta,
@@ -481,6 +615,23 @@ def stage_fit(args):
                                      'beside the unpooled slopes, never instead'},
                    script=SCRIPT)
 
+    if dx_labels is not None:
+        # CSV, not Parquet: these are small, terminal, read-by-eye tables under
+        # analysis/ (CLAUDE.md, io_conventions).
+        dx_params = {'condition': args.dx, 'window_days': args.dx_window_days,
+                     'source_set': args.dx_sources,
+                     'icd10_prefixes': list(dx_state.CONDITIONS[args.dx]['icd10']),
+                     'icd9_prefixes': list(dx_state.CONDITIONS[args.dx]['icd9'])}
+        io.write_table(dx_labels, run_dir / 'dx_subject_labels.csv',
+                       params=dx_params, script=SCRIPT,
+                       extra={'caveat': DX_CAVEAT,
+                              'definition': dx_state.CONDITIONS[args.dx]['description']})
+        io.write_table(dx_detail, run_dir / 'dx_session_detail.csv',
+                       params=dx_params, script=SCRIPT)
+        io.write_table(dx_summary, run_dir / 'dx_stratum_summary.csv',
+                       params=dx_params, script=SCRIPT,
+                       extra={'caveat': DX_CAVEAT})
+
     if med_summary is not None:
         io.write_table(med_summary, run_dir / 'med_stratum_summary.parquet',
                        params={'drug_set': args.drug_set,
@@ -514,6 +665,18 @@ def stage_fit(args):
                     'med_window_hours': (args.med_window_hours
                                          if args.med_model != 'none' else None),
                     'subjects_without_administrations': med_missing,
+                    'dx_model': args.dx_model,
+                    'dx_condition': args.dx if args.dx_model != 'none' else None,
+                    'dx_window_days': (args.dx_window_days
+                                       if args.dx_model != 'none' else None),
+                    'dx_sources': (args.dx_sources if args.dx_model != 'none'
+                                   else None),
+                    'dx_n_case': (int(dx_labels['dx_state'].sum())
+                                  if dx_labels is not None else None),
+                    'dx_n_control': (int((~dx_labels['dx_state']).sum())
+                                     if dx_labels is not None else None),
+                    'dx_min_subjects_per_arm': (DX_MIN_SUBJECTS_PER_ARM
+                                                if args.dx_model != 'none' else None),
                     'excluded_regions': list(args.exclude_regions),
                     'excluded_regions_reason': args.exclude_reason,
                     'aggregation': 'linear_then_log via axes.aggregate_bands',
@@ -524,7 +687,8 @@ def stage_fit(args):
                    'band_caveat': band_caveat(args.band_set),
                    'inference_caveat': WALD_CAVEAT,
                    'mask_content': CONFOUND_CAVEAT,
-                   'subjects_without_roi': sorted(no_roi)})
+                   'subjects_without_roi': sorted(no_roi),
+                   **({'dx_caveat': DX_CAVEAT} if args.dx_model != 'none' else {})})
     print(run_dir)
     return run_dir
 
@@ -618,7 +782,17 @@ def stage_collect(args):
     # The decomposed model's medication terms get their OWN families, for the same
     # reason: `medw` and `med_ix` are separate hypotheses from the pain slope that
     # shares their fit.
-    for prefix in ('medw', 'med_ix'):
+    # `dx_ix` -- "does the pain slope differ between diagnosis strata" -- is a
+    # THIRD question asked of the same cells, so it gets its own family too. It
+    # is emphatically NOT corrected against the pain slope's family: the pain
+    # slope being significant somewhere says nothing about whether the strata
+    # differ there, and pooling them would penalise each for the other's tests.
+    #
+    # `dx` (the main effect) deliberately gets NO family. It is a nuisance term
+    # -- a between-subject difference in mean power, which the subject random
+    # intercept exists to absorb -- and BH-correcting a nuisance term invites it
+    # to be read as a result.
+    for prefix in ('medw', 'med_ix', 'dx_ix'):
         col = f'{prefix}_p'
         if col not in cells.columns:
             continue
@@ -703,8 +877,11 @@ def stage_collect(args):
 
     report(cells[cells['model'] == 'pain'], args.fdr_q)
     figures(run_dir, cells[cells['model'] == 'pain'], args)
-    if (cells['model'] != 'pain').any():
+    if cells['model'].isin(('med_decomposed', 'med_matched')).any():
         med_figure(run_dir, cells, args)
+    if cells['model'].str.startswith('dx_').any():
+        dx_figure(run_dir, cells, args)
+        dx_report(cells, args.fdr_q)
     write_methods(run_dir, cells, args)
     io.log_analysis(f'band-power mixed-effects models, {len(cells)} region x band '
                     'cells, BH-corrected (EXPLORATORY)', run_dir)
@@ -819,6 +996,130 @@ def figures(run_dir, cells, args):
     logger.info('wrote %s and %s', p1.name, p2.name)
 
 
+def dx_report(cells, q):
+    """Log the interaction cells that survive their own BH family."""
+    d = cells[cells['model'].str.startswith('dx_')]
+    if not len(d):
+        return
+    logger.info('=' * 74)
+    n_fit = int(d['dx_ix_beta'].notna().sum())
+    logger.info('DIAGNOSIS MODERATION: %d of %d cells fitted (%d refused for a '
+                'stratum under %d subjects)', n_fit, len(d), len(d) - n_fit,
+                DX_MIN_SUBJECTS_PER_ARM)
+    sig = d[d.get('dx_ix_p_bh_reject', pd.Series(dtype=object)) == True]  # noqa: E712
+    logger.info('  interaction BH-significant at q=%.2f: %d', q, len(sig))
+    for r in sig.sort_values('dx_ix_p').itertuples():
+        logger.info('    %-18s %-11s  control %+.5f  case %+.5f  diff %+.5f  '
+                    'p_bh %.4g', r.region, r.band, r.slope_ref, r.slope_mod,
+                    r.dx_ix_beta, r.dx_ix_p_bh)
+    if not len(sig):
+        logger.info('    none. With %d vs %d subjects this is the expected '
+                    'outcome for anything but a large slope difference -- read '
+                    'it as "not resolved at this n", not as "no difference".',
+                    int(d['n_subjects_case'].max() or 0),
+                    int(d['n_subjects_control'].max() or 0))
+    logger.info('  %s', DX_CAVEAT)
+    logger.info('=' * 74)
+
+
+def dx_figure(run_dir, cells, args):
+    """Three panels: the pain slope in each stratum, and the DIFFERENCE.
+
+    THE TWO STRATUM PANELS CARRY NO SIGNIFICANCE OUTLINES, and that is the whole
+    design of this figure rather than an omission. Outlining each arm separately
+    would invite exactly the inference the interaction model exists to prevent:
+    "significant in cases, not in controls" is not evidence that the two differ,
+    and with unequal arms (here 17 vs 34 subjects) the smaller one carries wider
+    standard errors everywhere and will look weaker from power alone. Only the
+    third panel -- the interaction, with its own BH family -- licenses a claim
+    about a difference, so only the third panel is outlined.
+
+    The two stratum panels also SHARE a colour scale. They are the same quantity
+    in two groups; giving each its own scale would manufacture a visual contrast
+    out of a scale difference.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from ieeg_ehr.features import common
+
+    d = cells[cells['model'].str.startswith('dx_')]
+    if not len(d):
+        return
+    bands = list(BAND_SETS[args.band_set])
+    regions = [r for r in view_tables.roi_regions_for({'roi_scheme': args.roi_scheme})
+               if r in set(d['region'])]
+
+    def grid(value):
+        return (d.pivot_table(index='region', columns='band', values=value,
+                              dropna=False)
+                .reindex(index=regions, columns=bands).to_numpy(dtype=float))
+
+    ctrl, case, ix = grid('slope_ref'), grid('slope_mod'), grid('dx_ix_beta')
+    rej = (d.assign(r=d.get('dx_ix_p_bh_reject',
+                            pd.Series(False, index=d.index)).fillna(False).astype(bool))
+           .pivot_table(index='region', columns='band', values='r', dropna=False)
+           .reindex(index=regions, columns=bands).fillna(0).to_numpy(dtype=bool))
+
+    n_case = int(np.nanmax(d['n_subjects_case'].to_numpy(dtype=float)))
+    n_ctrl = int(np.nanmax(d['n_subjects_control'].to_numpy(dtype=float)))
+
+    # One scale for the two slope panels, a separate one for the difference.
+    slope_cap = float(np.nanmax(np.abs(np.concatenate([ctrl.ravel(), case.ravel()]))))
+    ix_cap = float(np.nanmax(np.abs(ix)))
+    cm = plt.get_cmap('RdBu_r').copy()
+    cm.set_bad('0.85')
+
+    panels = [
+        (ctrl, slope_cap, None, f'CONTROL (no {args.dx.upper()} code)\n'
+                                f'{n_ctrl} subjects'),
+        (case, slope_cap, None, f'{args.dx.upper()} case\n{n_case} subjects'),
+        (ix, ix_cap, rej, 'DIFFERENCE (case - control)\n'
+                          f'outlined: BH-significant at q={args.fdr_q}'),
+    ]
+    fig, axs = plt.subplots(1, 3, figsize=(16.5, 0.42 * len(regions) + 3.4),
+                            squeeze=False)
+    for ax, (arr, cap, outline, title) in zip(axs[0], panels):
+        im = ax.imshow(arr, aspect='auto', cmap=cm, vmin=-cap, vmax=cap,
+                       interpolation='nearest')
+        if outline is not None:
+            common.draw_mask_outline(ax, outline)
+        ax.set_xticks(range(len(bands)))
+        ax.set_xticklabels([f'{b}\n{BAND_SETS[args.band_set][b][0]}-'
+                            f'{BAND_SETS[args.band_set][b][1]} Hz' for b in bands],
+                           fontsize=7.5)
+        ax.set_yticks(range(len(regions)))
+        ax.set_yticklabels(regions, fontsize=7.5)
+        ax.set_title(title, fontsize=10)
+        fig.colorbar(im, ax=ax, fraction=0.045, pad=0.03,
+                     label='d log10(power) per pain point')
+
+    n_fit = int(np.isfinite(ix).sum())
+    fig.suptitle(
+        f'Pain encoding by {args.dx.upper()} status: both strata from ONE '
+        f'interaction fit\n{n_fit} of {ix.size} cells fitted; '
+        f'{int(rej.sum())} BH-significant differences at q={args.fdr_q}',
+        fontsize=12.5)
+    fig.tight_layout(rect=(0, 0.13, 1, 0.93))
+    fig.text(0.01, 0.005,
+             'The two left panels are SIMPLE SLOPES from the single pooled fit '
+             'log10_power ~ NRS_within * dx_state + NRS_submean, with the '
+             'random effects of the pain-only model unchanged. They are '
+             'deliberately NOT outlined for significance: comparing which arm '
+             'reaches significance is the difference-of-significance fallacy, '
+             f'and the {args.dx.upper()} arm ({n_case} subjects) has wider SEs '
+             f'than the control arm ({n_ctrl}) everywhere from power alone. '
+             'Only the right panel tests a difference. Grey = not fitted '
+             f'(a stratum under {DX_MIN_SUBJECTS_PER_ARM} subjects).\n'
+             f'{DX_CAVEAT}\n{WALD_CAVEAT} {DISCLAIMER}',
+             fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
+    out = run_dir / 'fig_dx_effects.png'
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    logger.info('wrote %s', out.name)
+    return out
+
+
 def med_figure(run_dir, cells, args):
     """One heat panel per medication term: region x band, significance outlined.
 
@@ -910,10 +1211,11 @@ def med_figure(run_dir, cells, args):
 def write_methods(run_dir, cells, args):
     bands = BAND_SETS[args.band_set]
     if 'model' in cells.columns:
-        med = cells[cells['model'] != 'pain']
+        med = cells[cells['model'].isin(('med_decomposed', 'med_matched'))]
+        dx = cells[cells['model'].str.startswith('dx_')]
         cells = cells[cells['model'] == 'pain']
     else:
-        med = cells.iloc[0:0]
+        med = dx = cells.iloc[0:0]
     sig = cells[cells['p_bh_reject'] == True]                    # noqa: E712
     lines = [f"""# Band-power mixed-effects models
 
@@ -1022,6 +1324,89 @@ difference wearing a medication label.
             rej = sub[sub['p_bh_reject'] == True]                # noqa: E712
             lines.append(f'\n### {label}: {len(rej)} of {len(sub)} cells '
                          f'BH-significant on its primary term\n')
+
+    if len(dx):
+        spec = dx_state.CONDITIONS[args.dx]
+        n_case = int(np.nanmax(dx['n_subjects_case'].to_numpy(dtype=float)))
+        n_ctrl = int(np.nanmax(dx['n_subjects_control'].to_numpy(dtype=float)))
+        n_fit = int(dx['dx_ix_beta'].notna().sum())
+        rej = dx[dx.get('dx_ix_p_bh_reject',
+                        pd.Series(dtype=object)) == True]        # noqa: E712
+        window = (f'the {args.dx_window_days} days before `session_start`'
+                  if args.dx_window_days else 'the record at any time up to '
+                                              '`session_start`')
+        lines.append(f"""
+## {spec['label']} as a moderator of the pain slope
+
+A subject is a CASE when a diagnosis code for {spec['label']} appears in
+{window}. Codes dated DURING the admission never count -- letting them in would
+let the encounter that produced the iEEG define its own predictor. Source set:
+`{args.dx_sources}`.
+
+{spec['description']}
+ICD-10 prefixes `{list(spec['icd10'])}`, ICD-9 prefixes `{list(spec['icd9'])}`,
+matched on the code with its dot stripped and NEVER on the free-text
+description ('depression' also appears in 'ST segment depression' and
+'respiratory depression').
+
+**{n_case} cases, {n_ctrl} controls.**
+
+    log10_power ~ NRS_within * dx_state + NRS_submean
+                  + (NRS_within || subject) + (1 | subject:channel)
+
+THE RANDOM EFFECTS ARE UNCHANGED from the pain-only model above. That is
+load-bearing rather than incidental: `dx_state` is constant within a subject, so
+the by-subject random intercept is what its standard error is judged against,
+and dropping it would turn a {n_case + n_ctrl}-subject contrast into a
+several-thousand-channel pseudo-replicated one.
+
+`dx_state` is a subject-level 0/1 constant, so unlike `med_state` it gets NO
+within/between decomposition -- a subject-constant predictor has no
+within-subject part, and `dx_within` would be a column of exact zeros.
+
+| term | question |
+|---|---|
+| `slope_ref` | the pain slope in CONTROLS (this is `NRS_within`) |
+| `slope_mod` | the pain slope in CASES (`NRS_within + NRS_within:dx_state`, SE from the fitted covariance, NOT the sum of variances) |
+| `dx_ix_beta` | **the estimand**: how much the pain slope DIFFERS in cases |
+| `dx_beta` | a nuisance between-subject difference in mean power; not a result, and deliberately given no BH family |
+
+`dx_ix` gets its OWN BH family over the fitted cells. It is not corrected
+against the pain slope's family: whether the strata differ somewhere is a
+different question from whether the slope is non-zero there.
+
+### Why one interaction fit and not two stratified maps
+
+Fitting each arm separately gives two maps and no test that they differ. The
+arms are unequal ({n_case} vs {n_ctrl}), so the smaller one carries wider
+standard errors everywhere and looks weaker from power alone; reading that as a
+group difference is the difference-of-significance fallacy. A stratified fit
+also estimates its own variance components per arm, which costs every region
+whose smaller arm falls under {DX_MIN_SUBJECTS_PER_ARM} subjects. Here
+{n_fit} of {len(dx)} cells were fitted and {len(dx) - n_fit} were refused on
+that rule; the refused cells are ROWS carrying the reason, and they are still
+fitted by the pain-only model above.
+
+**{DX_CAVEAT}**
+
+### Result: {len(rej)} of {n_fit} fitted cells show a BH-significant difference
+""")
+        if len(rej):
+            lines.append('\n| region | band | control slope | case slope | '
+                         'difference | p_bh |\n|---|---|---|---|---|---|\n')
+            for r in rej.sort_values('dx_ix_p').itertuples():
+                lines.append(f'| {r.region} | {r.band} | {r.slope_ref:+.5f} | '
+                             f'{r.slope_mod:+.5f} | {r.dx_ix_beta:+.5f} | '
+                             f'{r.dx_ix_p_bh:.4g} |\n')
+        else:
+            lines.append(
+                f'\nNone. With {n_case} vs {n_ctrl} subjects this is the '
+                'expected outcome for anything short of a large slope '
+                'difference, so it reads as NOT RESOLVED AT THIS N rather than '
+                'as evidence of no difference. The effect sizes and their '
+                'intervals are in `band_cells.parquet`; a null interaction with '
+                'a wide CI is not a null result.\n')
+
     (run_dir / 'METHODS.md').write_text(''.join(lines))
 
 
@@ -1061,6 +1446,32 @@ def main():
                     help='Hours before the ASSESSMENT that count as recently '
                          'dosed (default 2.0). Anchored on the score, not the '
                          'epoch start.')
+    ap.add_argument('--dx-model', choices=['none', 'interaction'], default='none',
+                    help='Add a SUBJECT-LEVEL diagnosis as a moderator of the '
+                         'pain slope: NRS_within * dx_state. The random effects '
+                         'are unchanged. The estimand is the interaction -- does '
+                         'the pain slope DIFFER between strata -- which fitting '
+                         'the two arms separately cannot test. Both simple '
+                         'slopes are still reported, from this one fit.')
+    ap.add_argument('--dx', choices=list(dx_state.CONDITIONS), default='mdd',
+                    help="Which condition. 'mdd' is F32/F33 and ICD-9 296.2x/"
+                         "296.3x, excluding bipolar and dysthymia; "
+                         "'depression_broad' adds dysthymia and ICD-9 311.")
+    ap.add_argument('--dx-window-days', type=int,
+                    default=dx_state.DEFAULT_WINDOW_DAYS,
+                    help='Days before SESSION_START in which a code counts '
+                         '(default 90). Codes dated during the admission never '
+                         'count. Pass 0 for EVER, which is the pre-specified '
+                         'sensitivity analysis: 90 days labels 17 of 51 subjects '
+                         'and `ever` labels 29, and the 12 in between sit in the '
+                         'control arm diluting the contrast.')
+    ap.add_argument('--dx-sources', choices=list(dx_state.SOURCE_SETS),
+                    default='any',
+                    help="Which EHR sources count. 'clinical' keeps only "
+                         'Encounter/Problem/Admit codes and drops billing and '
+                         'HL7-historical entries -- worth running, because most '
+                         'cases are labelled by a billing code alone, but it '
+                         'costs most of the arm.')
     ap.add_argument('--exclude-regions', nargs='*', default=[],
                     help='Regions to leave out of the run ENTIRELY -- not fitted, '
                          'not in the BH family, not on the figures. Use for a '

@@ -106,6 +106,77 @@ FORMULA_MED_INTERACTION = 'log10_power ~ NRS_within * med_state + NRS_submean'
 #: The interaction term's name in patsy's output, for pulling it out of a fit.
 MED_INTERACTION_TERM = 'NRS_within:med_state'
 
+# The DIAGNOSIS-MODERATOR model. `dx_state` is a SUBJECT-LEVEL 0/1 constant (see
+# `dx_state.py`), which changes what the design can and cannot contain:
+#
+#   - There is NO within/between decomposition, unlike FORMULA_MED_DECOMPOSED.
+#     A subject-constant predictor has no within-subject part to split off; its
+#     subject mean IS the variable. Writing `dx_within` would produce a column
+#     of exact zeros and a rank-deficient design.
+#   - `NRS_within` is therefore the pain slope in the CONTROL stratum, and
+#     `NRS_within:dx_state` is the DIFFERENCE between strata -- the estimand.
+#   - The `dx_state` main effect is a pure between-subject contrast of mean
+#     power. It is kept, because omitting it would force the interaction to
+#     absorb a level difference, but it is a nuisance term and not the question.
+#
+# THE RANDOM EFFECTS ARE UNCHANGED (`VC_FULL`): the by-subject intercept and
+# NRS_within slope and the subject:channel intercept all stay exactly as the
+# pain-only model has them. That is deliberate and load-bearing. `dx_state` is
+# constant within subject, so the subject random intercept is the term its
+# standard error is judged against -- which is precisely what keeps this from
+# becoming a 7,000-channel pseudo-replicated test of a 51-subject contrast.
+FORMULA_DX_INTERACTION = 'log10_power ~ NRS_within * dx_state + NRS_submean'
+
+#: (term, prefix) pairs for `cell_record(extra_terms=...)`.
+#: `dx` is the main effect, `dx_ix` the interaction that is the actual question.
+DX_INTERACTION_TERMS = (('dx_state', 'dx'),
+                        ('NRS_within:dx_state', 'dx_ix'))
+
+#: The interaction term's name in patsy's output.
+DX_INTERACTION_TERM = 'NRS_within:dx_state'
+
+
+def simple_slopes(res, base='NRS_within', moderator='dx_state'):
+    """The pain slope in EACH stratum of a 0/1 moderator, with correct SEs.
+
+    Returns {'slope_ref', 'se_ref', 'slope_mod', 'se_mod', 'z_mod', 'p_mod'} --
+    the reference stratum (moderator = 0) and the moderated one (moderator = 1).
+
+    THE MODERATED SLOPE IS NOT AN INTERACTION COEFFICIENT. It is `base +
+    base:moderator`, and the SE of that sum needs the COVARIANCE of the two
+    terms, not the square root of the sum of their variances: those two differ
+    by `2*cov`, which is large and negative here because the interaction is
+    estimated against the same reference. Taking the naive sum would overstate
+    the moderated stratum's SE and make it look noisier than it is.
+
+    This exists so a figure can show both strata as heat panels WITHOUT refitting
+    each arm separately -- the two simple slopes come from the one pooled fit,
+    which is the whole point of the interaction design.
+    """
+    from scipy import stats
+
+    names = list(res.fe_params.index)
+    term = f'{base}:{moderator}'
+    if term not in names:
+        term = f'{moderator}:{base}'          # patsy orders factors, we do not
+    if base not in names or term not in names:
+        return {k: np.nan for k in ('slope_ref', 'se_ref', 'slope_mod', 'se_mod',
+                                    'z_mod', 'p_mod')}
+    cov = np.asarray(res.cov_params())[:len(names), :len(names)]
+    beta = res.fe_params.to_numpy()
+    bi, ii = names.index(base), names.index(term)
+
+    c = np.zeros(len(names))
+    c[bi] = 1.0
+    c[ii] = 1.0
+    est = float(c @ beta)
+    se = float(np.sqrt(c @ cov @ c))
+    z = est / se if se > 0 else np.nan
+    return {'slope_ref': float(beta[bi]),
+            'se_ref': float(np.sqrt(cov[bi, bi])),
+            'slope_mod': est, 'se_mod': se, 'z_mod': z,
+            'p_mod': float(2 * stats.norm.sf(abs(z))) if np.isfinite(z) else np.nan}
+
 # The MATCHED-NRS model. Pain enters as a FACTOR, not a number, so the fit makes
 # no assumption whatever about the shape of the pain->power relationship -- each
 # score gets its own level and the curve can be any shape at all. `med_state` is
