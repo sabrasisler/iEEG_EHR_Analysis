@@ -12,7 +12,8 @@
 #   fig_anatomy_glass_lyrz.png  all four views, to crop from
 #   fig_anatomy_bars.png        reach (% of patients) over depth (n electrodes)
 #
-#   RUN_DIR=<domain run> sbatch sbatch/domain_anatomy.sbatch
+#   RUN_DIR=<domain run> EXTRA="--label poster --brain-gap 0.0" \\
+#       sbatch sbatch/domain_anatomy.sbatch
 #   EXTRA="--display-modes xz" sbatch sbatch/domain_anatomy.sbatch
 #   EXTRA=--domains-only sbatch sbatch/domain_anatomy.sbatch
 #
