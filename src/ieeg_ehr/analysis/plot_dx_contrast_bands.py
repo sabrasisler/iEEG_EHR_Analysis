@@ -94,8 +94,26 @@ def load_run(run_dir, band_set, var_slope_max=0.01, se_ratio_max=5.0):
     # FLAGGED and drawn, not hidden -- hiding it lost the band of interest on
     # evidence that did not apply to it.
     warn = cells['warnings'].astype(str)
-    flagged = sorted(cells.loc[warn.str.contains('not positive definite')
-                               | ~cells['converged'].astype(bool), 'band'])
+
+    # NON-CONVERGENCE IS ALWAYS DISQUALIFYING, and is kept separate from the
+    # non-PD flag rather than lumped with it. They are different failures:
+    #
+    #   converged=False  -- the optimiser never reached a stationary point, so
+    #                       there is NO maximum-likelihood estimate. Measured
+    #                       here: |grad| = 194.6 at the stopping point. A
+    #                       coefficient read off that is not an estimate of
+    #                       anything, and its SE is curvature around a point
+    #                       that is not the solution. No diagnostic can rescue
+    #                       it, so this branch takes no thresholds.
+    #   non-PD Hessian   -- the fit DID converge; the curvature at the solution
+    #                       is not positive definite in some direction. Because
+    #                       statsmodels flags the whole parameter vector, that
+    #                       direction is often a variance component at its
+    #                       boundary while the fixed-effect block is fine. THAT
+    #                       is the case the thresholds below adjudicate.
+    not_converged = sorted(cells.loc[~cells['converged'].astype(bool), 'band'])
+    flagged = sorted(set(cells.loc[warn.str.contains('not positive definite'),
+                                   'band']) - set(not_converged))
 
     blown = sorted(cells.loc[cells['var_subj_slope'] > var_slope_max, 'band'])
     se_by_band = (diff_all.groupby('band')['se'].median()
@@ -104,21 +122,27 @@ def load_run(run_dir, band_set, var_slope_max=0.01, se_ratio_max=5.0):
     wild = sorted(se_by_band[se_by_band > se_ratio_max * ref_se].index) \
         if np.isfinite(ref_se) else []
 
-    excluded = sorted(set(blown) | set(wild))
+    excluded = sorted(set(not_converged) | set(blown) | set(wild))
     flagged = [b for b in flagged if b not in excluded]
-    if excluded:
-        logger.warning('EXCLUDED from the figure and from the BH family: %s '
-                       '-- blown variance component (>%.3g) and/or an '
-                       'interaction SE more than %gx the across-band median '
-                       '(%.4g). These are not interval estimates.',
-                       excluded, var_slope_max, se_ratio_max, ref_se)
+    if not_converged:
+        logger.warning('EXCLUDED -- DID NOT CONVERGE: %s. No stationary point '
+                       'was reached, so these have no maximum-likelihood '
+                       'estimate at all and nothing about them is reportable.',
+                       not_converged)
+    if set(blown) | set(wild):
+        logger.warning('EXCLUDED -- ill-conditioned: %s. Blown variance '
+                       'component (>%.3g) and/or an interaction SE more than '
+                       '%gx the across-band median (%.4g), so these converged '
+                       'but their SEs are not interval estimates.',
+                       sorted(set(blown) | set(wild) - set(not_converged)),
+                       var_slope_max, se_ratio_max, ref_se)
     if flagged:
-        logger.warning('FLAGGED but KEPT: %s -- the fit carries a '
-                       'non-positive-definite / non-convergence warning, but '
-                       'its variance components and interaction SEs are in '
-                       'line with the other bands, so the flag appears to be '
-                       'about the variance-component block rather than the '
-                       'fixed effects. Drawn with a marker on the panel.',
+        logger.warning('FLAGGED but KEPT: %s -- these CONVERGED, but the '
+                       'Hessian at the solution is not positive definite. '
+                       'Their variance components and interaction SEs are in '
+                       'line with the other bands, so the flag is about the '
+                       'variance-component block rather than the fixed '
+                       'effects. Drawn, and marked in the panel title.',
                        flagged)
 
     both = slopes[slopes['term'] == 'pain_slope_by_stratum'].copy()
@@ -126,7 +150,7 @@ def load_run(run_dir, band_set, var_slope_max=0.01, se_ratio_max=5.0):
     if both.empty or diff.empty:
         raise SystemExit(f'{run_dir} has no diagnosis strata -- was it fitted '
                          'with --dx-model interaction?')
-    return both, diff, cells, excluded, flagged
+    return both, diff, cells, excluded, flagged, not_converged
 
 
 def correct(diff, keep_domains, excluded_bands, q):
@@ -160,7 +184,7 @@ def _band_label(band, band_set):
 
 
 def figure_contrast(diff, bands, doms, out_path, args, n_dx, n_non, excluded,
-                    flagged=()):
+                    flagged=(), not_converged=()):
     """One panel per band. Circuits colour-coded. The difference, and nothing else.
 
     SIGNIFICANCE IS NOT ENCODED IN COLOUR, because colour is spent on circuit
@@ -201,9 +225,11 @@ def figure_contrast(diff, bands, doms, out_path, args, n_dx, n_non, excluded,
             # NO set_xticks([]) here: these axes are sharex, so clearing the
             # locator on one panel clears the tick LABELS on every panel and
             # the reader loses the effect-size scale everywhere.
-            ax.text(0.5, 0.5, 'fit ill-conditioned\nEXCLUDED',
-                    transform=ax.transAxes, ha='center', va='center',
-                    fontsize=8.5, color='#b03a2e', style='italic')
+            why = ('DID NOT CONVERGE\nno estimate exists'
+                   if band in not_converged else
+                   'fit ill-conditioned\nEXCLUDED')
+            ax.text(0.5, 0.5, why, transform=ax.transAxes, ha='center',
+                    va='center', fontsize=8.5, color='#b03a2e', style='italic')
             ax.set_facecolor('#f6f6f6')
             continue
 
@@ -389,7 +415,7 @@ def main():
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
-    both, diff, cells, excluded, flagged = load_run(
+    both, diff, cells, excluded, flagged, not_converged = load_run(
         run_dir, args.band_set, var_slope_max=args.var_slope_max,
         se_ratio_max=args.se_ratio_max)
 
@@ -457,7 +483,7 @@ def main():
 
     p1 = figure_contrast(diff, bands, doms,
                          run_dir / 'fig_dx_contrast_by_band.png',
-                         args, n_dx, n_non, excluded, flagged)
+                         args, n_dx, n_non, excluded, flagged, not_converged)
     logger.info('wrote %s', p1)
     p2 = figure_groups(both, diff, bands, doms,
                        run_dir / 'fig_dx_groups_by_band.png',
