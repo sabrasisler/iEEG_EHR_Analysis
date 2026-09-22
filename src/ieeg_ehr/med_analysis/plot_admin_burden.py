@@ -26,6 +26,7 @@ Run on Slurm, never the login node:
 import logging
 import math
 
+import numpy as np
 import pandas as pd
 from matplotlib import ticker
 
@@ -195,6 +196,76 @@ def plot_scatter(summary, out_path, n_subjects_total):
                       footnote='linear axes; dashed line = 1 administration per subject')
 
 
+def plot_class_bars(summary, out_path, n_subjects_total):
+    """Fig 1b — the same table as the scatter, as two stacked bar panels.
+
+    Top: the share of subjects who ever received the drug. Bottom: how many
+    times it was given. Same x in both, one bar per drug, ordered by class and
+    then by administrations inside a class, coloured by class.
+
+    WHY BOTH PANELS. The scatter puts these two numbers on two axes, which is
+    the right shape for spotting the drugs that are repeat-dosed in few people
+    — but it makes either number individually hard to read off, because a
+    linear scatter crowds the low-n drugs into the origin. Two bar panels trade
+    that relationship away for legibility of the quantities themselves, so the
+    two figures are complements and neither replaces the other.
+
+    NO FOOTNOTE, by request. Note this departs from the house rule
+    (`style.FOOTNOTE`, CLAUDE.md) that every exploratory figure carries its
+    status on the image; the run's `provenance.json` still records it.
+    """
+    classes = [c for c in med_taxonomy.ANALGESIC_SUBCLASS_ORDER
+               if c in set(summary['level2'])]
+    classes += [c for c in summary['level2'].unique() if c not in classes]
+    colors = style.categorical_colors(classes)
+
+    # Class is the primary sort so the x axis reads as blocks; administrations
+    # descending inside a class, so each block is itself ordered.
+    ordered = (summary.assign(_cls=summary['level2'].map(
+                                 {c: i for i, c in enumerate(classes)}))
+               .sort_values(['_cls', 'n_admin'], ascending=[True, False])
+               .reset_index(drop=True))
+
+    x = np.arange(len(ordered), dtype=float)
+    bar_colors = [colors[c] for c in ordered['level2']]
+    pct_subjects = ordered['n_subjects'] / n_subjects_total * 100.0
+
+    fig, axes = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
+
+    for ax, values, ylabel, fmt in (
+            (axes[0], pct_subjects, '% of subjects who received it',
+             lambda v: f'{v:.0f}%'),
+            (axes[1], ordered['n_admin'].astype(float), 'Administrations',
+             lambda v: f'{v:.0f}')):
+        ax.bar(x, values, width=0.68, color=bar_colors, zorder=3,
+               edgecolor='white', linewidth=0.5)
+        # Values on the bars: the range is 643 to 2, so the small drugs are a
+        # hairline and unreadable against the axis alone.
+        for xi, v in zip(x, values):
+            ax.annotate(fmt(v), (xi, v), textcoords='offset points',
+                        xytext=(0, 3), ha='center', va='bottom',
+                        fontsize=style.TICK_SIZE, color=style.TEXT_MUTED)
+        ax.set_ylim(0, float(values.max()) * 1.16)
+        style.style_axes(ax, grid_axis='y')
+        style.label_axes(ax, None, ylabel)
+
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels([d.title() for d in ordered['drug']],
+                            rotation=35, ha='right',
+                            fontsize=style.TICK_SIZE)
+    axes[1].set_xlim(-0.7, len(ordered) - 0.3)
+
+    handles = [plt.Rectangle((0, 0), 1, 1, color=colors[c]) for c in classes]
+    axes[0].legend(handles, classes, title='Medication class', frameon=False,
+                   fontsize=style.LEGEND_SIZE,
+                   title_fontsize=style.LEGEND_SIZE, loc='upper right')
+
+    fig.suptitle('Analgesic Administrations', fontsize=style.TITLE_SIZE + 2,
+                 color=style.TEXT_PRIMARY, ha='center')
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    return style.save(fig, out_path)
+
+
 def main():
     parser = output.build_parser(__doc__)
     args = parser.parse_args()
@@ -226,6 +297,8 @@ def main():
 
     plot_scatter(summary, run_dir / 'fig1_admin_burden.png',
                  n_subjects_total=admin['subject'].nunique())
+    plot_class_bars(summary, run_dir / 'fig1b_admin_bars.png',
+                    n_subjects_total=admin['subject'].nunique())
 
     output.write_run(
         run_dir, SCRIPT, args, admin, paths,
