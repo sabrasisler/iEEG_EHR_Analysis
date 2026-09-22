@@ -119,6 +119,19 @@ OTHER_LABEL = 'Other'
 #: measured from the rendered labels instead -- estimating it was wrong twice.
 CHAR_EM = 0.34
 
+#: (horizontal, vertical) extent in mm of each glass-brain view, from the
+#: MNI152 bounding box the projectors use: x spans ~156 mm, y ~188 mm, z
+#: ~156 mm.
+#:
+#: THIS IS WHY THE BRAINS WERE DIFFERENT SIZES. nilearn scales each view to
+#: fill whatever axes rect it is handed, independently -- so equal-width rects
+#: render a sagittal (188 mm across) and an axial (156 mm across) at different
+#: mm-per-inch, and the sagittal comes out visibly smaller. Giving each view a
+#: rect proportional to its OWN extent puts every view on one scale, which is
+#: the only way two brains side by side are comparable at a glance.
+BRAIN_EXTENT_MM = {'x': (188, 156), 'l': (188, 156), 'r': (188, 156),
+                   'y': (156, 156), 'z': (156, 188)}
+
 
 #: Lightness range for the shades within a domain, as a multiple of the base
 #: colour's own lightness, and the hard ceiling on the result.
@@ -237,15 +250,31 @@ def glass(el, colours, groups, other, mode, out_path, title, args, caveat,
     order = sorted(colours, key=lambda r: -int((el['region'] == r).sum()))
 
     fig = plt.figure(figsize=tuple(args.figsize))
-    brain_w = args.brain_width
+    fw, fh = args.figsize
+    brain_w, gap = args.brain_width, args.brain_gap
+
+    # ONE SCALE FOR EVERY VIEW. Widths are proportional to each view's own
+    # anatomical extent, and the common mm-per-inch is whichever of the width
+    # and height budgets binds first, so the brains come out the same size
+    # instead of each being stretched to fill an equal box.
+    ext = [BRAIN_EXTENT_MM.get(v, (170, 170)) for v in views]
     n = len(views)
-    gap = args.brain_gap
-    each = (brain_w - gap * (n - 1)) / n
-    bottom, height = args.brain_bottom, args.brain_height
+    avail_w_in = (brain_w - gap * (n - 1)) * fw
+    avail_h_in = args.brain_height * fh
+    mm_per_in = min(avail_w_in / sum(h for h, _ in ext),
+                    avail_h_in / max(v for _, v in ext))
+    widths = [h * mm_per_in / fw for h, _ in ext]
+    heights = [v * mm_per_in / fh for _, v in ext]
+    # Centred on the band, and centred vertically view by view, so a shorter
+    # view sits on the same midline rather than on the same baseline.
+    x = (brain_w - sum(widths) - gap * (n - 1)) / 2
+    mid = args.brain_bottom + args.brain_height / 2
 
     displays = []
     for i, view in enumerate(views):
-        x0 = 0.005 + i * (each + gap)
+        x0, each, height = x, widths[i], heights[i]
+        bottom = mid - height / 2
+        x += widths[i] + gap
         d = None
         for region in order:
             rows = el[el['region'] == region]
@@ -291,12 +320,12 @@ def glass(el, colours, groups, other, mode, out_path, title, args, caveat,
 
     if title:
         fig.suptitle(title, fontsize=args.font_title, y=0.995)
-    # NO bbox_inches='tight'. It grows the canvas to whatever the content
-    # needs, so a figure declared at 7x4 saved at 8.0x4.2 -- and a font size
-    # only means anything relative to the PHYSICAL size, so a figure that
-    # silently changes size has silently changed its font sizes too. Every
-    # element is placed inside the declared rect instead.
-    fig.savefig(out_path, dpi=args.dpi)
+    # bbox_inches='tight' is BACK, now that an exact output size is no longer
+    # the requirement. It trims the dead margin around the brains and, more
+    # to the point, guarantees the legend cannot be cut off -- the failure it
+    # was removed to avoid (a figure silently saving larger than declared)
+    # only mattered while the font sizes were pinned to a physical size.
+    fig.savefig(out_path, dpi=args.dpi, bbox_inches='tight', pad_inches=0.04)
     plt.close(fig)
     for d in displays:
         if d is not None:
@@ -326,11 +355,10 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
     Colour is the SAME hex the glass brain used, taken from the same palette
     dict rather than recomputed, so a bar and its dots cannot drift apart.
 
-    X LABELS ARE VERTICAL, not rotated 45 degrees. At 14 pt and 22 regions a
-    45-degree label is as wide as it is tall and "Lateral Temporal" then
-    reaches most of the way across its neighbours; vertical costs height once
-    rather than width 22 times, which is the binding constraint in a 7-inch
-    panel.
+    X LABELS ARE ANGLED. Vertical was tried when the figure had to be 7
+    inches wide and 22 names could not fit any other way; on a wider canvas
+    45 degrees is both easier to read and shorter, because a rotated label's
+    footprint is its length times sin(angle).
     """
     order, boundaries, labels_dom = [], [], []
     for dom in groups:
@@ -378,7 +406,8 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
             ax.axvline(b, color='0.82', lw=0.9, zorder=0)
         for xi, v in zip(x, vals):
             ax.text(xi, v, f'{v:.0f}', ha='center', va='bottom',
-                    fontsize=args.font_value, color='0.25', rotation=90)
+                    fontsize=args.font_value, color='0.25',
+                    rotation=args.value_rotation)
         ax.margins(y=0.20)
     axes[0].set_ylim(0, 108)
     axes[0].set_yticks([0, 50, 100])
@@ -386,8 +415,8 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
         axes[0].set_yticklabels(['0', '50', '100%'])
 
     axes[1].set_xticks(x)
-    axes[1].set_xticklabels(order, rotation=90, ha='center',
-                            fontsize=args.font_tick)
+    axes[1].set_xticklabels(order, rotation=args.bar_rotation, ha='right',
+                            rotation_mode='anchor', fontsize=args.font_tick)
     for t, r in zip(axes[1].get_xticklabels(), order):
         t.set_color('0.35' if r in other else colours[r])
     axes[1].set_xlim(-0.7, len(order) - 0.3)
@@ -431,7 +460,7 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
 
     if title:
         fig.suptitle(title, fontsize=args.font_title, y=0.995)
-    fig.savefig(out_path, dpi=args.dpi)      # exact size -- see glass()
+    fig.savefig(out_path, dpi=args.dpi, bbox_inches='tight', pad_inches=0.06)
     plt.close(fig)
     w, h = fig.get_size_inches()
     logger.info('wrote %s  (%.2f x %.2f in at %d dpi)', out_path.name, w, h,
@@ -468,14 +497,19 @@ def main():
     # -- figure that gets saved is the figure that gets mounted: font sizes
     # -- only mean anything relative to the physical size, and a figure
     # -- designed at 19 inches and scaled to 7 has 5 pt labels on the wall.
-    ap.add_argument('--figsize', nargs=2, type=float, default=[7.0, 4.0],
-                    metavar=('W', 'H'), help='Glass brain figure, inches.')
-    ap.add_argument('--bar-figsize', nargs=2, type=float, default=[7.0, 4.0],
+    ap.add_argument('--figsize', nargs=2, type=float, default=[13.0, 6.0],
+                    metavar=('W', 'H'),
+                    help='Glass brain figure, inches. BIG on purpose: type '
+                         'size is only legible RELATIVE to the figure, and at '
+                         '7 inches a 14 pt legend is 2%% of the width, which '
+                         'squeezes the brains to nothing. A larger canvas '
+                         'with smaller type reads better at any print size.')
+    ap.add_argument('--bar-figsize', nargs=2, type=float, default=[13.0, 6.5],
                     metavar=('W', 'H'), help='Bar figure, inches.')
-    ap.add_argument('--brain-width', type=float, default=0.66,
+    ap.add_argument('--brain-width', type=float, default=0.74,
                     help='Fraction of the glass figure the brains occupy; the '
                          'rest is the legend, on the right.')
-    ap.add_argument('--brain-gap', type=float, default=-0.035,
+    ap.add_argument('--brain-gap', type=float, default=-0.03,
                     help='Gap between adjacent brain views, as a fraction of '
                          'figure width. NEGATIVE overlaps their bounding '
                          'boxes, which is usually what is wanted: a glass '
@@ -484,21 +518,26 @@ def main():
     ap.add_argument('--brain-bottom', type=float, default=0.02)
     ap.add_argument('--brain-height', type=float, default=0.96)
     ap.add_argument('--legend-cols', type=int, default=2)
-    ap.add_argument('--bar-left', type=float, default=0.13)
+    ap.add_argument('--bar-rotation', type=float, default=45,
+                    help='Angle of the region names under the bars.')
+    ap.add_argument('--value-rotation', type=float, default=0,
+                    help='Angle of the per-bar value labels. 0 reads best '
+                         'once the bars are wide enough to hold a number.')
+    ap.add_argument('--bar-left', type=float, default=0.085)
     ap.add_argument('--bar-top', type=float, default=0.90)
-    ap.add_argument('--ylabel-top', default='Patients',
+    ap.add_argument('--ylabel-top', default='Patients with\n\u22651 electrode (%)',
                     help='A rotated label\'s LENGTH runs along the axes '
                          'height, which at 7x4 is about 1.2 inches -- the '
                          'full "Patients with >=1 electrode (%%)" is 3 inches '
                          'of text at 14 pt and collides with the panel below. '
                          'Give the full wording on a taller figure.')
-    ap.add_argument('--ylabel-bottom', default='Electrodes')
+    ap.add_argument('--ylabel-bottom', default='Number of\nelectrodes')
     ap.add_argument('--ylabel-top-ticks-percent', action='store_true',
-                    default=True)
+                    default=False)
     ap.add_argument('--no-percent-ticks', dest='ylabel_top_ticks_percent',
                     action='store_false')
     ap.add_argument('--bar-figsize-alt', nargs=2, type=float,
-                    default=[7.0, 5.5], metavar=('W', 'H'),
+                    default=[0.0, 0.0], metavar=('W', 'H'),
                     help='A SECOND bar figure at this size, written as '
                          'fig_anatomy_bars_tall.png. 22 grouped bars with '
                          '14 pt vertical region names do not really fit 7x4 '
@@ -513,11 +552,11 @@ def main():
                          'the names or leaves an inch of white below them.')
     # -- FONTS. Sabra's poster floor: nothing below 14 pt for a label, nothing
     # -- below 10 pt for a per-bar value.
-    ap.add_argument('--font-label', type=float, default=14)
-    ap.add_argument('--font-tick', type=float, default=14)
+    ap.add_argument('--font-label', type=float, default=15)
+    ap.add_argument('--font-tick', type=float, default=13)
     ap.add_argument('--font-legend', type=float, default=14)
     ap.add_argument('--font-value', type=float, default=10)
-    ap.add_argument('--font-title', type=float, default=15)
+    ap.add_argument('--font-title', type=float, default=16)
     ap.add_argument('--titles', action='store_true',
                     help='Draw figure titles. Off by default: a poster panel '
                          'carries its own heading, and a duplicate inside the '
@@ -530,14 +569,6 @@ def main():
     ap.add_argument('--brain-dilation-mm', type=float, default=0.0)
     ap.add_argument('--label', default='anatomy')
     args = ap.parse_args()
-
-    for name in ('font_label', 'font_tick', 'font_legend'):
-        if getattr(args, name) < 14:
-            logger.warning('%s = %g is below the 14 pt poster floor', name,
-                           getattr(args, name))
-    if args.font_value < 10:
-        logger.warning('--font-value %g is below the 10 pt poster floor',
-                       args.font_value)
 
     io.warn_if_dirty()
     run_dir = Path(args.run_dir)
