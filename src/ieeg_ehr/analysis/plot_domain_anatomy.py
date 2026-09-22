@@ -74,6 +74,13 @@ logger = logging.getLogger(__name__)
 
 SCRIPT = 'ieeg_ehr/analysis/plot_domain_anatomy.py'
 
+#: nilearn's glass-brain projectors. Enumerated here so a bad `--display-mode`
+#: fails at argparse with the valid list, rather than after the minutes of
+#: electrode loading it takes to reach the first plot call. Note the absence of
+#: 'lz' -- a left-only sagittal beside an axial is not one of them.
+GLASS_MODES = ('l', 'r', 'x', 'y', 'z', 'lr', 'xz', 'yx', 'yz', 'lyr', 'lzr',
+               'lyrz', 'lzry', 'ortho')
+
 DISCLAIMER = 'EXPLORATORY -- discovery cohort. Anatomy only; no result here.'
 
 #: One hue per processing domain, in the scheme's DISPLAY order. The first
@@ -86,32 +93,49 @@ DISCLAIMER = 'EXPLORATORY -- discovery cohort. Anatomy only; no result here.'
 #: so a domain keeps its colour across the whole project's figures.
 DOMAIN_HUES = ('#d95f02', '#1b9e77', '#7570b3', '#447eae')
 
-#: The Control domain, greyed for the same reason `run_domain_model`'s palette
-#: greys it: it is the negative control and the reference level, and the
-#: reference should recede rather than compete.
-CONTROL_GREYS = ('0.38', '0.58')
-
-#: Regions no domain claims, as LIGHT GREYS spanning this range. One flat tone
-#: was tried first and read as a rendering bug: the legend showed six identical
-#: swatches against six different names. Varying them costs nothing -- on the
-#: brain they are still obviously one grey family, which is the only thing the
-#: hue has to say -- and the legend stops looking broken.
+#: EVERYTHING THAT IS NOT ONE OF THE FOUR DOMAINS, in one flat grey under one
+#: legend entry. Two groups were tried first -- the Control domain in mid-greys
+#: and the unassigned regions in light greys -- and collapsed at Sabra's
+#: request (2026-09-22): as a figure it is one statement, "sampled, but not one
+#: of the four systems", and splitting it into two grey families plus eight
+#: legend lines spent most of the legend on the part of the figure that is
+#: context rather than content.
 #:
-#: The range stays LIGHT on purpose. These 1,763 contacts outnumber any single
-#: domain, so at full contrast they would bury the four coloured systems the
-#: figure is about; they are here for coverage context, not for reading.
-UNASSIGNED_GREY_RANGE = (0.66, 0.86)
-UNASSIGNED_LABEL = 'not in any domain'
+#: THE DISTINCTION IS NOT LOST, it moves to `colour_source.csv`, which keeps
+#: one row per region with its own domain label -- so Control (the model's
+#: reference domain, Auditory + Occipital) is still separable from the six
+#: regions no domain claims, for anyone who needs it.
+#:
+#: The tone is deliberately neutral and mid: these ~1,900 contacts outnumber
+#: any single domain, so a darker grey would bury the four coloured systems the
+#: figure is about, and a lighter one was hard to tell from the palest domain
+#: shade.
+OTHER_GREY = '#b4b4b4'
+OTHER_LABEL = 'Other'
 
 
-def shades(base, n, lo=0.62, hi=1.42):
-    """`n` shades of `base`, varying LIGHTNESS only, darkest first.
+#: Lightness range for the shades within a domain, as a multiple of the base
+#: colour's own lightness, and the hard ceiling on the result.
+#:
+#: NARROWED FROM (0.62, 1.42) AND A 0.88 CEILING on 2026-09-22: the palest
+#: shade came out close enough to the grey of the non-domain electrodes that a
+#: reader could not tell a pale S2/PO orange from a grey Lateral Temporal at
+#: marker size. A shade only has to be distinguishable from the OTHER SHADES OF
+#: ITS OWN HUE -- four of them, adjacent in the legend -- whereas it has to be
+#: unmistakably chromatic against grey across the whole brain. So the range is
+#: tight and the ceiling low, and saturation is pushed UP as lightness rises to
+#: stop the light end washing out.
+SHADE_RANGE = (0.66, 1.24)
+SHADE_MAX_LIGHTNESS = 0.68
 
-    Hue and saturation are held fixed so every shade still reads as the same
-    domain colour -- which is the whole point -- and only lightness carries the
-    region. Clamped away from both ends: a shade at L<0.18 is black to the eye
-    and one at L>0.88 disappears into the white glass brain, so either would
-    silently stop being a distinguishable category.
+
+def shades(base, n, lo=SHADE_RANGE[0], hi=SHADE_RANGE[1]):
+    """`n` shades of `base`, varying LIGHTNESS, darkest first.
+
+    Hue is held fixed so every shade still reads as the same domain colour --
+    that is the whole point. Saturation is held or RAISED, never lowered:
+    lightening a colour in HLS desaturates it toward white, which is exactly
+    how the pale end stopped being distinguishable from grey.
     """
     r, g, b = matplotlib.colors.to_rgb(base)
     h, l, s = colorsys.rgb_to_hls(r, g, b)
@@ -119,8 +143,9 @@ def shades(base, n, lo=0.62, hi=1.42):
         return [matplotlib.colors.to_hex((r, g, b))]
     out = []
     for f in np.linspace(lo, hi, n):
-        ll = float(np.clip(l * f, 0.18, 0.88))
-        out.append(matplotlib.colors.to_hex(colorsys.hls_to_rgb(h, ll, s)))
+        ll = float(np.clip(l * f, 0.18, SHADE_MAX_LIGHTNESS))
+        ss = float(np.clip(s * (1.0 + 0.45 * max(0.0, f - 1.0)), 0.0, 1.0))
+        out.append(matplotlib.colors.to_hex(colorsys.hls_to_rgb(h, ll, ss)))
     return out
 
 
@@ -142,28 +167,24 @@ def build_palette(members, display, base_order, unassigned):
     for i, dom in enumerate(non_control):
         hue_for[dom] = hues[i]
 
+    other = []
     for dom in display:
         regions = [r for r in base_order if r in members.get(dom, ())]
-        groups[dom] = regions
         if dom == 'Control':
-            greys = list(CONTROL_GREYS)
-            if len(regions) > len(greys):
-                greys = shades('#808080', len(regions))
-            for r, c in zip(regions, greys):
-                colours[r] = matplotlib.colors.to_hex(
-                    matplotlib.colors.to_rgb(c))
-        else:
-            for r, c in zip(regions, shades(hue_for[dom], len(regions))):
-                colours[r] = c
+            other.extend(regions)          # folded into Other, see OTHER_GREY
+            continue
+        groups[dom] = regions
+        for r, c in zip(regions, shades(hue_for[dom], len(regions))):
+            colours[r] = c
 
-    if unassigned:
-        groups[UNASSIGNED_LABEL] = list(unassigned)
-        lo, hi = UNASSIGNED_GREY_RANGE
-        levels = ([sum(UNASSIGNED_GREY_RANGE) / 2] if len(unassigned) == 1
-                  else np.linspace(lo, hi, len(unassigned)))
-        for r, v in zip(unassigned, levels):
-            colours[r] = matplotlib.colors.to_hex((v, v, v))
-    return colours, groups, hue_for
+    other.extend(unassigned)
+    if other:
+        # ONE entry, one tone. `groups` keys the legend, so an empty region
+        # list here is what makes it a single line rather than eight.
+        groups[OTHER_LABEL] = []
+        for r in other:
+            colours[r] = OTHER_GREY
+    return colours, groups, hue_for, other
 
 
 def assign_regions(subjects, scheme, insula_threshold, epoch_minutes):
@@ -188,7 +209,8 @@ def assign_regions(subjects, scheme, insula_threshold, epoch_minutes):
     return el, n0
 
 
-def glass(el, colours, groups, out_path, title, args, caveat, counts):
+def glass(el, colours, groups, other, mode, out_path, title, args, caveat,
+          counts):
     """The brain. One `plot_markers` call per region, drawn largest group first.
 
     `plot_markers` takes a colormap rather than per-point colours, so one call
@@ -199,7 +221,13 @@ def glass(el, colours, groups, out_path, title, args, caveat, counts):
     from nilearn import plotting
 
     order = sorted(colours, key=lambda r: -int((el['region'] == r).sum()))
-    fig = plt.figure(figsize=(19, 6.6))
+    # HEIGHT IS FIXED AND THE BRAINS GET A FIXED SHARE OF IT, rather than the
+    # figure being sized to the brains alone. The legend is five columns deep
+    # whatever the view count, and at two panels the earlier layout let it
+    # collide with the caption -- a narrower figure does not make the legend
+    # shorter.
+    n_panels = 3 if mode == 'ortho' else len(mode)
+    fig = plt.figure(figsize=(5.3 * n_panels + 2.2, 8.6))
     display = None
     for region in order:
         rows = el[el['region'] == region]
@@ -208,8 +236,9 @@ def glass(el, colours, groups, out_path, title, args, caveat, counts):
         coords = rows[['mni_x', 'mni_y', 'mni_z']].to_numpy(dtype=float)
         display = plotting.plot_markers(
             node_values=np.ones(len(coords)), node_coords=coords,
-            node_size=args.node_size, display_mode='lyrz', colorbar=False,
-            figure=fig, axes=(0.01, 0.30, 0.98, 0.62), alpha=args.alpha,
+            node_size=args.node_size, display_mode=mode,
+            colorbar=False, figure=fig, axes=(0.01, 0.42, 0.98, 0.54),
+            alpha=args.alpha, annotate=args.annotate,
             node_cmap=matplotlib.colors.ListedColormap([colours[region]]),
             node_vmin=0, node_vmax=2,
             node_kwargs={'edgecolors': args.edge_color,
@@ -218,12 +247,25 @@ def glass(el, colours, groups, out_path, title, args, caveat, counts):
     # -- legend: ONE COLUMN PER DOMAIN, so the grouping is visible as layout
     # rather than only as hue. matplotlib fills a legend column-major, so the
     # lists are padded to equal length and the blanks are invisible handles.
-    lax = fig.add_axes((0.02, 0.10, 0.96, 0.18))
-    cols = [d for d in groups if groups[d]]
+    lax = fig.add_axes((0.02, 0.14, 0.96, 0.26))
+    cols = list(groups)
     depth = max(len(groups[d]) for d in cols) + 1
     handles, labels = [], []
     blank = mpatches.Patch(alpha=0, linewidth=0)
     for dom in cols:
+        if not groups[dom]:
+            # A group with no member list is a SINGLE swatch -- `Other`, whose
+            # eight regions share one tone and would otherwise spend eight
+            # legend lines saying the same thing.
+            rows = el[el['region'].isin(other)]
+            handles.append(mpatches.Patch(facecolor=OTHER_GREY,
+                                          edgecolor='0.35', linewidth=0.4))
+            labels.append(f'$\\bf{{{dom}}}$  ({len(rows)}, '
+                          f'{rows["subject_id"].nunique()} subj)')
+            for _ in range(depth - 1):
+                handles.append(blank)
+                labels.append('')
+            continue
         handles.append(blank)
         labels.append(f'$\\bf{{{dom.replace(" ", chr(92) + " ")}}}$')
         for r in groups[dom]:
@@ -241,26 +283,120 @@ def glass(el, colours, groups, out_path, title, args, caveat, counts):
                labelspacing=0.32, borderpad=0.1)
     lax.axis('off')
 
-    fig.suptitle(title, fontsize=14, y=0.975)
-    fig.text(0.02, 0.008,
-             f'{len(el)} bipolar pairs from {el["subject_id"].nunique()} subjects, at the MNI '
-             'MIDPOINT of each pair; the region comes from the ANODE\'s DK label, matching the '
-             'model. COLOUR IS THE DOMAIN, SHADE IS THE REGION INSIDE IT. Nothing here is a '
-             'result -- no slope, no p-value. Grey: Control is the model\'s reference domain '
-             f'(the negative control); "{UNASSIGNED_LABEL}" are real regions the framework does '
-             'not claim, dropped from the domain model but present in the region-level '
-             'consistency map, and they are drawn because leaving them out would suggest the '
-             'study sampled only the four coloured systems. White matter, ventricles and '
-             f'unlabelled contacts are not in the study and are not drawn ({counts["n_no_region"]} '
-             f'of {counts["n_electrodes_in_channel_meta"]}). '
-             f'{counts["n_outside_brain_dropped"]} further electrode(s) fell outside the MNI152 '
-             'brain mask and were dropped rather than clipped. ' + caveat + '\n' + DISCLAIMER,
-             fontsize=6.4, va='bottom', ha='left', color='0.35', wrap=True)
+    fig.suptitle(title, fontsize=14, y=0.985)
+    # DELIBERATELY SHORT. Hue = domain, shade = region, grey = everything else,
+    # and nothing here is a statistic -- that is the whole of what a reader
+    # needs at the figure. The insula-split caveat, the dropped-electrode
+    # counts and the full domain caveat are all in this folder's
+    # provenance.json, which is where a caption that long belongs.
+    fig.text(0.02, 0.015,
+             f'{len(el)} bipolar pairs, {el["subject_id"].nunique()} subjects. Hue = processing '
+             'domain, shade = region within it. Grey "Other" = the Control domain plus the '
+             'regions no domain claims. ANATOMY ONLY -- no slope, no p-value. '
+             f'{counts["n_outside_brain_dropped"]} electrode(s) outside the MNI152 brain mask '
+             'were dropped. See provenance.json for the insula split and the full caveats.\n'
+             + DISCLAIMER,
+             fontsize=7.4, va='bottom', ha='left', color='0.35', wrap=True)
 
     fig.savefig(out_path, dpi=230, bbox_inches='tight')
     plt.close(fig)
     if display is not None:
         display.close()
+    logger.info('wrote %s', out_path.name)
+
+
+def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
+    """Coverage as two stacked bars sharing one x axis: reach, then depth.
+
+    THE TWO PANELS ANSWER DIFFERENT QUESTIONS AND THEY DISAGREE, which is the
+    reason to stack them rather than pick one.
+
+      top     How many PATIENTS have at least one electrode there. This is
+              what decides whether a region-level estimate is a group claim at
+              all -- a region sampled in 10 of 51 patients cannot support one
+              however many contacts those 10 contributed.
+      bottom  How many ELECTRODES. This is what drives the within-subject
+              precision of that estimate.
+
+    A region can be wide and shallow (Hippocampus: 43 patients, 296 contacts)
+    or narrow and deep (Occipital: 10 patients, 54 contacts), and the glass
+    brain shows only the second -- a dense cluster there could be one patient's
+    entire depth electrode. Reading the two panels together is the only way to
+    tell those apart, and it is why they share an x axis.
+
+    Colour is the SAME hex the glass brain used, taken from the same palette
+    dict rather than recomputed, so a bar and its dots cannot drift apart.
+    """
+    order, boundaries, labels_dom = [], [], []
+    for dom in groups:
+        regions = groups[dom] or [r for r in other if r in set(el['region'])]
+        regions = [r for r in regions if (el['region'] == r).any()]
+        if not regions:
+            continue
+        if order:
+            boundaries.append(len(order) - 0.5)
+        labels_dom.append((dom, len(order), len(order) + len(regions) - 1))
+        order.extend(regions)
+
+    n_el = el.groupby('region').size().reindex(order).fillna(0).to_numpy()
+    n_sub = (el.groupby('region')['subject_id'].nunique()
+             .reindex(order).fillna(0).to_numpy())
+    pct = 100.0 * n_sub / max(n_cohort, 1)
+    cols = [colours[r] for r in order]
+    x = np.arange(len(order))
+
+    fig, axes = plt.subplots(2, 1, sharex=True,
+                             figsize=(max(9.0, 0.46 * len(order) + 3.0), 9.0))
+    # EXPLICIT, NOT tight_layout. The x labels are rotated region names up to
+    # "Lateral Temporal" long, and tight_layout does not account for them
+    # against a figure-level caption -- the first version put the labels
+    # straight through the footnote. It also warns here, because the domain
+    # names are drawn in axes-transform coordinates.
+    fig.subplots_adjust(left=0.10, right=0.98, top=0.90, bottom=0.28,
+                        hspace=0.08)
+
+    for ax, vals, ylab in (
+            (axes[0], pct, f'Patients with \u22651 electrode (%)\n(of {n_cohort})'),
+            (axes[1], n_el, 'Number of electrodes')):
+        ax.bar(x, vals, color=cols, edgecolor='0.3', linewidth=0.5, width=0.78)
+        ax.set_ylabel(ylab, fontsize=10)
+        ax.spines[['top', 'right']].set_visible(False)
+        ax.tick_params(labelsize=8)
+        # Separators at the DOMAIN boundaries, so the grouping survives even
+        # for a reader who cannot separate the hues.
+        for b in boundaries:
+            ax.axvline(b, color='0.82', lw=0.9, zorder=0)
+        for xi, v in zip(x, vals):
+            ax.text(xi, v, f'{v:.0f}' + ('%' if ylab.startswith('Patients') else ''),
+                    ha='center', va='bottom', fontsize=6.6, color='0.3')
+        ax.margins(y=0.14)
+    axes[0].set_ylim(0, 100)
+
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(order, rotation=45, ha='right', fontsize=8.5)
+    for t, r in zip(axes[1].get_xticklabels(), order):
+        t.set_color('0.45' if r in other else colours[r])
+    axes[1].set_xlim(-0.7, len(order) - 0.3)
+
+    # Domain names above the top panel, spanning their own regions.
+    for dom, i0, i1 in labels_dom:
+        axes[0].text((i0 + i1) / 2, 1.035, dom, transform=(
+            axes[0].get_xaxis_transform()), ha='center', va='bottom',
+            fontsize=10, color=('0.45' if dom == OTHER_LABEL
+                                else colours[groups[dom][0]]))
+
+    fig.suptitle(title, fontsize=13, y=0.975)
+    fig.text(0.01, 0.008,
+             'Same colours as the glass brain. TOP is REACH (share of the '
+             f'{n_cohort}-patient cohort with any electrode there), BOTTOM is DEPTH (total '
+             'electrodes) — they disagree, which is why both are shown: a region sampled in '
+             'few patients cannot support a group claim however many contacts those patients '
+             'gave, and a dense cluster on the glass brain can be one patient\'s depth '
+             'electrode. Grey "Other" = the Control domain plus the regions no domain claims.\n'
+             + DISCLAIMER,
+             fontsize=7.4, va='bottom', ha='left', color='0.35', wrap=True)
+    fig.savefig(out_path, dpi=220, bbox_inches='tight')
+    plt.close(fig)
     logger.info('wrote %s', out_path.name)
 
 
@@ -274,6 +410,22 @@ def main():
                     help='Drop the regions no domain claims. Off by default: '
                          'they are a large share of the implant and omitting '
                          'them misrepresents the coverage.')
+    ap.add_argument('--display-modes', nargs='+', default=['xz', 'lyrz'],
+                    choices=GLASS_MODES,
+                    help="Which nilearn views. 'xz' (default) is ONE sagittal "
+                         'plus one axial: the sagittal places a region on the '
+                         'anterior-posterior axis and the axial shows the '
+                         'hemispheric spread, which at this density is all '
+                         "the information the four-panel 'lyrz' carried. Note "
+                         "'x' projects BOTH hemispheres into one sagittal, "
+                         "unlike 'l'/'r' which split them -- so no electrode "
+                         'is dropped from the view. There is no \'lz\': '
+                         'nilearn does not offer a left-only sagittal beside '
+                         'an axial.')
+    ap.add_argument('--annotate', action='store_true',
+                    help="Draw nilearn's L/R and coordinate labels. Off by "
+                         'default: they crowd a dense figure and the axial '
+                         'view already orients the reader.')
     ap.add_argument('--node-size', type=float, default=17)
     ap.add_argument('--alpha', type=float, default=0.9)
     ap.add_argument('--edge-color', default='0.25')
@@ -299,8 +451,8 @@ def main():
     if args.domains_only:
         el = el[~el['region'].isin(unassigned)].reset_index(drop=True)
         unassigned = []
-    colours, groups, hue_for = build_palette(spec['members'], spec['display'],
-                                             base_order, unassigned)
+    colours, groups, hue_for, other = build_palette(
+        spec['members'], spec['display'], base_order, unassigned)
 
     coords = el[['mni_x', 'mni_y', 'mni_z']].to_numpy(dtype=float)
     keep = inside_brain(coords, args.brain_dilation_mm)
@@ -326,7 +478,7 @@ def main():
     dom_of = dict(spec['roi_to_domain'])
     table = (per_region.reset_index()
              .assign(domain=lambda d: d['region'].map(dom_of)
-                     .fillna(UNASSIGNED_LABEL),
+                     .fillna('not in any domain'),
                      colour=lambda d: d['region'].map(colours)))
     table['_o'] = table['region'].map({r: i for i, r in enumerate(base_order)})
     table = table.sort_values('_o').drop(columns='_o')
@@ -335,8 +487,8 @@ def main():
                    out_dir / 'colour_source.csv', script=SCRIPT,
                    parents=[str(run_dir / 'provenance.json')],
                    params={'domain_hues': list(DOMAIN_HUES),
-                           'control_greys': list(CONTROL_GREYS),
-                           'unassigned_grey_range': list(UNASSIGNED_GREY_RANGE),
+                           'other_grey': OTHER_GREY,
+                           'shade_range': list(SHADE_RANGE),
                            'scheme': scheme, 'base_scheme': spec['base']},
                    extra={'reading': 'the exact hex each region was drawn in; '
                                      'hue is the domain, lightness the region'})
@@ -351,17 +503,22 @@ def main():
         out_dir, script=SCRIPT,
         params={**vars(args), 'scheme': scheme, 'base_scheme': spec['base'],
                 'source_run': str(run_dir), 'electrode_counts': counts,
+                'figures': [f'fig_anatomy_glass_{m}.png'
+                            for m in args.display_modes] + ['fig_anatomy_bars.png'],
                 'insula_threshold': params.get('insula_threshold')},
         parents=[str(run_dir / 'provenance.json')],
         subjects=sorted(el['subject_id'].unique()),
         extra={'status': DISCLAIMER, 'domain_caveat': domain_caveat(scheme),
                'palette': {'domain_hue': hue_for,
                            'region_colour': {r: colours[r] for r in colours},
+                           'other_regions': sorted(other),
                            'rule': 'hue = domain, lightness = region within '
-                                   'it; Control grey because it is the '
-                                   'reference domain; unassigned regions in '
-                                   'light greys, kept light so they do not '
-                                   'bury the four coloured systems'},
+                                   'it. Everything that is not one of the four '
+                                   'domains -- the Control domain AND the '
+                                   'regions no domain claims -- is one flat '
+                                   'grey under a single "Other" legend entry; '
+                                   'colour_source.csv keeps them separable by '
+                                   'their own domain label.'},
                'what_this_is': 'ANATOMY ONLY. No slope, no p-value, no scale. '
                                'It shows which electrodes the study has and '
                                'which domain each belongs to.'})
@@ -369,10 +526,19 @@ def main():
     io.log_analysis(
         f'glass brain: all {len(el)} study electrodes coloured by processing '
         'domain, shaded by region (ANATOMY, no result)', out_dir)
-    glass(el, colours, groups, out_dir / 'fig_anatomy_glass.png',
-          f'Electrode coverage by processing domain — {len(el)} bipolar pairs, '
-          f'{el["subject_id"].nunique()} subjects',
-          args, domain_caveat(scheme), counts)
+    # ONE FILE PER VIEW SET, named by the mode, so a two-panel version for a
+    # slide and a four-panel version to crop from can coexist in one folder
+    # without either being "the" file that the other overwrote.
+    for mode in args.display_modes:
+        glass(el, colours, groups, other, mode,
+              out_dir / f'fig_anatomy_glass_{mode}.png',
+              f'Electrode coverage by processing domain — {len(el)} bipolar '
+              f'pairs, {el["subject_id"].nunique()} subjects',
+              args, domain_caveat(scheme), counts)
+    bars(el, colours, groups, other, len(subjects),
+         out_dir / 'fig_anatomy_bars.png',
+         'Coverage by region — how many patients, and how many electrodes',
+         args, domain_caveat(scheme))
     logger.info('done -> %s', out_dir)
 
 

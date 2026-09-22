@@ -7,11 +7,13 @@
 #SBATCH --mem=16GB
 #SBATCH --output=logs/dom_anat_%j.out
 #
-# Electrode coverage by processing domain: every electrode in the study, hue =
-# domain, shade = region inside it, greys for Control and for the regions no
-# domain claims.
+# Electrode coverage by processing domain. Three figures, one versioned folder:
+#   fig_anatomy_glass_xz.png    two views (sagittal + axial), for a slide
+#   fig_anatomy_glass_lyrz.png  all four views, to crop from
+#   fig_anatomy_bars.png        reach (% of patients) over depth (n electrodes)
 #
 #   RUN_DIR=<domain run> sbatch sbatch/domain_anatomy.sbatch
+#   EXTRA="--display-modes xz" sbatch sbatch/domain_anatomy.sbatch
 #   EXTRA=--domains-only sbatch sbatch/domain_anatomy.sbatch
 #
 # ANATOMY ONLY -- no slope, no p-value, no colour scale. The effect-coloured
