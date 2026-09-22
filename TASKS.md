@@ -543,3 +543,22 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       carries a2009s labels. The coordinate hook (`coordinate_regions` +
       `insula_ap.apply_split`) can then be retired for insula, or kept as the
       fallback for subjects with no a2009s. (→ docs/labnotebook/2026-09-21.md)
+- [ ] **Decide whether beta's non-PD Hessian in the v3 ROI-unit fit disqualifies
+      it, and refine the exclusion rule accordingly.** Unlike every earlier
+      ill-conditioned cell, `var_subj_slope` is normal (2.25e-04, not ~5e-02)
+      and the fixed-effect SEs are plausible (0.0044-0.0056 vs gamma's
+      0.0029-0.0041); what is inflated is `var_subj_int` (0.977 vs 0.35-0.43).
+      A non-PD Hessian usually means the variance-component block is at a
+      boundary, not that the fixed effects are unidentified, and the
+      fixed-effect SEs come from a different block of the inverse. The current
+      blanket rule in `plot_dx_contrast_bands.load_run` therefore drops the band
+      of interest on evidence that may not apply. Replace it with a rule keyed
+      on the FIXED-EFFECT SEs against neighbouring bands plus a blown-component
+      check, and add an explicit `--include-flagged` that labels rather than
+      hides. (→ docs/labnotebook/2026-09-21.md)
+- [ ] **Carry `--exclude-regions "Lateral Temporal"` into every region-level run
+      until its data review closes.** It was excluded from the original
+      2026-09-17 band run and I omitted it from four MDD runs, which
+      reintroduced the only region that blows up at the region level and led me
+      to misreport the pain model as equally broken. Either make it the default
+      in the sbatch or close the review. (→ docs/labnotebook/2026-09-21.md)
