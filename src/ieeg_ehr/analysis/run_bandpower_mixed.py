@@ -90,6 +90,7 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import config, io
+from ieeg_ehr.config import roi_schemes
 from ieeg_ehr.analysis import cluster_permutation as cp
 from ieeg_ehr.analysis import dx_state, fullres_cells, med_state, mixed_model as mm
 from ieeg_ehr.analysis import reference_run, view_tables
@@ -424,6 +425,41 @@ def stage_fit(args):
 
     roi_scheme = args.roi_scheme or ref.view_params.get('roi_scheme', 'roi_v2')
     regions = view_tables.roi_regions_for({'roi_scheme': roi_scheme})
+
+    # DOMAINS AS THE ROI. `roi_by_subject` is {subject: {channel: ROI}}, and
+    # everything downstream -- load_region_matrix, the cell loop, the tables --
+    # only ever asks it "which unit is this channel in". So collapsing ROIs
+    # into domains is a VALUE REMAP on that dict plus a swap of the region
+    # list; no other code path changes and the model is untouched.
+    #
+    # It has to happen HERE rather than via a flat ROI scheme, because
+    # pain_domains_v3's aIns/pIns are COORDINATE-derived: no set of label
+    # patterns can produce them, so there is no fused label scheme to resolve.
+    # The split runs at the base level inside resolve_cohort, and this folds
+    # the resulting ROIs up afterwards.
+    #
+    # A channel whose ROI NO DOMAIN CLAIMS is dropped (Hippocampus, PCC, Basal
+    # Ganglia, Parietal/MTL other, Lateral Temporal in v3). That is the domain
+    # scheme's own membership decision, recorded in provenance, not a silent
+    # loss -- the dropped ROIs and their channel counts are logged and stored.
+    domain_drop = {}
+    if args.domain_scheme:
+        ds = roi_schemes.domain_scheme(args.domain_scheme)
+        r2d = ds['roi_to_domain']
+        for sub, chmap in roi_by_subject.items():
+            for ch, r in chmap.items():
+                if r not in r2d:
+                    domain_drop[r] = domain_drop.get(r, 0) + 1
+        roi_by_subject = {sub: {ch: r2d[r] for ch, r in chmap.items()
+                                if r in r2d}
+                          for sub, chmap in roi_by_subject.items()}
+        regions = list(ds['display'])
+        logger.info('DOMAINS ARE THE UNIT (%s): %d domain(s) %s',
+                    args.domain_scheme, len(regions), regions)
+        if domain_drop:
+            logger.warning('ROIs claimed by NO domain in %s, dropped: %s',
+                           args.domain_scheme,
+                           {k: v for k, v in sorted(domain_drop.items())})
     if args.exclude_regions:
         unknown = [r for r in args.exclude_regions if r not in regions]
         if unknown:
@@ -665,6 +701,9 @@ def stage_fit(args):
                     ).scheme_provenance(roi_scheme),
                     **split_report,
                     'cohort': args.cohort, 'epoch_minutes': epoch_minutes,
+                    'domain_scheme': args.domain_scheme,
+                    'unit': 'domain' if args.domain_scheme else 'roi',
+                    'rois_dropped_no_domain': domain_drop,
                     'notched_bins_excluded': notched,
                     'med_model': args.med_model,
                     'drug_set': args.drug_set if args.med_model != 'none' else None,
@@ -1470,6 +1509,14 @@ def main():
                     help='Hours before the ASSESSMENT that count as recently '
                          'dosed (default 2.0). Anchored on the score, not the '
                          'epoch start.')
+    ap.add_argument('--domain-scheme', default=None,
+                    choices=sorted(roi_schemes.DOMAIN_SCHEMES),
+                    help='Make the PROCESSING DOMAIN the unit instead of the '
+                         'ROI: one fit per domain x band, the model itself '
+                         'unchanged. --roi-scheme must be the domain scheme\'s '
+                         'base (it is set automatically if left alone), because '
+                         'the insula split runs at the base level before the '
+                         'ROIs are folded up.')
     ap.add_argument('--no-figures', action='store_true',
                     help='Collect, BH-correct and write the tables, but draw '
                          'nothing. For when the plot design is still open.')
@@ -1515,10 +1562,14 @@ def main():
                          'used by a scheme with coordinate regions '
                          '(roi_v2_ofc_ins, roi_v2_ins). Pass an earlier run\'s '
                          'threshold to reproduce its split exactly.')
-    ap.add_argument('--roi-scheme', default='roi_v2_ofc',
+    # Default applied AFTER the --domain-scheme check, not here: a domain
+    # scheme dictates its own base, and a string default would be
+    # indistinguishable from the user asking for roi_v2_ofc explicitly.
+    ap.add_argument('--roi-scheme', default=None,
                     help="Region set. Default 'roi_v2_ofc' = roi_v2 with mOFC and "
                          'lOFC fused into one OFC (20 regions). Pass roi_v2 to keep '
-                         'them split, or a path to a JSON scheme.')
+                         'them split, or a path to a JSON scheme. Ignored (and '
+                         'forced to the base) when --domain-scheme is given.')
     ap.add_argument('--view-dir', default=None)
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--mask-label', default=None)
@@ -1538,9 +1589,25 @@ def main():
     ap.add_argument('--run-name', default=RUN_NAME)
     args = ap.parse_args()
 
+    # The domain scheme dictates its own base ROI scheme -- the members are
+    # ROIs OF that scheme, so resolving the cohort against anything else would
+    # map channels to units the membership does not mention.
+    if args.domain_scheme:
+        base = roi_schemes.domain_scheme(args.domain_scheme)['base']
+        if args.roi_scheme not in (None, base):
+            raise SystemExit(
+                f'--domain-scheme {args.domain_scheme!r} is built from '
+                f'{base!r} ROIs, so --roi-scheme must be {base!r} (or left '
+                f'unset); got {args.roi_scheme!r}.')
+        args.roi_scheme = base
+    args.roi_scheme = args.roi_scheme or 'roi_v2_ofc'
+
     if args.view_scheme is None:
+        # The DOMAIN scheme names the folder when there is one: two domain
+        # schemes can share a base (v2 and v3 differ only by the insula), so
+        # naming the folder after the base alone would let them collide.
         args.view_scheme = view_scheme_for(
-            args.band_set, args.roi_scheme,
+            args.band_set, args.domain_scheme or args.roi_scheme,
             args.drug_set if args.med_model != 'none' else None)
 
     logging.basicConfig(level=logging.INFO,
