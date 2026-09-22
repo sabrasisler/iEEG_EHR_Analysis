@@ -405,3 +405,70 @@ def test_median_split_can_be_pinned_to_an_earlier_runs_threshold():
     out, desc = insula_ap.median_split(contacts, threshold=-20.0)
     assert desc['threshold_source'] == 'pinned'
     assert list(out['ins_part']) == ['aIns', 'aIns', 'aIns']
+
+
+# ---------------------------------------------------------------------------
+# DerSimonian-Laird tau / I2 (domain-level consistency)
+# ---------------------------------------------------------------------------
+# The whole reason tau exists here rather than slope.std() is that it subtracts
+# the sampling component. These pin that it actually does.
+
+def test_tau_is_zero_when_the_spread_is_pure_sampling_noise():
+    """k subjects drawn around ONE true slope, spread matching their SEs."""
+    import numpy as np
+    from ieeg_ehr.analysis.plot_domain_consistency import dersimonian_laird
+    rng = np.random.default_rng(0)
+    se = np.full(60, 0.01)
+    slope = 0.02 + rng.normal(0, 0.01, 60)      # spread == the sampling SE
+    tau, i2, _, k = dersimonian_laird(slope, se)
+    assert k == 60
+    assert tau < 0.004, tau          # ~0: nothing left after the subtraction
+    assert i2 < 0.25, i2
+
+
+def test_tau_recovers_real_between_subject_spread():
+    import numpy as np
+    from ieeg_ehr.analysis.plot_domain_consistency import dersimonian_laird
+    rng = np.random.default_rng(1)
+    se = np.full(200, 0.002)
+    true = rng.normal(0.02, 0.01, 200)          # real tau = 0.01
+    slope = true + rng.normal(0, 0.002, 200)
+    tau, i2, _, _ = dersimonian_laird(slope, se)
+    assert 0.008 < tau < 0.012, tau
+    assert i2 > 0.9, i2
+
+
+def test_raw_sd_and_tau_diverge_when_precision_is_uneven():
+    """The reason the raw SD is not the figure.
+
+    Half the subjects measured 10x worse than the other half, but NO real
+    between-subject variation. The plain SD reports a large spread; tau, which
+    knows the SEs, reports almost none.
+    """
+    import numpy as np
+    from ieeg_ehr.analysis.plot_domain_consistency import dersimonian_laird
+    rng = np.random.default_rng(2)
+    se = np.concatenate([np.full(30, 0.002), np.full(30, 0.02)])
+    slope = 0.01 + rng.normal(0, 1, 60) * se     # spread is exactly sampling
+    tau, i2, _, _ = dersimonian_laird(slope, se)
+    raw_sd = float(np.std(slope, ddof=1))
+    assert raw_sd > 0.008, raw_sd                # the SD looks heterogeneous
+    assert tau < 0.004, tau                      # tau knows it is not
+    assert tau < raw_sd / 2
+
+
+def test_too_few_subjects_gives_nan_rather_than_a_number():
+    import numpy as np
+    from ieeg_ehr.analysis.plot_domain_consistency import dersimonian_laird
+    tau, i2, _, k = dersimonian_laird(np.array([0.01, 0.02]),
+                                      np.array([0.001, 0.001]))
+    assert k == 2 and np.isnan(tau) and np.isnan(i2)
+
+
+def test_non_finite_and_zero_se_subjects_are_excluded_not_crashed_on():
+    import numpy as np
+    from ieeg_ehr.analysis.plot_domain_consistency import dersimonian_laird
+    slope = np.array([0.01, 0.02, np.nan, 0.015, 0.012])
+    se = np.array([0.001, 0.001, 0.001, 0.0, 0.001])
+    _, _, _, k = dersimonian_laird(slope, se)
+    assert k == 3          # the NaN slope and the zero-SE subject both leave
