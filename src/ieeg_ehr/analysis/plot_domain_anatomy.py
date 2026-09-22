@@ -435,21 +435,30 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
               else min(0.62, need + 0.05))
     fig.subplots_adjust(bottom=bottom)
 
-    # Domain names above the top panel, spanning their own regions. A domain
-    # whose span cannot hold its name at this font size is STAGGERED onto a
-    # second row rather than dropped: with one region, Modulatory has a
-    # quarter-inch of span and a one-inch name, and it is the domain a reader
-    # is least likely to guess from colour alone.
+    # Domain names above the top panel, spanning their own regions.
     #
+    # A LABEL IS STAGGERED ONLY IF IT WOULD HIT ITS NEIGHBOUR, which is not
+    # the same question as "does the word fit the span it labels". The first
+    # version asked the latter and pushed Modulatory -- one region, so a
+    # narrow span -- onto a second row even on a 13-inch figure where its
+    # nearest neighbouring label is inches away. What decides a collision is
+    # centre-to-centre clearance against the labels actually drawn, so that
+    # is what is tested.
     width, alt = fig.get_size_inches()[0], False
     span_in = (width * (0.995 - args.bar_left)) / max(len(order), 1)
     char_in = CHAR_EM * args.font_label / 72.0
+    placed, right_edge = [], -1e9
     for dom, i0, i1 in labels_dom:
-        fits = (i1 - i0 + 1) * span_in >= char_in * len(dom)
-        y = 1.04 if fits else 1.19
-        if not fits:
-            alt = True
-        axes[0].text((i0 + i1) / 2, y, dom,
+        centre = (i0 + i1) / 2
+        half = (char_in * len(dom) / 2) / span_in      # in bar-index units
+        if centre - half >= right_edge + 0.25:
+            row, right_edge = 0, centre + half
+        else:
+            row, alt = 1, True
+        placed.append((dom, centre, row))
+
+    for dom, centre, row in placed:
+        axes[0].text(centre, 1.04 if row == 0 else 1.19, dom,
                      transform=axes[0].get_xaxis_transform(), ha='center',
                      va='bottom', fontsize=args.font_label,
                      color=('0.35' if dom == OTHER_LABEL
@@ -509,12 +518,12 @@ def main():
     ap.add_argument('--brain-width', type=float, default=0.74,
                     help='Fraction of the glass figure the brains occupy; the '
                          'rest is the legend, on the right.')
-    ap.add_argument('--brain-gap', type=float, default=-0.03,
+    ap.add_argument('--brain-gap', type=float, default=0.008,
                     help='Gap between adjacent brain views, as a fraction of '
-                         'figure width. NEGATIVE overlaps their bounding '
-                         'boxes, which is usually what is wanted: a glass '
-                         'brain does not fill its box, so touching boxes '
-                         'still leave a visible gutter.')
+                         'figure width. A small positive value leaves a thin '
+                         'band of white between them; 0 butts the boxes '
+                         'together and negative overlaps them, which at -0.03 '
+                         'made the two brains visibly touch.')
     ap.add_argument('--brain-bottom', type=float, default=0.02)
     ap.add_argument('--brain-height', type=float, default=0.96)
     ap.add_argument('--legend-cols', type=int, default=2)
