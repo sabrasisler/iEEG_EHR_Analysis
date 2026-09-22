@@ -562,3 +562,36 @@ elastic net with nested CV, 100 bootstraps, shuffled-label null · runs on
       reintroduced the only region that blows up at the region level and led me
       to misreport the pain model as equally broken. Either make it the default
       in the sbatch or close the review. (→ docs/labnotebook/2026-09-21.md)
+- [ ] **`precuneus` was silently absorbed into the Control domain in every
+      `--unit parcel` run, and Control is 61% precuneus there.** Measured
+      2026-09-22 against `channel_meta.dk_anode`: the 149 contacts the v2 domain
+      runs label `Control / cuneus` are **142 precuneus, 5 cuneus, 2
+      superiorparietal**. ROI patterns match by SUBSTRING and `'cuneus'` is a
+      substring of `'precuneus'`.
+      ROOT CAUSE, and why the ROI path is unaffected: at ROI level `'Parietal
+      (other)'` (`superiorparietal, inferiorparietal, precuneus`) competes for
+      those contacts and wins, so `roi_v2` assigns them correctly. FUSING a
+      domain scheme DROPS every unassigned category, so `pain_domains_v2` has no
+      Parietal category left to compete and `'cuneus'` claims precuneus
+      unopposed. The collision is created by the fusion, not by the base scheme
+      -- so any fused scheme can have one wherever an unassigned category's
+      labels are substrings of an assigned one's.
+      CONSEQUENCE: the quasi-control in every parcel-unit figure is mostly a
+      core DMN hub, not occipital cortex. That bears directly on the running
+      puzzle of why Control carries a delta effect the size of the real domains
+      and the largest delta/theta pain x medication interaction -- precuneus has
+      exactly the low-frequency dynamics that would produce both.
+      FIX: make `_merge_categories` detect substring collisions between assigned
+      and dropped categories and fail loudly, and/or match on whole labels
+      rather than substrings. Then re-run the v2 parcel-unit domain figures, or
+      retire them in favour of the ROI-unit ones.
+      NOT A PROBLEM IN: any `--unit roi` run, including every `pain_domains_v3`
+      run -- verified, the 144 contacts land in `Parietal (other)` and are
+      dropped as unassigned. (→ docs/labnotebook/2026-09-22.md)
+- [ ] **Control is a thin domain at ROI unit: 82 contacts, 20 subjects**
+      (Auditory 28/13 + Occipital 54/10), against 234/34 in the parcel-unit v2
+      runs -- and most of that difference is the precuneus bug above, i.e. the
+      old number was wrong rather than the new one being a loss. Decide whether
+      a 10-subject Occipital ROI can carry the quasi-control argument at all, or
+      whether the control needs to be something else.
+      (→ docs/labnotebook/2026-09-22.md)
