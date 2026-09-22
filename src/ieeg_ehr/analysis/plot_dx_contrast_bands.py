@@ -62,29 +62,71 @@ SCRIPT = 'ieeg_ehr/analysis/plot_dx_contrast_bands.py'
 DEFAULT_KEEP = ('Sensory', 'Affective', 'Cognitive', 'Modulatory')
 
 
-def load_run(run_dir, band_set):
-    """(per-group slopes, difference rows, per-band cells, excluded bands)."""
+def load_run(run_dir, band_set, var_slope_max=0.01, se_ratio_max=5.0):
+    """(per-group slopes, difference rows, cells, excluded bands, flagged bands).
+
+    `var_slope_max` and `se_ratio_max` are the two thresholds that decide
+    usability; see the comment in the body for why they are numbers rather than
+    a warning-text match, and what each one was calibrated against.
+    """
     run_dir = Path(run_dir)
     slopes = norm_strata(io.read_table(run_dir / 'domain_slopes.parquet',
                                        on_stale='warn'))
     cells = io.read_table(run_dir / 'domain_bands.parquet', on_stale='warn')
+    diff_all = slopes[slopes['term'] == 'pain_x_dx']
 
+    # WHAT MAKES A BAND UNUSABLE -- judged on the NUMBERS, not on the warning
+    # text. The first version of this excluded any band whose warnings said
+    # 'not positive definite' or whose `converged` was False, and that was too
+    # crude: statsmodels raises ONE flag for the whole parameter vector, so a
+    # variance component sitting at its boundary reports non-PD even when the
+    # fixed-effect block -- which is where this figure's SEs come from -- is
+    # perfectly well curved.
+    #
+    # Measured on this project, the two cases look nothing alike:
+    #   delta/theta, parcel unit : var_subj_slope 5e-2 to 7e-2 (300x normal),
+    #                              interaction SE 0.068-0.081 (20x normal)
+    #   beta, v3 ROI unit        : var_subj_slope 2.25e-4 (normal),
+    #                              interaction SE 0.0044-0.0056 (normal)
+    #
+    # So the test is: a BLOWN variance component, or an interaction SE far out
+    # of line with the other bands. A band that only carries the flag is
+    # FLAGGED and drawn, not hidden -- hiding it lost the band of interest on
+    # evidence that did not apply to it.
     warn = cells['warnings'].astype(str)
-    bad = sorted(cells.loc[warn.str.contains('not positive definite'), 'band'])
-    unconv = sorted(cells.loc[~cells['converged'].astype(bool), 'band'])
-    excluded = sorted(set(bad) | set(unconv))
+    flagged = sorted(cells.loc[warn.str.contains('not positive definite')
+                               | ~cells['converged'].astype(bool), 'band'])
+
+    blown = sorted(cells.loc[cells['var_subj_slope'] > var_slope_max, 'band'])
+    se_by_band = (diff_all.groupby('band')['se'].median()
+                  if diff_all is not None else pd.Series(dtype=float))
+    ref_se = float(se_by_band.median()) if len(se_by_band) else np.nan
+    wild = sorted(se_by_band[se_by_band > se_ratio_max * ref_se].index) \
+        if np.isfinite(ref_se) else []
+
+    excluded = sorted(set(blown) | set(wild))
+    flagged = [b for b in flagged if b not in excluded]
     if excluded:
         logger.warning('EXCLUDED from the figure and from the BH family: %s '
-                       '(non-positive-definite Hessian and/or did not '
-                       'converge). Their SEs are not interval estimates.',
-                       excluded)
+                       '-- blown variance component (>%.3g) and/or an '
+                       'interaction SE more than %gx the across-band median '
+                       '(%.4g). These are not interval estimates.',
+                       excluded, var_slope_max, se_ratio_max, ref_se)
+    if flagged:
+        logger.warning('FLAGGED but KEPT: %s -- the fit carries a '
+                       'non-positive-definite / non-convergence warning, but '
+                       'its variance components and interaction SEs are in '
+                       'line with the other bands, so the flag appears to be '
+                       'about the variance-component block rather than the '
+                       'fixed effects. Drawn with a marker on the panel.',
+                       flagged)
 
     both = slopes[slopes['term'] == 'pain_slope_by_stratum'].copy()
     diff = slopes[slopes['term'] == 'pain_x_dx'].copy()
     if both.empty or diff.empty:
         raise SystemExit(f'{run_dir} has no diagnosis strata -- was it fitted '
                          'with --dx-model interaction?')
-    return both, diff, cells, excluded
+    return both, diff, cells, excluded, flagged
 
 
 def correct(diff, keep_domains, excluded_bands, q):
@@ -117,7 +159,8 @@ def _band_label(band, band_set):
     return f'{band}\n{lo}-{hi} Hz'
 
 
-def figure_contrast(diff, bands, doms, out_path, args, n_dx, n_non, excluded):
+def figure_contrast(diff, bands, doms, out_path, args, n_dx, n_non, excluded,
+                    flagged=()):
     """One panel per band. Circuits colour-coded. The difference, and nothing else.
 
     SIGNIFICANCE IS NOT ENCODED IN COLOUR, because colour is spent on circuit
@@ -147,6 +190,12 @@ def figure_contrast(diff, bands, doms, out_path, args, n_dx, n_non, excluded):
         ax.tick_params(labelsize=8)
         ax.spines[['top', 'right']].set_visible(False)
 
+        if band in flagged:
+            # KEPT, and the reader is told IN THE TITLE rather than inside the
+            # axes -- an annotation at the top of the panel sat on top of the
+            # first circuit's interval.
+            ax.set_title(_band_label(band, args.band_set) + '\n(fit flagged)',
+                         fontsize=9.5, color='#b06a00')
         if band in excluded:
             # Frame kept, data deliberately absent, reason on the panel.
             # NO set_xticks([]) here: these axes are sharex, so clearing the
@@ -328,11 +377,21 @@ def main():
                          'the treatment reference. Changing this changes the '
                          'multiple-comparison family, which is why it is '
                          'explicit and is recorded in the output.')
+    ap.add_argument('--var-slope-max', type=float, default=0.01,
+                    help='A band whose var_subj_slope exceeds this is '
+                         'EXCLUDED: healthy values on this project are '
+                         '~1e-4 and failed fits land at ~5e-2.')
+    ap.add_argument('--se-ratio-max', type=float, default=5.0,
+                    help='A band whose median interaction SE exceeds '
+                         'this multiple of the across-band median SE is '
+                         'EXCLUDED. The parcel-unit failures were 20x.')
     ap.add_argument('--fdr-q', type=float, default=0.05)
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
-    both, diff, cells, excluded = load_run(run_dir, args.band_set)
+    both, diff, cells, excluded, flagged = load_run(
+        run_dir, args.band_set, var_slope_max=args.var_slope_max,
+        se_ratio_max=args.se_ratio_max)
 
     unknown = sorted(set(args.keep_domains) - set(diff['domain']))
     if unknown:
@@ -346,11 +405,17 @@ def main():
     n_non = int(np.nanmax(cells['n_subjects_control'].to_numpy(dtype=float)))
 
     prov = run_dir / 'provenance.json'
-    noparcel = False
+    noparcel, unit = False, 'parcel'
     if prov.exists():
-        noparcel = bool(json.loads(prov.read_text())
-                        .get('params', {}).get('drop_parcel_term'))
-    if noparcel:
+        pp = json.loads(prov.read_text()).get('params', {})
+        noparcel = bool(pp.get('drop_parcel_term'))
+        unit = pp.get('unit') or 'parcel'
+    # `--unit roi` SETS drop_parcel_term itself -- the ROI does not enter the
+    # model, so there is no parcel slope to drop. That is the design, not the
+    # experiment the warning below is about, so it must not fire here: the
+    # 2026-09-21 comparison it describes was parcel-unit runs with the term
+    # removed, and on the ROI unit delta and theta FIT rather than failing.
+    if noparcel and unit == 'parcel':
         logger.warning(
             'THIS IS A --drop-parcel-term RUN. It is NOT the better-conditioned '
             'specification: it trades which bands fail rather than fixing them '
@@ -373,7 +438,7 @@ def main():
                 'bh_family': f'{len(diff)} reported cells '
                              f'({len(doms)} circuits x '
                              f'{diff["band"].nunique()} bands), recomputed here',
-                'drop_parcel_term': noparcel},
+                'drop_parcel_term': noparcel, 'unit': unit},
         parents=[str(run_dir / 'domain_slopes.parquet')], script=SCRIPT,
         extra={'caveat': DX_CAVEAT, 'status': DISCLAIMER,
                'bh_note': 'p_bh is RECOMPUTED over the reported cells. '
@@ -382,13 +447,17 @@ def main():
                           'figure marks, because it corrects for tests this '
                           'figure does not report.',
                'excluded_bands_reason':
-                   'non-positive-definite Hessian and/or non-convergence; '
-                   'their SEs are not interval estimates. Which bands these '
-                   'are differs by specification, not by frequency.'})
+                   'a BLOWN variance component or an interaction SE far '
+                   'out of line with the other bands -- judged on the numbers, '
+                   'not on the warning text, because statsmodels raises one '
+                   'non-PD flag for the whole parameter vector even when only '
+                   'the variance-component block is at a boundary. Bands in '
+                   'flagged_bands_kept carry that warning but have normal '
+                   'components and SEs, so they are drawn and marked.'})
 
     p1 = figure_contrast(diff, bands, doms,
                          run_dir / 'fig_dx_contrast_by_band.png',
-                         args, n_dx, n_non, excluded)
+                         args, n_dx, n_non, excluded, flagged)
     logger.info('wrote %s', p1)
     p2 = figure_groups(both, diff, bands, doms,
                        run_dir / 'fig_dx_groups_by_band.png',
