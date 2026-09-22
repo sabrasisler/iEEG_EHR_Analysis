@@ -47,6 +47,46 @@ FOOTNOTE_SIZE = 6
 
 DPI = 200
 
+#: The two size regimes. SCREEN is the default and is what every existing
+#: figure was tuned against. POSTER is close to the source analysis's original
+#: numbers (titles 39, labels 30), which this module scaled back for
+#: multi-panel screen figures — a poster is the case those numbers were right
+#: for, so it comes back as an explicit MODE rather than a permanent change.
+SCREEN_SIZES = dict(TITLE_SIZE=13, LABEL_SIZE=11, TICK_SIZE=9, LEGEND_SIZE=9,
+                    FOOTNOTE_SIZE=6, DPI=200)
+POSTER_SIZES = dict(TITLE_SIZE=30, LABEL_SIZE=25, TICK_SIZE=21, LEGEND_SIZE=21,
+                    FOOTNOTE_SIZE=13, DPI=300)
+
+
+def use_poster(on=True):
+    """Switch the module to poster sizes, and back.
+
+    Rebinding module globals is normally the bug config/__init__.py warns
+    about — a caller holding `from style import TICK_SIZE` would keep the old
+    value. It is safe HERE only because every figure in this package reads
+    these through the module (`style.TICK_SIZE`) at draw time, never by
+    from-import, so the lookup happens after the switch. New code must keep
+    doing that.
+
+    Line and marker weights move too: type scaled to a poster against hairline
+    axes looks like a mistake, and a 0.4 pt bar edge disappears at 300 dpi.
+    """
+    sizes = POSTER_SIZES if on else SCREEN_SIZES
+    globals().update(sizes)
+
+    scale = 2.2 if on else 1.0
+    matplotlib.rcParams.update({
+        'axes.linewidth': 0.8 * scale,
+        'lines.linewidth': 1.5 * scale,
+        'lines.markersize': 6 * scale,
+        'patch.linewidth': 0.5 * scale,
+        'xtick.major.width': 0.8 * scale,
+        'ytick.major.width': 0.8 * scale,
+        'xtick.major.size': 3.5 * scale,
+        'ytick.major.size': 3.5 * scale,
+    })
+    return sizes
+
 #: Every exploratory figure in this repo carries this. It is the difference
 #: between a nomination and a finding, and it belongs on the image rather than
 #: only in the notebook, because the image is what ends up in a slide deck.

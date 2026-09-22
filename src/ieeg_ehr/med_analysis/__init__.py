@@ -12,6 +12,7 @@ Layout:
 - `load`             MAR CSVs -> one tidy table, one row per administration
 - `recording_hours`  gap-aware recorded iEEG hours, per subject per hospital day
 - `pain_link`        join a dose to the pain score charted just before it
+- `epoch_meds`       medication exposure around a PAIN EPOCH (discovery-gated)
 - `style`            the shared palette and axis styling for these figures
 - `build_admin_table`  materialize the tidy table on demand
 - `plot_admin_burden`  Fig 1: administrations vs subjects, + the drug table
@@ -22,6 +23,7 @@ Layout:
 - `plot_dose_distribution`  Fig 6: which doses were given, per drug and route
 - `plot_pain_score_response`  Fig 7: the mirror of Fig 5 -- given an assessment,
   was a drug given in the next 30 min, and which
+- `plot_poster_epoch_meds`  poster panels A-E: exposure around pain epochs
 
 Figures 1-4 live under the `administration_patterns` question; Fig 5 opens a
 second one, `pain_coupling` (config.MED_PAIN_QUESTION), because "was this dose
