@@ -34,9 +34,12 @@ domain's slope is on the same centred predictor the model used.
 
 THE FOUR FIGURES, AND WHY THE OBVIOUS FIFTH ONE IS NOT HERE
 ------------------------------------------------------------
-    sign            Two panels on the grid: the RAW percentage of subjects
-                    sharing the group's sign, and that percentage minus the
-                    cell's own SIGN-FLIP NULL.
+    sign            ONE panel on the grid: the percentage of subjects sharing
+                    the group's sign, annotated in every cell, with COLOUR
+                    reserved for the cells that beat their own sign-flip null
+                    (BH q=0.05). The null decides what is coloured; it is not
+                    explained on the figure. `excess_sign`, `null_frac_mean`,
+                    `p_signflip` and `p_signflip_bh` are in the CSV.
     heterogeneity   tau and I-squared: how much the subjects genuinely DIFFER,
                     with sampling noise removed.
     strip           Every subject's slope as a point, per cell. No averaging and
@@ -74,8 +77,11 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import io
+from ieeg_ehr.analysis import cluster_permutation as cp
 from ieeg_ehr.analysis import fullres_cells, mixed_model as mm, reference_run
-from ieeg_ehr.analysis.plot_bandpower_consistency import N_PERM, signflip_null
+from ieeg_ehr.analysis.plot_bandpower_consistency import (N_PERM, _signflip_p,
+                                                            cell_weights,
+                                                            signflip_null)
 from ieeg_ehr.analysis.plot_mixed_model_subject_lines import (epoch_level,
                                                               subject_slopes)
 from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS, band_table, aggregate
@@ -256,7 +262,7 @@ def dersimonian_laird(slope, se):
     return float(np.sqrt(tau2)), float(i2), Q, k
 
 
-def cell_stats(slopes, group, domains, bands, n_perm=N_PERM, seed=0):
+def cell_stats(slopes, group, domains, bands, n_perm=N_PERM, seed=0, fdr_q=0.05):
     """One row per (domain, band): sign agreement, its null, and heterogeneity."""
     rng = np.random.default_rng(seed)
     beta = group.set_index(['domain', 'band'])['beta']
@@ -279,18 +285,22 @@ def cell_stats(slopes, group, domains, bands, n_perm=N_PERM, seed=0):
             if k >= MIN_SUBJECTS and np.isfinite(g) and g != 0:
                 match = int((np.sign(s[fit]) == np.sign(g)).sum())
                 frac = match / k
-                w = np.where(np.isfinite(e) & (e > 0), 1.0 / np.maximum(e, 1e-12) ** 2,
-                             0.0)
+                # `cell_weights`, not a bare 1/se^2: it floors the SE at the
+                # cell's 5th percentile so one implausibly precise subject
+                # cannot take the whole cell. Shared with the region-level map
+                # so the two use identical weighting.
+                w = cell_weights(e, s)
                 nm, n95, _ = signflip_null(s, w, n_perm=n_perm, rng=rng)
-                # The permutation p: how often a random sign assignment reaches
-                # THIS much agreement. Recomputed here rather than taken from
-                # the null helper, which returns the distribution's summary.
+                # How often a random sign assignment reaches THIS much
+                # agreement. (hits+1)/(draws+1), so a permutation p is never 0.
+                p_sf = _signflip_p(s, w, frac, n_perm, rng)
                 tau, i2, Q, _ = dersimonian_laird(s, e)
                 rec.update({
                     'n_sign_match': match, 'frac_sign': frac,
                     'null_frac_mean': nm, 'null_frac_p95': n95,
                     'excess_sign': frac - nm if np.isfinite(nm) else np.nan,
                     'beats_null_p95': bool(np.isfinite(n95) and frac > n95),
+                    'p_signflip': p_sf,
                     'tau': tau, 'i2': i2, 'Q': Q,
                     # Reported because it is what "std" usually means, and so
                     # the gap to tau is visible. NOT plotted -- see the module
@@ -304,7 +314,23 @@ def cell_stats(slopes, group, domains, bands, n_perm=N_PERM, seed=0):
                                           if np.isfinite(tau) and g else np.nan),
                 })
             rows.append(rec)
-    return pd.DataFrame(rows)
+
+    out = pd.DataFrame(rows)
+    # BH over the whole grid, one family: "which cells are more consistent than
+    # their own null" is one question asked 30 times. `consistent` is what the
+    # figure colours in, and it is the ONLY place significance is decided --
+    # deliberately separate from the group fit's `p_bh_reject`, which asks
+    # whether the slope differs from zero, not whether patients agree about it.
+    out['p_signflip_bh'] = np.nan
+    m = out['p_signflip'].notna() if 'p_signflip' in out else pd.Series(False,
+                                                                        out.index)
+    if m.any():
+        _, adj = cp.bh_fdr(out.loc[m, 'p_signflip'].to_numpy(), q=fdr_q)
+        out.loc[m, 'p_signflip_bh'] = adj
+    out['consistent'] = out['p_signflip_bh'].le(fdr_q).fillna(False)
+    logger.info('sign-flip null: %d of %d cells beat it at BH q=%g',
+                int(out['consistent'].sum()), len(out), fdr_q)
+    return out
 
 
 # ============================================================================
@@ -322,124 +348,100 @@ def band_tick(band, bands_def):
 
 
 def fig_sign(cells, domains, bands, bands_def, out, caveat):
-    """Raw agreement and excess-over-null, side by side on the same grid.
+    """ONE panel: what percentage of subjects slope the group's way.
 
-    TWO PANELS RATHER THAN TWO FIGURES because the grid is 5 x 6. At region
-    level (21 x 6) they are separate files and a reader flicks between them;
-    here they fit together, and putting them together is what stops the raw
-    percentage being read without its null.
+    COLOUR MARKS SIGNIFICANCE, THE NUMBER CARRIES THE VALUE. Every cell is
+    annotated with its percentage; only the cells that beat their own sign-flip
+    null (BH q=0.05 over the grid) are filled. That split is what lets this be
+    one uncrowded panel instead of two: the earlier version drew the raw
+    fraction beside the excess-over-null because the raw fraction cannot be
+    read without knowing where chance sits, and here it does not have to be --
+    an uncoloured cell IS the "not above chance" statement.
 
-    CELLS WHOSE GROUP EFFECT IS NOT ESTABLISHED ARE HATCHED, and this is not
-    decoration. The statistic is "what fraction of subjects share THE GROUP'S
-    SIGN", so it inherits whatever the group sign is -- and where beta is
-    indistinguishable from zero that sign is arbitrary. Affective/gamma in the
-    2026-09-21 run has beta = +0.0001; asking what fraction of patients share
-    the sign of essentially zero is asking which side of a coin-flip they fell
-    on, and the answer is not evidence about anything. The hatch marks every
-    cell the group fit did not call significant, so agreement is read only
-    where there is a sign to agree with.
+    The null is still doing all the work, it is just not narrated on the
+    figure. What it is and why 50% is the wrong reference is in this module's
+    docstring and in `domain_consistency_cells.csv`, which carries
+    `null_frac_mean`, `excess_sign`, `p_signflip` and `p_signflip_bh` per cell.
     """
-    import matplotlib.patches as mpatches
     import matplotlib.pyplot as plt
-    from ieeg_ehr.features import common
 
     def grid(col):
         return (cells.pivot(index='domain', columns='band', values=col)
                 .reindex(index=domains, columns=bands))
 
-    frac, null = grid('frac_sign'), grid('null_frac_mean')
-    exc, nn = grid('excess_sign'), grid('n_with_slope')
-    match, beta = grid('n_sign_match'), grid('beta_group')
-    sig = grid('p_bh_reject').fillna(0).astype(bool).to_numpy()
+    frac = grid('frac_sign').to_numpy(dtype=float)
+    sig = grid('consistent').fillna(False).astype(bool).to_numpy()
+    nn = grid('n_with_slope').to_numpy(dtype=float)
 
-    floor = float(np.nanmean(null.to_numpy(dtype=float)))
-    if not np.isfinite(floor):
-        floor = 0.5
-    arr_f = frac.to_numpy(dtype=float)
-    arr_e = exc.to_numpy(dtype=float)
-    cap = float(np.nanmax(np.abs(arr_e))) or 0.1
+    # Masked so only the significant cells take a colour; the rest render as
+    # the colormap's 'bad' value, one flat grey.
+    shown = np.ma.masked_where(~sig | ~np.isfinite(frac), frac)
+    cm = plt.get_cmap('viridis').copy()
+    cm.set_bad('0.92')
 
-    fig, axes = plt.subplots(1, 2, figsize=(15.5, 0.55 * len(domains) + 3.8))
+    # SCALED TO THE COLOURED CELLS, not to 0-100% or 50-100%. Only the
+    # significant cells take a colour and they occupy a narrow band (72-85% in
+    # the 2026-09-21 run), so a fixed wide axis spends most of viridis on
+    # values that never appear and renders every cell the same teal. Rounded
+    # out to 5% steps so the colourbar reads in round numbers, with a minimum
+    # 15-point span so a set of near-identical cells is not stretched into a
+    # spurious gradient.
+    vals = frac[sig & np.isfinite(frac)]
+    if vals.size:
+        vmin = np.floor(vals.min() * 20) / 20
+        vmax = np.ceil(vals.max() * 20) / 20
+        if vmax - vmin < 0.15:
+            pad = (0.15 - (vmax - vmin)) / 2
+            vmin, vmax = max(0.0, vmin - pad), min(1.0, vmax + pad)
+    else:
+        vmin, vmax = 0.5, 1.0
 
-    for ax, arr, cmap, vmin, vmax, title, cbl in (
-            (axes[0], np.clip(arr_f, floor, 1.0), 'cividis', floor, 1.0,
-             'RAW: what fraction of subjects slope the group\'s way?\n'
-             f'scale floored at the mean sign-flip null ({floor:.0%})',
-             'fraction sharing the group sign'),
-            (axes[1], arr_e, 'PRGn', -cap, cap,
-             'EXCESS: that fraction MINUS this cell\'s own null\n'
-             'the version to quote -- chance here is not 50%',
-             'observed - null fraction')):
-        cm = plt.get_cmap(cmap).copy()
-        cm.set_bad('0.85')
-        im = ax.imshow(arr, aspect='auto', cmap=cm, vmin=vmin, vmax=vmax,
-                       interpolation='nearest')
-        common.draw_mask_outline(ax, sig)
-        # Hatch where the group sign is not established -- see the docstring.
-        for i in range(sig.shape[0]):
-            for j in range(sig.shape[1]):
-                if not sig[i, j]:
-                    ax.add_patch(mpatches.Rectangle(
-                        (j - 0.5, i - 0.5), 1, 1, fill=False, hatch='///',
-                        edgecolor='0.55', linewidth=0.0, zorder=3))
-        ax.set_xticks(range(len(bands)))
-        ax.set_xticklabels([band_tick(b, bands_def) for b in bands], fontsize=8)
-        ax.set_yticks(range(len(domains)))
-        ax.set_yticklabels(domains, fontsize=10)
-        for t, d in zip(ax.get_yticklabels(), domains):
-            t.set_color(DOMAIN_COLOURS.get(d, '0.2'))
-        ax.set_title(title, fontsize=10.5)
-        fig.colorbar(im, ax=ax, fraction=0.045, pad=0.03, label=cbl)
+    fig, ax = plt.subplots(figsize=(1.35 * len(bands) + 3.4,
+                                    0.72 * len(domains) + 2.4))
+    im = ax.imshow(shown, aspect='auto', cmap=cm, vmin=vmin, vmax=vmax,
+                   interpolation='nearest')
+    ax.set_xticks(np.arange(-0.5, len(bands), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(domains), 1), minor=True)
+    ax.grid(which='minor', color='white', linewidth=1.4)
+    ax.tick_params(which='minor', length=0)
 
     for i in range(len(domains)):
         for j in range(len(bands)):
-            k, n = match.iat[i, j], nn.iat[i, j]
-            if not np.isfinite(k) or not n:
+            f = frac[i, j]
+            if not np.isfinite(f) or not nn[i, j]:
                 continue
-            f = float(arr_f[i, j])
-            shade = (min(max(f, floor), 1.0) - floor) / max(1.0 - floor, 1e-9)
-            axes[0].text(j, i, f'{f:.0%}\n{int(k)}/{int(n)}\nnull '
-                                f'{null.iat[i, j]:.0%}\n'
-                                f'β {beta.iat[i, j]:+.4f}',
-                         ha='center', va='center', fontsize=6.4,
-                         color='white' if shade < 0.55 else '0.12')
-            e = float(arr_e[i, j])
-            axes[1].text(j, i, f'{e:+.0%}', ha='center', va='center',
-                         fontsize=8.5,
-                         color='white' if abs(e) > 0.62 * cap else '0.15')
+            if sig[i, j]:
+                # White on the dark end of viridis, near-black on the light.
+                shade = (min(max(f, vmin), vmax) - vmin) / (vmax - vmin)
+                colour, weight = ('white' if shade < 0.55 else '0.10'), 'bold'
+            else:
+                colour, weight = '0.45', 'normal'
+            ax.text(j, i, f'{f:.0%}', ha='center', va='center', fontsize=12,
+                    color=colour, fontweight=weight)
 
-    fig.suptitle('Domain-level consistency: is the group slope something most '
-                 'patients show?', fontsize=13)
-    fig.tight_layout(rect=(0, 0.20, 1, 0.94))
+    ax.set_xticks(range(len(bands)))
+    ax.set_xticklabels([band_tick(b, bands_def) for b in bands], fontsize=9)
+    ax.set_yticks(range(len(domains)))
+    ax.set_yticklabels(domains, fontsize=11)
+    for t, d in zip(ax.get_yticklabels(), domains):
+        t.set_color(DOMAIN_COLOURS.get(d, '0.2'))
+    ax.set_title("Subjects sharing the group's pain-slope sign", fontsize=13,
+                 pad=12)
+    # PercentFormatter rather than set_yticklabels: the latter fixes labels to
+    # whatever ticks exist at call time and warns, then silently mislabels if
+    # the locator moves.
+    from matplotlib.ticker import PercentFormatter
+    cb = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.025)
+    cb.set_label('% of subjects', fontsize=9)
+    cb.ax.yaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=0))
+
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
     _footnote(fig,
-              'One point per subject per cell: an unpooled OLS line through that patient\'s own '
-              'epochs, with the domain\'s channels averaged per epoch. NOT the model\'s BLUPs -- '
-              'partial pooling drags every subject toward the group and makes BLUP agreement '
-              'come out at 0.8-1.0 everywhere.\n'
-              'WHAT THE NULL IS, because this statistic is counterintuitive: the group sign is '
-              'NOT an independent yardstick -- it is estimated from the very subjects being '
-              'counted, so it automatically points wherever the majority already points. With '
-              '43 subjects of pure noise the majority is 22-21 at worst and about 24-19 on '
-              'average, i.e. ~56% agreement out of nothing at all; a binomial test against 0.5 '
-              'would call that significant. The null takes the OBSERVED slopes, flips each '
-              f'subject\'s sign at random {N_PERM:,} times -- which destroys any shared '
-              'direction while keeping every magnitude and precision -- and each time '
-              're-derives the group sign the same way the real analysis does (the sign of the '
-              'inverse-variance weighted mean) and recounts. "null 54%" therefore reads: if '
-              'these patients had slopes of exactly these sizes pointing in random directions, '
-              '54% would still agree with the majority. THE NULL RISES AS n FALLS -- it is '
-              '53-55% at n=43 and 55-58% at n=20 -- so 80% in Modulatory (n=20) and 80% in '
-              'Cognitive (n=46) are NOT the same evidence, which is exactly why no single fixed '
-              'threshold works. A cell BELOW its null is noise, not a reversed effect.\n'
-              'HATCHED CELLS ARE NOT BH-SIGNIFICANT IN THE GROUP FIT, and their agreement '
-              'number should not be read: the statistic is "share of subjects with THE GROUP\'S '
-              'sign", and where beta is indistinguishable from zero that sign is arbitrary. '
-              'beta is printed in every cell so this is checkable in place. Black outlines are '
-              'the BH-significant cells, so this overlays fig_domain_summary. A subject casts a '
-              'full vote however noisy their slope is -- which is what '
-              'fig_domain_consistency_strip is for. '
-              + caveat + '\n' + DISCLAIMER)
-    fig.savefig(out, dpi=150, bbox_inches='tight')
+              'Coloured = more agreement than a sign-flip null (BH q=0.05); grey = not. '
+              'Per-subject slopes are unpooled OLS. n = '
+              + ', '.join(f'{d} {int(np.nanmax(nn[i]))}'
+                          for i, d in enumerate(domains)) + '. ' + DISCLAIMER)
+    fig.savefig(out, dpi=200, bbox_inches='tight')
     plt.close(fig)
     logger.info('wrote %s', out.name)
 
@@ -719,6 +721,11 @@ def main():
     ap.add_argument('--notch-half-width-hz', type=float, default=None)
     ap.add_argument('--n-perm', type=int, default=N_PERM)
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--fdr-q', type=float, default=0.05,
+                    help='BH level for the sign-flip test, which is what '
+                         'decides which cells the sign figure colours in. A '
+                         'separate family from the group fit\'s own BH: '
+                         '"do patients agree" is not "is the slope nonzero".')
     ap.add_argument('--out-subdir', default=OUT_SUBDIR)
     args = ap.parse_args()
 
@@ -738,10 +745,11 @@ def main():
         group = group.rename(columns={'beta_pain': 'beta'})
 
     cells = cell_stats(slopes, group, domains, bands, n_perm=args.n_perm,
-                       seed=args.seed)
+                       seed=args.seed, fdr_q=args.fdr_q)
 
     logger.info('\n%s', cells[['domain', 'band', 'beta_group', 'n_with_slope',
                                'frac_sign', 'null_frac_mean', 'excess_sign',
+                               'p_signflip', 'p_signflip_bh', 'consistent',
                                'tau', 'i2', 'sd_raw']].to_string(index=False))
 
     out_dir = run_dir / args.out_subdir if args.out_subdir else run_dir
@@ -758,7 +766,7 @@ def main():
     fig_matrix(slopes, cells, domains, bands, bands_def,
                out_dir / 'fig_domain_consistency_matrix.png', caveat)
 
-    shared = {'n_perm': args.n_perm, 'seed': args.seed,
+    shared = {'n_perm': args.n_perm, 'seed': args.seed, 'fdr_q': args.fdr_q,
               'unit': params.get('unit'), 'roi_scheme': params['roi_scheme'],
               'band_set': params['band_set'],
               'min_subjects': MIN_SUBJECTS,
