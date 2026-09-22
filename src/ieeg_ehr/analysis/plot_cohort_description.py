@@ -69,6 +69,15 @@ DISCLAIMER = 'EXPLORATORY -- discovery cohort.'
 #: a domain hue would imply a link that is not there.
 LINE_COLOUR = '#33608c'
 VIOLIN_COLOUR = '#7aa6c2'
+MEDIAN_COLOUR = '#b03a2e'
+
+#: ONE STYLE FOR ALL THREE FIGURES. They are printed together, so a reader
+#: reads them as one object and any difference in tick size, spine weight or
+#: hue reads as meaning. Applied through `_style` rather than rcParams so the
+#: two font sizes stay command-line arguments.
+SPINE_WIDTH = 1.0
+GRID_MARKER, GRID_LINE = 3.2, 1.1
+BIG_MARKER, BIG_LINE = 6.0, 1.7
 
 
 # ============================================================================
@@ -228,18 +237,27 @@ def build(run_dir, args):
 # FIGURES
 # ============================================================================
 
-def _style(ax, args):
+def _style(ax, args, xlabel=None, ylabel=None):
+    """The shared look: same spines, same tick size, same label size."""
     ax.spines[['top', 'right']].set_visible(False)
-    ax.tick_params(labelsize=args.font_tick)
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_linewidth(SPINE_WIDTH)
+        ax.spines[side].set_color('0.25')
+    ax.tick_params(labelsize=args.font_tick, width=SPINE_WIDTH, color='0.25')
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=args.font_label)
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=args.font_label)
 
 
 def draw_timeline(ax, sub, args, label=None, small=False):
     d = sub.dropna(subset=['hours']).sort_values('hours')
+    lw = GRID_LINE if small else BIG_LINE
+    ms = GRID_MARKER if small else BIG_MARKER
     ax.plot(d['hours'], d['pain_score'], '-', color=LINE_COLOUR,
-            lw=1.1 if small else 1.8, alpha=0.75, zorder=1)
+            lw=lw, alpha=0.75, zorder=1)
     ax.plot(d['hours'], d['pain_score'], 'o', color=LINE_COLOUR,
-            ms=3.2 if small else 6.5, mec='white',
-            mew=0.4 if small else 0.9, zorder=2)
+            ms=ms, mec='white', mew=0.4 if small else 0.9, zorder=2)
     ax.set_ylim(-0.6, 10.6)
     ax.set_yticks([0, 5, 10])
     if label:
@@ -270,9 +288,9 @@ def fig_grid(df, stats, out_path, args):
                       label=f'{sid.replace("sub-", "")}  '
                             f'n={int(s.n_assessments)}')
         if k % ncol == 0:
-            ax.set_ylabel('Pain score', fontsize=args.font_tick)
+            ax.set_ylabel('Pain score', fontsize=args.font_label)
         if k // ncol == nrow - 1:
-            ax.set_xlabel('Hours since admission', fontsize=args.font_tick)
+            ax.set_xlabel('Hours since admission', fontsize=args.font_label)
     for k in range(len(subs), nrow * ncol):
         axes[k // ncol][k % ncol].axis('off')
     fig.tight_layout()
@@ -284,8 +302,7 @@ def fig_grid(df, stats, out_path, args):
 def fig_example(df, stats, sid, out_path, args):
     fig, ax = plt.subplots(figsize=tuple(args.example_figsize))
     draw_timeline(ax, df[df['subject_id'] == sid], args)
-    ax.set_xlabel('Hours since admission', fontsize=args.font_label)
-    ax.set_ylabel('Pain score', fontsize=args.font_label)
+    _style(ax, args, xlabel='Hours since admission', ylabel='Pain score')
     fig.tight_layout()
     fig.savefig(out_path, dpi=args.dpi, bbox_inches='tight', pad_inches=0.05)
     plt.close(fig)
@@ -309,27 +326,40 @@ def fig_violins(stats, out_path, args):
     for ax, (col, label, fmt) in zip(axes, panels):
         v = stats[col].to_numpy(dtype=float)
         v = v[np.isfinite(v)]
-        parts = ax.violinplot([v], showextrema=False, widths=0.85)
+        parts = ax.violinplot([v], showextrema=False,
+                              widths=args.violin_width)
         for b in parts['bodies']:
             b.set_facecolor(VIOLIN_COLOUR)
             b.set_alpha(0.55)
             b.set_edgecolor('0.35')
             b.set_linewidth(0.8)
-        ax.scatter(1 + rng.uniform(-0.09, 0.09, len(v)), v, s=22,
+        jitter = args.violin_width * 0.22
+        ax.scatter(1 + rng.uniform(-jitter, jitter, len(v)), v, s=20,
                    color='0.22', alpha=0.65, edgecolor='none', zorder=3)
         med = float(np.median(v))
-        ax.hlines(med, 0.62, 1.38, color='#b03a2e', lw=2.2, zorder=4)
-        # Median and range in the corner rather than a legend: the numbers a
-        # reader would otherwise have to estimate off the axis.
-        ax.text(0.5, 1.02, f'median {fmt.format(med)}   '
-                           f'({fmt.format(np.min(v))}–{fmt.format(np.max(v))})',
-                transform=ax.transAxes, ha='center', va='bottom',
-                fontsize=args.font_tick, color='0.3')
-        ax.set_ylabel(label, fontsize=args.font_label)
+        half = args.violin_width * 0.62
+        ax.hlines(med, 1 - half, 1 + half, color=MEDIAN_COLOUR, lw=2.2,
+                  zorder=4)
+        # THE MEDIAN ALONE. The min-max in parentheses was redundant with the
+        # figure it sat on -- every patient is already drawn as a dot, so the
+        # extremes are the top and bottom dots -- and it made three short
+        # headings into three long ones.
+        txt = f'median {fmt.format(med)}'
+        if args.violin_annot == 'median_range':
+            txt += f'   {fmt.format(np.min(v))}–{fmt.format(np.max(v))}'
+        if args.violin_annot != 'none':
+            ax.text(0.5, 1.02, txt, transform=ax.transAxes, ha='center',
+                    va='bottom', fontsize=args.font_tick, color='0.3')
         ax.set_xticks([])
-        ax.set_xlim(0.45, 1.55)
-        _style(ax, args)
-        ax.spines['bottom'].set_visible(False)
+        # Tight to the violin, or a narrow violin just sits in a wide empty
+        # panel and looks smaller rather than neater.
+        ax.set_xlim(1 - args.violin_width, 1 + args.violin_width)
+        _style(ax, args, ylabel=label)
+        # THE BOTTOM SPINE STAYS, the tick labels do not. Hiding the spine
+        # leaves the violin floating with nothing to sit on; the labels would
+        # only ever read "1", which is an artefact of violinplot's positional
+        # x and says nothing.
+        ax.tick_params(axis='x', length=0)
 
     axes[1].set_ylim(0, 10)
     fig.tight_layout()
@@ -376,9 +406,18 @@ def main():
     ap.add_argument('--grid-n', type=int, default=16)
     ap.add_argument('--grid-cols', type=int, default=4)
     ap.add_argument('--example-figsize', nargs=2, type=float,
-                    default=[9.0, 4.0], metavar=('W', 'H'))
+                    default=[10.0, 2.6], metavar=('W', 'H'),
+                    help='SHORT on purpose: a pain timeline is a 0-10 score, '
+                         'so a tall panel spends its height on empty range '
+                         'rather than on resolving the trace.')
     ap.add_argument('--violin-figsize', nargs=2, type=float,
-                    default=[11.0, 4.2], metavar=('W', 'H'))
+                    default=[9.0, 3.6], metavar=('W', 'H'))
+    ap.add_argument('--violin-width', type=float, default=0.45,
+                    help='Violin width in axis units. The x limits track it, '
+                         'so a narrower violin does not just sit in a wider '
+                         'empty panel.')
+    ap.add_argument('--violin-annot', default='median',
+                    choices=['median', 'median_range', 'none'])
     ap.add_argument('--font-label', type=float, default=15)
     ap.add_argument('--font-tick', type=float, default=13)
     ap.add_argument('--dpi', type=int, default=400)
