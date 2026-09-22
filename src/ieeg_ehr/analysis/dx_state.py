@@ -221,9 +221,24 @@ def subject_labels(dx, condition='mdd', window_days=DEFAULT_WINDOW_DAYS,
     Returns `(labels, detail)`.
 
     `labels` is one row per SUBJECT: `subject_id, dx_state, n_codes,
-    n_clinical_codes, n_billing_codes, first_days_before, sources`.
-    `dx_state` is a bool. The model needs a subject-level constant because the
-    variable is a subject-level constant; see the module docstring.
+    n_clinical_codes, n_billing_codes, first_days_before, last_days_before,
+    sources`. `dx_state` is a bool. The model needs a subject-level constant
+    because the variable is a subject-level constant; see the module docstring.
+
+    THE TWO AGE COLUMNS ARE OPPOSITE ENDS OF THE SAME SPAN, both in days before
+    `session_start`, both NaN for a control by construction:
+
+      - `first_days_before` is the OLDEST matching code -- how far back the
+        record reaches. Rolled up across sessions with `max`.
+      - `last_days_before` is the MOST RECENT matching code -- how STALE the
+        label is at the time of the admission the iEEG comes from. Rolled up
+        with `min`.
+
+    `last_days_before` is the one that says whether a window of N days would
+    have caught this subject: it is <= N exactly when the subject is a case at
+    `window_days=N`. Under a non-zero window it is bounded by that window and
+    so carries little information; it is worth reading at `window_days=0`,
+    where it is the unconstrained recency of the label.
 
     `detail` is one row per subject-SESSION, kept because the window is anchored
     on that session's own `session_start` and a subject with two admissions has
@@ -260,7 +275,8 @@ def subject_labels(dx, condition='mdd', window_days=DEFAULT_WINDOW_DAYS,
                            'labelled False', sid, ses)
             rows.append({'subject_id': sid, 'session_id': ses, 'dx_state': False,
                          'n_codes': 0, 'n_clinical_codes': 0, 'n_billing_codes': 0,
-                         'first_days_before': np.nan, 'sources': '',
+                         'first_days_before': np.nan,
+                         'last_days_before': np.nan, 'sources': '',
                          'no_session_start': True})
             continue
         t0 = start.iloc[0]
@@ -280,6 +296,7 @@ def subject_labels(dx, condition='mdd', window_days=DEFAULT_WINDOW_DAYS,
             'n_billing_codes': int(hit['source'].isin(
                 SOURCE_SETS['billing']).sum()),
             'first_days_before': float(days_before.max()) if len(hit) else np.nan,
+            'last_days_before': float(days_before.min()) if len(hit) else np.nan,
             'sources': ';'.join(sorted(set(hit['source']))),
             'no_session_start': False,
         })
@@ -299,6 +316,7 @@ def subject_labels(dx, condition='mdd', window_days=DEFAULT_WINDOW_DAYS,
                    n_clinical_codes=('n_clinical_codes', 'sum'),
                    n_billing_codes=('n_billing_codes', 'sum'),
                    first_days_before=('first_days_before', 'max'),
+                   last_days_before=('last_days_before', 'min'),
                    n_sessions=('session_id', 'size'))
               .reset_index())
     labels['sources'] = labels['subject_id'].map(
@@ -341,7 +359,12 @@ def stratum_summary(labels, pain_by_subject=None):
                # left to emit an "empty slice" warning that looks like a bug.
                'median_days_before': (float(grp['first_days_before'].median())
                                       if grp['first_days_before'].notna().any()
-                                      else np.nan)}
+                                      else np.nan),
+               # Recency of the label, the quantity a window thresholds on.
+               'median_days_since_last': (
+                   float(grp['last_days_before'].median())
+                   if 'last_days_before' in grp
+                   and grp['last_days_before'].notna().any() else np.nan)}
         if pain_by_subject is not None:
             sub = pain_by_subject[pain_by_subject['subject_id'].isin(grp['subject_id'])]
             for col in sub.select_dtypes('number').columns:

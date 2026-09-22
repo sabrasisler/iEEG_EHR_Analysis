@@ -29,6 +29,13 @@ area:
 
 Onboarding / cross-project reference:
 
+- `docs/dataset_v2.md` — the `iEEG_EHR_V2` re-conversion: what differs from the
+  original NWBs and what that breaks. **Read before writing or pointing any
+  loading code at `iEEG_EHR_V2/`.** The data is bit-identical, but
+  `session_start_time` now means the SESSION (not the run) and `starting_time`
+  carries the run offset, so V1's absolute-time formula is silently wrong on V2;
+  chunking changed to 120 s × 1 channel. Also carries an open question about
+  channel-major processing worth measuring at the next re-extraction.
 - `docs/data_sop.md` — the SOP for anyone using the `iEEG_EHR` dataset on
   Sherlock: the Oak map (raw, `badchan/`, `derivatives/`), access and env setup,
   identity/time conventions, what already exists so it isn't recomputed, storage

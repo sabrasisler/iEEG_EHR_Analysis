@@ -106,6 +106,7 @@ import pandas as pd
 from ieeg_ehr import config, io
 from ieeg_ehr.analysis import cluster_permutation as cp
 from ieeg_ehr.analysis import dx_state, fullres_cells, med_state, mixed_model as mm
+from ieeg_ehr.analysis import domain_med_cells
 from ieeg_ehr.analysis import reference_run, view_tables
 from ieeg_ehr.analysis.run_bandpower_mixed import (BAND_SETS, DX_CAVEAT,
                                                      band_table, aggregate)
@@ -927,6 +928,17 @@ def main():
                          'Lets a convergence probe try alternative random-effect '
                          'specifications on the IDENTICAL data without paying the '
                          'view load again.')
+    ap.add_argument('--per-domain', action='store_true',
+                    help='PANEL F MODEL: fit each DOMAIN SEPARATELY '
+                         '(log10_power ~ NRS_within * med_within + '
+                         'NRS_submean + med_submean + (NRS_within + '
+                         'med_within || subject) + (1 | subject:channel)) '
+                         'instead of one model per band with domain as a '
+                         'fixed effect. There is then NO reference domain, '
+                         'NO between-domain contrast and NO omnibus -- '
+                         'multiplicity is BH across the domain x band grid, '
+                         'within each term. Requires --med-model interaction. '
+                         'See analysis.domain_med_cells.')
     ap.add_argument('--drop-parcel-term', action='store_true',
                     help='Fit WITHOUT the parcel-nested random slope '
                          '(subj_parcel_slope). It is the smallest variance '
@@ -984,6 +996,15 @@ def main():
 
     # Refused HERE rather than at the first fit: the view load ahead of it is
     # minutes of work, and failing after it would waste all of them.
+    if args.per_domain and args.med_model == 'none':
+        raise SystemExit('--per-domain fits a medication model '
+                         '(NRS_within * med_within); it needs '
+                         '--med-model interaction. Without medication terms '
+                         'there is nothing left but a pain slope per domain, '
+                         'which the default model already gives you with a '
+                         'between-domain contrast on top.')
+    if args.per_domain and args.dx_model != 'none':
+        raise SystemExit('--per-domain does not carry the diagnosis design.')
     if args.med_model != 'none' and args.dx_model != 'none':
         raise SystemExit(
             '--med-model and --dx-model together would be a FOUR-way design '
@@ -1203,6 +1224,7 @@ def main():
             + ([args.drug_set] if args.med_model != 'none' else [])
             + ([f'{args.dx}{args.dx_window_days}d']
                if args.dx_model != 'none' else [])
+            + (['perdomain'] if args.per_domain else [])
             + (['noparcel'] if args.drop_parcel_term else [])
             + ([f'excl{args.exclude_drug_set}'] if args.exclude_drug_set else [])
             + ([f'randdrop{args.drop_random_unmedicated}s{args.drop_seed}']
@@ -1262,11 +1284,21 @@ def main():
                            script=SCRIPT)
         if med_lookup is not None:
             df = mm.add_med_components(df)
-        rec, slopes = fit_band(df, domains, band, med=med_lookup is not None,
-                               dx=dx_lookup is not None, out_dir=run_dir,
-                               drop_parcel=args.drop_parcel_term)
-        records.append(rec)
-        slope_parts.append(slopes)
+        if args.per_domain:
+            # One fit per domain, no domain term. `domains` is only the list of
+            # columns to iterate; nothing in the model knows about it.
+            for dom in domains:
+                sub = df[df['domain'] == dom]
+                rec, sl = domain_med_cells.fit_domain_cell(sub, band, dom)
+                records.append(rec)
+                if len(sl):
+                    slope_parts.append(sl)
+        else:
+            rec, slopes = fit_band(df, domains, band, med=med_lookup is not None,
+                                   dx=dx_lookup is not None, out_dir=run_dir,
+                                   drop_parcel=args.drop_parcel_term)
+            records.append(rec)
+            slope_parts.append(slopes)
 
     cells = pd.DataFrame(records)
     slopes = pd.concat(slope_parts, ignore_index=True)
@@ -1288,7 +1320,9 @@ def main():
                     int((adj <= args.fdr_q).sum()))
     slopes['p_bh_reject'] = slopes['p_bh'] <= args.fdr_q
 
-    m = cells['p_omnibus'].notna()
+    # No omnibus exists in --per-domain mode: there is no domain block to test.
+    m = (cells['p_omnibus'].notna() if 'p_omnibus' in cells.columns
+         else pd.Series(False, index=cells.index))
     cells['p_omnibus_bh'] = np.nan
     if m.any():
         _, adj = cp.bh_fdr(cells.loc[m, 'p_omnibus'].to_numpy(), q=args.fdr_q)
@@ -1300,11 +1334,18 @@ def main():
     # medication or diagnosis run wrote provenance naming a model it had not
     # fitted -- the one kind of provenance error that cannot be caught later,
     # because the file looks complete and self-consistent.
-    params = {'formula': domain_formula(
-                  domains, med=args.med_model != 'none',
-                  dx=args.dx_model != 'none')[0],
-              'variance_components': (VC_DOMAIN_NO_PARCEL
-                                      if args.drop_parcel_term else VC_DOMAIN),
+    params = {'formula': (domain_med_cells.CELL_FORMULA if args.per_domain
+                          else domain_formula(
+                              domains, med=args.med_model != 'none',
+                              dx=args.dx_model != 'none')[0]),
+              'per_domain': args.per_domain,
+              'fit_unit': ('one fit per DOMAIN x BAND, no domain term, no '
+                           'reference domain, no omnibus' if args.per_domain
+                           else 'one fit per BAND with domain as a fixed effect'),
+              'variance_components': (
+                  domain_med_cells.VC_CELL if args.per_domain
+                  else (VC_DOMAIN_NO_PARCEL if args.drop_parcel_term
+                        else VC_DOMAIN)),
               'drop_parcel_term': args.drop_parcel_term,
               'dx_model': args.dx_model,
               'dx': args.dx if args.dx_model != 'none' else None,
@@ -1326,7 +1367,8 @@ def main():
                   + ('separate' if args.hemisphere_separate else 'collapsed')),
               'insula_threshold': args.insula_threshold,
               **split_report,
-              'reference_domain': domain_formula(domains)[1],
+              'reference_domain': (None if args.per_domain
+                                   else domain_formula(domains)[1]),
               'band_set': args.band_set, 'roi_scheme': args.roi_scheme,
               'med_model': args.med_model,
               'drug_set': args.drug_set if args.med_model != 'none' else None,
@@ -1372,11 +1414,21 @@ def main():
                                    'mask_content': CONFOUND_CAVEAT,
                                    **({'dx_caveat': DX_CAVEAT}
                                       if args.dx_model != 'none' else {})})
-    summary_figure(run_dir, cells, slopes, per_domain, domains, args)
-    figure(run_dir, cells, slopes, per_domain, domains, args)
-    for _t in SPECTRA_TERMS:
-        figure_by_domain(run_dir, cells, slopes, per_domain, domains,
-                         args, term=_t)
+    if args.per_domain:
+        # Every existing domain figure reads a reference domain and an omnibus,
+        # neither of which this model has. Drawing them would print a reference
+        # column and an omnibus p that no test produced.
+        sub = med_subtitle(args)
+        domain_med_cells.figure_f1(run_dir, slopes, cells, domains, want,
+                                   DOMAIN_COLOURS, subtitle=sub)
+        domain_med_cells.figure_f2(run_dir, slopes, cells, domains, want,
+                                   DOMAIN_COLOURS, subtitle=sub)
+    else:
+        summary_figure(run_dir, cells, slopes, per_domain, domains, args)
+        figure(run_dir, cells, slopes, per_domain, domains, args)
+        for _t in SPECTRA_TERMS:
+            figure_by_domain(run_dir, cells, slopes, per_domain, domains,
+                             args, term=_t)
     if args.dx_model != 'none':
         dx_domain_figure(run_dir, cells, slopes, domains, args)
         dx_circuit_figure(run_dir, cells, slopes, domains, args)
@@ -1692,6 +1744,16 @@ def dx_domain_figure(run_dir, cells, slopes, domains, args):
 #: switch), so one scale across terms would be the dual-axis mistake wearing a
 #: different hat. The omnibus column differs per term too -- it is a separate
 #: joint Wald on that term's interaction block.
+def med_subtitle(args):
+    """One line naming the exposure a medication figure is about."""
+    if args.med_model == 'none':
+        return ''
+    bits = [f'{args.drug_set} within {args.med_window_hours} h of the score']
+    if args.exclude_drug_set:
+        bits.append(f'compared against epochs free of {args.exclude_drug_set} too')
+    return ', '.join(bits)
+
+
 def random_effects_note(args):
     """The random-effects tail THE RUN ACTUALLY FITTED, as caption text.
 

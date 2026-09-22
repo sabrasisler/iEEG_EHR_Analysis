@@ -295,6 +295,197 @@ def figure_violin(d, table, out_path, args, n_case, n_ctrl, metric='nrs_mean'):
     return out_path
 
 
+#: Reference marks on the recency axis, in days before admission. These are
+#: conventions a reader already carries, not anything the data picks out.
+RECENCY_GUIDES = [(30, '1 mo'), (90, '3 mo'), (365, '1 y'),
+                  (365 * 5, '5 y'), (365 * 10, '10 y')]
+
+#: A code dated exactly ON `session_start` is 0 days before it, which has no
+#: place on a log axis. Only exact zeros are moved here, and the floor is set
+#: an order of magnitude below the smallest real value on this cohort (~0.35 d)
+#: so that clipping never silently swallows a genuine sub-day recency.
+RECENCY_FLOOR_DAYS = 0.02
+
+#: Annotate an empty stretch of the recency axis when the jump across it is at
+#: least this many fold. A gap this size means every window threshold inside it
+#: selects the SAME subjects, which is the most decision-relevant thing the
+#: recency distribution can say about `--dx-window-days`.
+RECENCY_GAP_RATIO = 10.0
+
+
+def figure_recency(d, labels, out_path, args, n_case, n_ctrl):
+    """How STALE is each MDD label, and does staleness track reported pain?
+
+    This is the picture behind the window parameter. `--dx-window-days 90`
+    draws a vertical line through the left panel and calls everything to its
+    right a control; running at `0` ('ever') keeps them all as cases. Neither
+    is obviously right, and the spread of these points is the reason the
+    choice matters.
+
+    LOG AXIS, BECAUSE THE RANGE IS LOGARITHMIC. Recency here runs from days to
+    decades -- problem-list entries are not re-dated, so a code can legitimately
+    sit years before the admission (dx_state docstring, and data_sop.md 5.2:
+    the per-subject offset makes absolute dates fiction but leaves intervals
+    true, which is exactly what is plotted). On a linear axis every recent
+    subject collapses onto the left spine.
+
+    THE RIGHT PANEL IS THE ONE WITH A CLAIM IN IT. If reported pain fell with
+    label staleness, the 'ever' arm would be diluting the contrast and the
+    90-day window would be doing real work. If it is flat, the window is
+    costing arm size and buying nothing.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    case_color, ctrl_color = '#b03a2e', '#4a7fb5'
+    r = labels[labels['dx_state']][['subject_id', 'last_days_before',
+                                    'n_clinical_codes']].dropna(
+        subset=['last_days_before']).copy()
+    n_missing = int(labels['dx_state'].sum()) - len(r)
+    r['days'] = r['last_days_before'].clip(lower=RECENCY_FLOOR_DAYS)
+    n_floored = int((r['last_days_before'] < RECENCY_FLOOR_DAYS).sum())
+    # Billing-only labels are called out because the module docstring is blunt
+    # that they are the weakest evidence in the arm; a stale billing-only code
+    # is the weakest point on this figure and should be visible as such.
+    r['billing_only'] = r['n_clinical_codes'] == 0
+    r = r.sort_values('days').reset_index(drop=True)
+
+    # The widest multiplicative hole in the recency distribution. Every window
+    # threshold inside it picks the same subjects, so if the hole is wide the
+    # window parameter has far fewer distinct settings than it appears to.
+    gap = None
+    v = r['days'].to_numpy()
+    if len(v) > 2:
+        ratios = v[1:] / np.maximum(v[:-1], RECENCY_FLOOR_DAYS)
+        i = int(np.argmax(ratios))
+        if ratios[i] >= RECENCY_GAP_RATIO:
+            gap = (float(v[i]), float(v[i + 1]), int(i + 1))
+
+    fig, (axL, axR) = plt.subplots(
+        1, 2, figsize=(12.4, 6.0), gridspec_kw={'width_ratios': [1.15, 1.0]})
+
+    # ---- left: one row per case subject, sorted by recency -----------------
+    y = np.arange(len(r))
+    axL.axvspan(0, 90, color=case_color, alpha=0.07, zorder=0)
+    axL.hlines(y, r['days'].min() * 0.6, r['days'], color='0.75', lw=1.0,
+               zorder=1)
+    for mask, marker, lbl in ((~r['billing_only'], 'o', 'has a clinical code'),
+                              (r['billing_only'], 'D', 'billing code only')):
+        if mask.any():
+            axL.scatter(r.loc[mask, 'days'], y[mask.to_numpy()], s=34,
+                        marker=marker, color=case_color, edgecolor='white',
+                        linewidth=0.6, zorder=3, label=lbl)
+    for days, lbl in RECENCY_GUIDES:
+        axL.axvline(days, color='0.55', lw=0.8, ls=':', zorder=2)
+        axL.text(days, len(r) + 0.4, lbl, fontsize=7.5, color='0.4',
+                 ha='center', va='bottom')
+    axL.set_xscale('log')
+    axL.set_xlim(r['days'].min() * 0.6, max(r['days'].max() * 1.6, 400))
+    axL.set_ylim(-1, len(r) + 1.5)
+    floor_note = (f'; {n_floored} code(s) dated exactly at admission plotted '
+                  f'at {RECENCY_FLOOR_DAYS} d' if n_floored else '')
+    axL.set_xlabel(f'Days from most recent {args.dx.upper()} code to '
+                   f'admission  (log scale{floor_note})', fontsize=9)
+    axL.set_ylabel(f'{args.dx.upper()}+ subjects, sorted by recency', fontsize=10)
+    axL.set_yticks([])
+    axL.spines[['top', 'right', 'left']].set_visible(False)
+    axL.tick_params(labelsize=8)
+    axL.legend(fontsize=8, loc='lower right', frameon=False)
+
+    within = int((r['last_days_before'] <= 90).sum())
+    title = (f'{within} of {len(r)} {args.dx.upper()}+ subjects were last '
+             f'coded within 90 d; {len(r) - within} carry only an older code')
+    if gap:
+        lo, hi, n_below = gap
+        title += (f'\nbut the distribution is BIMODAL: nothing between '
+                  f'{lo:.2g} d and {hi:.0f} d, so every window in that range '
+                  f'picks the same {n_below}')
+    axL.set_title(title, fontsize=9.5)
+
+    # A span rather than a shaded region: a second fill on top of the 90 d
+    # band produced three overlapping tones and read as the subject of the
+    # figure, which it is not -- the points are.
+    if gap:
+        lo, hi, _ = gap
+        y_arrow = len(r) - 1.2
+        axL.annotate('', xy=(lo, y_arrow), xytext=(hi, y_arrow),
+                     arrowprops=dict(arrowstyle='<->', color='0.4', lw=1.1))
+        axL.text(np.sqrt(lo * hi), y_arrow - 0.5,
+                 f'no subject coded in here ({lo:.2g}–{hi:.0f} d)',
+                 fontsize=8, color='0.4', ha='center', va='top')
+
+    # ---- right: does a stale label go with less reported pain? -------------
+    m = r.merge(d[['subject_id', 'nrs_mean']], on='subject_id', how='inner')
+    ctrl = d.loc[~d['dx_state'], 'nrs_mean'].dropna()
+    if len(ctrl):
+        axR.axhspan(ctrl.mean() - ctrl.std(ddof=1),
+                    ctrl.mean() + ctrl.std(ddof=1),
+                    color=ctrl_color, alpha=0.12, zorder=0)
+        axR.axhline(ctrl.mean(), color=ctrl_color, lw=1.6, zorder=1)
+        axR.text(0.015, ctrl.mean(), f'{args.dx.upper()}− mean ± SD '
+                 f'(n={n_ctrl})', transform=axR.get_yaxis_transform(),
+                 fontsize=8, color=ctrl_color, va='bottom', ha='left')
+    axR.axvspan(0, 90, color=case_color, alpha=0.07, zorder=0)
+    axR.scatter(m['days'], m['nrs_mean'], s=40, color=case_color,
+                edgecolor='white', linewidth=0.6, zorder=3)
+    for days, _lbl in RECENCY_GUIDES:
+        axR.axvline(days, color='0.55', lw=0.8, ls=':', zorder=2)
+
+    # Spearman, not Pearson: recency is heavily right-skewed even in logs and
+    # n is 26, so the rank statistic is the honest one.
+    sub = f'n={len(m)}'
+    if len(m) > 2:
+        from scipy import stats
+        rho, p = stats.spearmanr(m['days'], m['nrs_mean'])
+        sub = f'Spearman rho={rho:+.2f}, p={p:.3g}, n={len(m)}'
+    axR.set_xscale('log')
+    if len(m):
+        axR.set_xlim(m['days'].min() * 0.6, max(m['days'].max() * 1.6, 400))
+    axR.set_xlabel(f'Days from most recent {args.dx.upper()} code to '
+                   'admission (log scale)', fontsize=9)
+    axR.set_ylabel('Mean reported pain (NRS, 0-10)', fontsize=10)
+    axR.set_title(f'Does a staler label go with less reported pain?\n{sub}',
+                  fontsize=10)
+    axR.spines[['top', 'right']].set_visible(False)
+    axR.tick_params(labelsize=8)
+
+    window = (f'{args.dx_window_days} d before admission'
+              if args.dx_window_days else 'ever')
+    fig.suptitle(f'How recent is the {args.dx.upper()} label?  '
+                 f'[{args.dx.upper()}+ = coded {window}, sources: '
+                 f'{args.dx_sources}; {n_case} {args.dx.upper()}+ / '
+                 f'{n_ctrl} {args.dx.upper()}−]', fontsize=12)
+    fig.tight_layout(rect=(0, 0.11, 1, 0.94))
+
+    stale = ('Recency is the quantity the --dx-window-days parameter '
+             'thresholds on: at a 90 d window every subject to the RIGHT of '
+             'the shaded band is relabelled a control. MDD is recurrent and '
+             'problem-list entries are not re-dated, so an old code is not '
+             'evidence of no current depression -- which is why the wide '
+             '"ever" arm is the primary here and the narrow window is the '
+             'sensitivity check. Intervals are exact under the per-subject '
+             'time offset even though absolute dates are not.')
+    n_subday = int((r['last_days_before'] < 1).sum())
+    if n_subday:
+        stale += (f' READ THE LEFT CLUSTER CAREFULLY: {n_subday} subject(s) '
+                  'have their most recent code dated LESS THAN A DAY before '
+                  'session_start. The window is right-closed at session_start '
+                  'precisely so the admission cannot define its own '
+                  'predictor, but EHR dates appear to be day-resolution, so a '
+                  'code entered during the admission day can still land just '
+                  'inside it. Those labels may be the encounter the iEEG '
+                  'comes from, not prior history.')
+    if n_missing:
+        stale += (f' {n_missing} {args.dx.upper()}+ subject(s) omitted: a '
+                  'matching code with no parseable date.')
+    fig.text(0.01, 0.005, f'{textwrap.fill(stale, width=168)}\n{DISCLAIMER}',
+             fontsize=6.5, va='bottom', ha='left', color='0.35')
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return out_path
+
+
 def main():
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -310,11 +501,14 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP),
                     help='Where the subject list comes from, so this figure '
                          'describes the SAME cohort the models are fitted on.')
-    ap.add_argument('--figure', choices=('panels', 'violin'), default='panels',
+    ap.add_argument('--figure', choices=('panels', 'violin', 'recency'),
+                    default='panels',
                     help="'panels' = all four metrics in one strip-plot "
                          "figure; 'violin' = ONE STANDALONE FIGURE PER "
                          "--metric, each a violin with the subjects "
-                         "scattered on it.")
+                         "scattered on it; 'recency' = how stale each case's "
+                         "most recent code is, and whether that tracks pain "
+                         "(read it at --dx-window-days 0).")
     ap.add_argument('--metric', nargs='+', choices=[c for c, _, _ in METRICS],
                     default=[c for c, _, _ in METRICS],
                     help='Which metrics --figure violin draws, one figure '
@@ -337,6 +531,12 @@ def main():
     pain = dx_state.pain_by_subject(subjects=bare)
 
     d, table = compare(pain, labels)
+    # Recency rides along in the per-subject CSV rather than in a file of its
+    # own: it is one more column about the same subjects, and the figure that
+    # uses it should not be the only place the numbers exist.
+    d = d.merge(labels[['subject_id', 'last_days_before', 'first_days_before',
+                        'n_clinical_codes', 'n_billing_codes']],
+                on='subject_id', how='left')
     n_case = int(d['dx_state'].sum())
     n_ctrl = int((~d['dx_state']).sum())
     logger.info('\n%s', table.to_string(index=False))
@@ -360,7 +560,17 @@ def main():
     io.write_table(dx_state.stratum_summary(labels, pain),
                    run_dir / 'dx_stratum_summary.csv', params=params, script=SCRIPT)
 
-    if args.figure == 'violin':
+    if args.figure == 'recency':
+        if args.dx_window_days:
+            logger.warning('--figure recency under a %d d window: recency is '
+                           'bounded by the window by construction and the '
+                           'figure will only show that. Re-run with '
+                           '--dx-window-days 0 for the real distribution.',
+                           args.dx_window_days)
+        outs = [figure_recency(d, labels,
+                               run_dir / 'fig_dx_recency.png',
+                               args, n_case, n_ctrl)]
+    elif args.figure == 'violin':
         outs = [figure_violin(d, table,
                               run_dir / f'fig_dx_pain_{m}_violin.png',
                               args, n_case, n_ctrl, metric=m)
