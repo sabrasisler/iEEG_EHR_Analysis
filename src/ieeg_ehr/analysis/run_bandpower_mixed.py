@@ -882,11 +882,18 @@ def stage_collect(args):
                           'band_caveat': band_caveat(args.band_set)})
 
     report(cells[cells['model'] == 'pain'], args.fdr_q)
-    figures(run_dir, cells[cells['model'] == 'pain'], args)
-    if cells['model'].isin(('med_decomposed', 'med_matched')).any():
-        med_figure(run_dir, cells, args)
+    # The TABLES and the BH correction are the analysis; the figures are a
+    # separate act. --no-figures exists so a run can be collected, corrected
+    # and reported without committing to a plot design.
+    if not args.no_figures:
+        figures(run_dir, cells[cells['model'] == 'pain'], args)
+        if cells['model'].isin(('med_decomposed', 'med_matched')).any():
+            med_figure(run_dir, cells, args)
+        if cells['model'].str.startswith('dx_').any():
+            dx_figure(run_dir, cells, args)
+    else:
+        logger.info('--no-figures: tables and BH written, no plots drawn')
     if cells['model'].str.startswith('dx_').any():
-        dx_figure(run_dir, cells, args)
         dx_report(cells, args.fdr_q)
     write_methods(run_dir, cells, args)
     io.log_analysis(f'band-power mixed-effects models, {len(cells)} region x band '
@@ -1463,6 +1470,9 @@ def main():
                     help='Hours before the ASSESSMENT that count as recently '
                          'dosed (default 2.0). Anchored on the score, not the '
                          'epoch start.')
+    ap.add_argument('--no-figures', action='store_true',
+                    help='Collect, BH-correct and write the tables, but draw '
+                         'nothing. For when the plot design is still open.')
     ap.add_argument('--dx-model', choices=['none', 'interaction'], default='none',
                     help='Add a SUBJECT-LEVEL diagnosis as a moderator of the '
                          'pain slope: NRS_within * dx_state. The random effects '

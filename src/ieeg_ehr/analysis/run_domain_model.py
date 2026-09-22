@@ -922,6 +922,11 @@ def main():
                          'pain encoding, which is a different question from '
                          '"does this circuit differ between groups" -- hide it '
                          'when only the latter is being asked.')
+    ap.add_argument('--save-frames', action='store_true',
+                    help='Write each band\'s model frame to frames/<band>.parquet. '
+                         'Lets a convergence probe try alternative random-effect '
+                         'specifications on the IDENTICAL data without paying the '
+                         'view load again.')
     ap.add_argument('--drop-parcel-term', action='store_true',
                     help='Fit WITHOUT the parcel-nested random slope '
                          '(subj_parcel_slope). It is the smallest variance '
@@ -1247,6 +1252,14 @@ def main():
             frame = frame.merge(dx_lookup, on='subject_id', how='inner')
             extra.append('dx_state')
         df = mm.build_cell_frame(frame, extra_columns=tuple(extra))
+        if args.save_frames:
+            # The model frame EXACTLY as fitted, so a convergence probe can try
+            # alternative specifications without re-reading the view (minutes)
+            # and without the risk of rebuilding a subtly different frame.
+            io.write_table(df, run_dir / 'frames' / f'{band}.parquet',
+                           params={'band': band, 'unit': args.unit,
+                                   'roi_scheme': args.roi_scheme},
+                           script=SCRIPT)
         if med_lookup is not None:
             df = mm.add_med_components(df)
         rec, slopes = fit_band(df, domains, band, med=med_lookup is not None,
