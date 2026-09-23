@@ -43,12 +43,18 @@ from ieeg_ehr import io
 from ieeg_ehr.analysis import cluster_permutation as cp
 from ieeg_ehr.analysis.domain_med_cells import (_band_labels, _grid,
                                                 subject_dosed_fraction)
+from ieeg_ehr.analysis.plot_domain_anatomy import DOMAIN_HUES, OTHER_GREY
 from ieeg_ehr.analysis.plot_domain_lmer import BAND_ORDER, DOMAIN_ORDER
-from ieeg_ehr.analysis.run_domain_model import DOMAIN_COLOURS
 
 logger = logging.getLogger(__name__)
 
 SCRIPT = 'ieeg_ehr/analysis/plot_domain_lmer_med.py'
+
+#: The coverage glass brain's hues (`plot_domain_anatomy`), so a domain is the
+#: same colour here as on the anatomy figure. Imported, not copied: a palette
+#: change there must recolour these too. Control takes that figure's grey.
+DOMAIN_COLOURS = dict(zip([d for d in DOMAIN_ORDER if d != 'Control'],
+                          DOMAIN_HUES), Control=OTHER_GREY)
 
 DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
               'Not confirmed out of sample.')
