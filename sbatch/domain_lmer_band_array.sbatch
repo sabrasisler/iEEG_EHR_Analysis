@@ -41,9 +41,15 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}
 : "${FRAMES_GLOB:?FRAMES_GLOB must be exported by the submit wrapper}"
 : "${VIEW_SCHEME:?VIEW_SCHEME must be exported by the submit wrapper}"
 
-FRAMES_DIR=$(ls -1d ${FRAMES_GLOB} 2>/dev/null | sort | tail -1)
+# `|| true` IS LOad-BEARING. Under `set -euo pipefail` a failing `ls` inside the
+# substitution aborts the script AT THIS LINE, so the guard below never runs and
+# the job dies with nothing in the log but module noise -- which is exactly how
+# this failed the first time. Let the pipeline fail softly and report it here.
+FRAMES_DIR=$(ls -1d ${FRAMES_GLOB} 2>/dev/null | sort | tail -1 || true)
 if [ -z "${FRAMES_DIR}" ]; then
     echo "FATAL: no frames matched ${FRAMES_GLOB}" >&2
+    echo "candidates under that parent:" >&2
+    ls -1d "$(dirname "$(dirname "${FRAMES_GLOB}")")"/*/ 2>/dev/null >&2 || true
     exit 1
 fi
 

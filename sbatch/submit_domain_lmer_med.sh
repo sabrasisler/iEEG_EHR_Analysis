@@ -30,20 +30,39 @@ MED_WINDOW_H=${MED_WINDOW_H:-2.0}
 DROP_DOMAIN=${DROP_DOMAIN:-Control}
 
 STAMP=$(date +%Y%m%d-%H%M%S)
-SCHEME="paperbands6hg200-paindomainsv3-roiunit-${DRUG_SET}-4dom-noparcel"
-BASE=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/pain/bandpower/domain_model/${SCHEME}
-RUN_DIR="${BASE}/domain_lmer_${STAMP}"
+DOMBASE=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/pain/bandpower/domain_model
+
+# TWO SCHEMES, NOT ONE, and conflating them cost a silent array failure.
+#
+# FRAMES_SCHEME is composed by run_domain_model from ITS OWN arguments -- this
+# script does not get to name it. OUT_SCHEME is where the lme4 results go, and
+# carries the `-4dom` tag because dropping Control happens at FIT time in R,
+# which the frames know nothing about. Inventing `-4dom` for the frames path
+# made the glob match nothing.
+FRAMES_SCHEME="paperbands6hg200-paindomainsv3-roiunit-${DRUG_SET}-noparcel"
+OUT_SCHEME="paperbands6hg200-paindomainsv3-roiunit-${DRUG_SET}-4dom-noparcel"
+
+RUN_DIR="${DOMBASE}/${OUT_SCHEME}/domain_lmer_${STAMP}"
 FRAMES_RUN="lmer_frames_${STAMP}"
 
 # A GLOB: analysis_run_dir appends its OWN timestamp to --run-name, so no path
 # composed here can be right. Stages 2 and 3 resolve it.
-FRAMES_GLOB="${BASE}/${FRAMES_RUN}_*/frames"
+FRAMES_GLOB="${DOMBASE}/${FRAMES_SCHEME}/${FRAMES_RUN}_*/frames"
 
 mkdir -p logs "${RUN_DIR}/bands"
 echo "drug set: ${DRUG_SET} | window ${MED_WINDOW_H}h | dropping: ${DROP_DOMAIN}"
 echo "run dir:  ${RUN_DIR}"
 
 # ---- stage 1: frames -------------------------------------------------------
+# Frames are a pure function of (view, cohort, roi scheme, drug set, window) and
+# carry their own provenance, so reusing a valid set to re-run only the fits is
+# both traceable and free. EXISTING_FRAMES skips stage 1.
+if [ -n "${EXISTING_FRAMES:-}" ]; then
+    [ -d "${EXISTING_FRAMES}" ] || { echo "no such frames: ${EXISTING_FRAMES}" >&2; exit 1; }
+    FRAMES_GLOB="${EXISTING_FRAMES}"
+    echo "stage 1 frames:  SKIPPED, reusing ${EXISTING_FRAMES}"
+    ARRAY_DEP=""
+else
 FRAMES_JOB=$(sbatch --parsable \
   -J lmer_med_frames -p ckeller1 -t 01:00:00 -c 4 --mem=32GB \
   -o logs/lmer_med_frames_%j.out -e logs/lmer_med_frames_%j.err \
@@ -59,11 +78,13 @@ FRAMES_JOB=$(sbatch --parsable \
             --med-window-hours ${MED_WINDOW_H} \
             --frames-only --run-name ${FRAMES_RUN}")
 echo "stage 1 frames:  ${FRAMES_JOB}"
+ARRAY_DEP="--dependency=afterok:${FRAMES_JOB}"
+fi
 
 # ---- stage 2: one fit per band --------------------------------------------
 ARRAY_JOB=$(sbatch --parsable \
-  --dependency=afterok:"${FRAMES_JOB}" \
-  --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_GLOB="${FRAMES_GLOB}",DROP_DOMAIN="${DROP_DOMAIN}",VIEW_SCHEME="${SCHEME}" \
+  ${ARRAY_DEP} \
+  --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_GLOB="${FRAMES_GLOB}",DROP_DOMAIN="${DROP_DOMAIN}",VIEW_SCHEME="${OUT_SCHEME}" \
   sbatch/domain_lmer_band_array.sbatch)
 echo "stage 2 array:   ${ARRAY_JOB}"
 
@@ -81,7 +102,7 @@ COLLECT_JOB=$(sbatch --parsable \
           FD=\$(ls -1d ${FRAMES_GLOB} | sort | tail -1); \
           python -m ieeg_ehr.analysis.run_domain_lmer \
             --frames-dir \"\$FD\" --run-dir ${RUN_DIR} --collect-only \
-            --drop-domain ${DROP_DOMAIN} --view-scheme ${SCHEME}")
+            --drop-domain ${DROP_DOMAIN} --view-scheme ${OUT_SCHEME}")
 echo "stage 3 collect: ${COLLECT_JOB}"
 
 echo
