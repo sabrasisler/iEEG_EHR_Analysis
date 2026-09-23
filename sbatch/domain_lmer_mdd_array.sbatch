@@ -37,7 +37,17 @@ export R_LIBS_USER="$GROUP_HOME/R/4.4.2"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}
 
 : "${RUN_DIR:?RUN_DIR must be exported by the submit wrapper}"
-: "${FRAMES_DIR:?FRAMES_DIR must be exported by the submit wrapper}"
+: "${FRAMES_GLOB:?FRAMES_GLOB must be exported by the submit wrapper}"
+
+# RESOLVED HERE, NOT PREDICTED BY THE WRAPPER. `config.analysis_run_dir` ALWAYS
+# appends its own timestamp to --run-name, so a wrapper that composes
+# "<base>/<run_name>/frames" is off by one timestamp and every task dies on a
+# path that never existed. Glob for what stage 1 actually wrote.
+FRAMES_DIR=$(ls -1d ${FRAMES_GLOB} 2>/dev/null | sort | tail -1)
+if [ -z "${FRAMES_DIR}" ]; then
+    echo "FATAL: no frames matched ${FRAMES_GLOB}" >&2
+    exit 1
+fi
 
 BANDS=(delta theta alpha beta gamma high_gamma)
 BAND=${BANDS[$SLURM_ARRAY_TASK_ID]}

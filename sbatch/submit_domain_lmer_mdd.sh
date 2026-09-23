@@ -25,14 +25,28 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 BASE=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/analysis/pain/mdd/domain_model/paperbands6hg200-paindomainsv3-roiunit-mdd0d-noparcel
 RUN_DIR="${BASE}/domain_lmer_${STAMP}"
 FRAMES_RUN="lmer_frames_${STAMP}"
-FRAMES_DIR="${BASE}/${FRAMES_RUN}/frames"
+
+# A GLOB, not a path. `config.analysis_run_dir` appends its OWN timestamp to
+# --run-name, so stage 1 lands in `${FRAMES_RUN}_<its own stamp>/frames` and any
+# path composed here is wrong by exactly that suffix. Stages 2 and 3 resolve it.
+FRAMES_GLOB="${BASE}/${FRAMES_RUN}_*/frames"
 
 mkdir -p logs "${RUN_DIR}/bands"
 
-echo "run dir:    ${RUN_DIR}"
-echo "frames dir: ${FRAMES_DIR}"
+echo "run dir:     ${RUN_DIR}"
+echo "frames glob: ${FRAMES_GLOB}"
 
 # ---- stage 1: frames -------------------------------------------------------
+# REUSE. Frames are a pure function of (view, cohort, roi scheme, dx window);
+# rebuilding them to re-run the FITS is wasted work, and the frames carry their
+# own provenance so a reused set is still traceable. Point EXISTING_FRAMES at a
+# previous `<run>/frames` to skip stage 1 entirely.
+if [ -n "${EXISTING_FRAMES:-}" ]; then
+    [ -d "${EXISTING_FRAMES}" ] || { echo "no such frames: ${EXISTING_FRAMES}" >&2; exit 1; }
+    FRAMES_GLOB="${EXISTING_FRAMES}"
+    echo "stage 1 frames:  SKIPPED, reusing ${EXISTING_FRAMES}"
+    ARRAY_DEP=""
+else
 FRAMES_JOB=$(sbatch --parsable \
   -J lmer_mdd_frames -p ckeller1 -t 01:00:00 -c 4 --mem=32GB \
   -o logs/lmer_mdd_frames_%j.out -e logs/lmer_mdd_frames_%j.err \
@@ -47,11 +61,13 @@ FRAMES_JOB=$(sbatch --parsable \
             --dx-model interaction --dx mdd --dx-window-days 0 \
             --question mdd --frames-only --run-name ${FRAMES_RUN}")
 echo "stage 1 frames:  ${FRAMES_JOB}"
+ARRAY_DEP="--dependency=afterok:${FRAMES_JOB}"
+fi
 
 # ---- stage 2: one fit per band --------------------------------------------
 ARRAY_JOB=$(sbatch --parsable \
-  --dependency=afterok:"${FRAMES_JOB}" \
-  --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_DIR="${FRAMES_DIR}" \
+  ${ARRAY_DEP} \
+  --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_GLOB="${FRAMES_GLOB}" \
   sbatch/domain_lmer_mdd_array.sbatch)
 echo "stage 2 array:   ${ARRAY_JOB}"
 
@@ -66,8 +82,9 @@ COLLECT_JOB=$(sbatch --parsable \
           source \$GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate; \
           export PYTHONPATH=$(pwd)/src; \
           export R_LIBS_USER=\$GROUP_HOME/R/4.4.2; \
+          FD=\$(ls -1d ${FRAMES_GLOB} | sort | tail -1); \
           python -m ieeg_ehr.analysis.run_domain_lmer \
-            --frames-dir ${FRAMES_DIR} --run-dir ${RUN_DIR} --collect-only \
+            --frames-dir \"\$FD\" --run-dir ${RUN_DIR} --collect-only \
             --view-scheme paperbands6hg200-paindomainsv3-roiunit-mdd0d-noparcel")
 echo "stage 3 collect: ${COLLECT_JOB}"
 
