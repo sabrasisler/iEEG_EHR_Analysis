@@ -100,7 +100,8 @@ def coverage(run_dir, domains):
         out[dom] = dict(
             n_channels=int(d['channel_uid'].nunique()),
             n_subjects=int(d['subject'].nunique()),
-            pbar=(subject_dosed_fraction(d) if 'epoch_id' in d.columns
+            pbar=(subject_dosed_fraction(d)
+                  if {'epoch_id', 'med_state'} <= set(d.columns)
                   else float('nan')))
     return out
 
@@ -293,7 +294,7 @@ GRID_AXES_H_IN = (GRID_FIGSIZE[1] - GRID_TOP_IN - GRID_GAP_IN
 
 
 def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
-                rows=('F1', 'F2')):
+                rows=('F1', 'F2'), dx=None):
     """F1 over F2 as one figure: rows are the readouts, columns the domains.
 
     `rows=('F1', 'F2')` is the 2 x 4, 7.5 x 7.5 in figure. `rows=('F2',)`
@@ -318,6 +319,15 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
     from ieeg_ehr.med_analysis.plot_poster_epoch_meds import GROUPED_SIZES
 
     rows = tuple(rows)
+    # DIAGNOSIS MODE (`dx` = {'n_case', 'n_control', 'window'}): the same F2
+    # row, with the two slopes being MDD- and MDD+ instead of undosed/dosed.
+    # There is NO F1 for a diagnosis run and asking for one is refused: its
+    # analogue would be the between-patient difference in power LEVEL, which
+    # this run does not save and which is confounded with per-channel gain and
+    # impedance (additive in log power -- the same place a level contrast
+    # lives). A within-patient medication shift does not have that problem.
+    if dx is not None and 'F1' in rows:
+        raise SystemExit('a diagnosis run has no F1; draw --figures grid_f2')
     f1 = None
     if 'F1' in rows:
         f1_src = run_dir / 'domain_med_effect.csv'
@@ -331,16 +341,24 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
     pr = io.read_table(run_dir / 'domain_pairs.csv', on_stale='refuse')
     pr = bh(pr[pr['domain'].isin(domains)], args.fdr_q)
     col = 'NRS_within.trend'
-    und = sl[sl['med'] == 'off'].set_index(['domain', 'band'])
-    dos = sl[sl['med'] == 'on'].set_index(['domain', 'band'])
+    if dx is not None:
+        und = sl[sl['dx'] == 'control'].set_index(['domain', 'band'])
+        dos = sl[sl['dx'] == 'case'].set_index(['domain', 'band'])
+    else:
+        und = sl[sl['med'] == 'off'].set_index(['domain', 'band'])
+        dos = sl[sl['med'] == 'on'].set_index(['domain', 'band'])
     inter = pr.set_index(['domain', 'band'])
 
     n_rows = len(rows)
     W = GRID_FIGSIZE[0]
     H = (GRID_TOP_IN + n_rows * GRID_AXES_H_IN + (n_rows - 1) * GRID_GAP_IN
          + GRID_BOTTOM_IN)
-    window = f'{args.med_window_hours:g} h'
-    drugs = f'{drug_set.replace("_", " ")}, within {window}'
+    if dx is not None:
+        drugs = (f'MDD coded {dx["window"]}; {dx["n_case"]} MDD+, '
+                 f'{dx["n_control"]} MDD−')
+    else:
+        window = f'{args.med_window_hours:g} h'
+        drugs = f'{drug_set.replace("_", " ")}, within {window}'
     grey = '0.3'
     spec = {
         'F1': dict(
@@ -353,16 +371,19 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
                            markerfacecolor=grey, ls='none', ms=5,
                            label='BH q < .05')]),
         'F2': dict(
-            head='Pain slope, undosed vs dosed',
+            head=('Pain slope, MDD− vs MDD+' if dx is not None
+                  else 'Pain slope, undosed vs dosed'),
             xlab='Pain slope (Δ log$_{10}$ power per NRS point)',
             legend=[Line2D([], [], marker='o', color=grey,
                            markerfacecolor='white', ls='none', ms=4.5,
-                           label='undosed'),
+                           label='MDD−' if dx is not None else 'undosed'),
                     Line2D([], [], marker='D', color=grey,
                            markerfacecolor=grey, ls='none', ms=4,
-                           label='dosed'),
+                           label='MDD+' if dx is not None else 'dosed'),
                     Line2D([], [], marker='$*$', color=grey, ls='none', ms=7,
-                           label='slope change BH q < .05')]),
+                           label=('slope difference BH q < .05'
+                                  if dx is not None
+                                  else 'slope change BH q < .05'))]),
     }
 
     saved = {k: getattr(style, k) for k in GROUPED_SIZES}
@@ -486,7 +507,8 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
                  fontsize=style.FOOTNOTE_SIZE - 1, linespacing=1.3,
                  color=style.TEXT_MUTED, ha='left', va='bottom')
 
-        name = ('fig_F1F2_grid.png' if 'F1' in rows
+        name = ('fig_F2_pain_slope_by_mdd_grid.png' if dx is not None
+                else 'fig_F1F2_grid.png' if 'F1' in rows
                 else 'fig_F2_pain_slope_by_dose_grid.png')
         out = run_dir / name
         fig.savefig(out, dpi=GRID_DPI, facecolor='white')
@@ -523,13 +545,31 @@ def main(argv=None):
     run_dir = Path(args.run_dir)
     prov = json.loads((run_dir / 'provenance.json').read_text())
     params = prov['params']
-    if not params.get('med_model'):
-        raise SystemExit(f'{run_dir} is not a medication run')
+    is_dx = bool(params.get('dx_model'))
+    if not params.get('med_model') and not is_dx:
+        raise SystemExit(f'{run_dir} is neither a medication nor a diagnosis '
+                         'run')
 
     sl = io.read_table(run_dir / 'domain_slopes.csv', on_stale='refuse')
     domains = [d for d in DOMAIN_ORDER if d in set(sl['domain'])]
     bands = [b for b in BAND_ORDER if b in set(sl['band'])]
     cov = coverage(run_dir, domains)
+
+    if is_dx:
+        # Only the F2 row exists for a diagnosis run (see figure_grid).
+        if set(args.figures) - {'grid_f2'}:
+            raise SystemExit('a diagnosis run draws --figures grid_f2 only')
+        frames = str(params.get('frames_dir', ''))
+        window = ('ever' if '-mdd0d' in frames else
+                  'in the 90 d before admission' if '-mdd90d' in frames
+                  else 'window unknown')
+        dx = dict(n_case=params.get('dx_n_case'),
+                  n_control=params.get('dx_n_control'), window=window)
+        figure_grid(run_dir, domains, bands, cov, None, args,
+                    params.get('dropped_domains') or [], rows=('F2',), dx=dx)
+        io.log_analysis('lme4 domain MDD figure grid_f2 (pain slope, MDD- vs '
+                        'MDD+)', run_dir)
+        return 0
 
     drug_set = args.drug_set or drug_set_of(Path(params['frames_dir']))
     dropped = params.get('dropped_domains') or []
