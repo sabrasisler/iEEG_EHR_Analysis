@@ -232,8 +232,21 @@ pw     <- as.data.frame(pairs(tr))
 
 vc <- as.data.frame(VarCorr(m))
 
-for (x in list(list(slopes, "slopes"), list(pw, "pairs"),
-               list(vc, "varcorr"))) {
+outs <- list(list(slopes, "slopes"), list(pw, "pairs"), list(vc, "varcorr"))
+
+# THE MEDICATION SHIFT ON POWER ITSELF (panel F1), not on the pain slope.
+# `emmeans(~ med | domain)` at NRS_within = 0 -- the patient's OWN mean pain,
+# because NRS_within is subject-mean-centred -- then on-minus-off within each
+# domain. NRS_submean and med_submean sit at their grid means, and neither
+# interacts with `med`, so they cancel out of the contrast. Uses the df mode
+# the slopes settled on, so a Satterthwaite fallback applies here too.
+if (has_med) {
+  em <- emmeans(m, ~ med | domain, at = list(NRS_within = 0))
+  medeff <- as.data.frame(summary(pairs(em, reverse = TRUE), infer = TRUE))
+  outs[[length(outs) + 1L]] <- list(medeff, "medeff")
+}
+
+for (x in outs) {
   tab <- x[[1]]
   tab$band <- band
   fwrite(tab, file.path(out_dir, sprintf("%s_%s.csv", band, x[[2]])))

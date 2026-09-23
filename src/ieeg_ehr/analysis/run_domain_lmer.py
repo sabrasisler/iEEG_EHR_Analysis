@@ -324,6 +324,7 @@ def main(argv=None):
     pairs = collect(run_dir, 'pairs')
     varcorr = collect(run_dir, 'varcorr')
     fitinfo = collect(run_dir, 'fitinfo')
+    medeff = collect(run_dir, 'medeff')
 
     if slopes.empty:
         raise SystemExit(f'every band failed; see {run_dir}/bands and the log')
@@ -386,6 +387,9 @@ def main(argv=None):
     io.write_table(pairs, run_dir / 'domain_pairs.csv', **common)
     io.write_table(varcorr, run_dir / 'varcorr.csv', **common)
     io.write_table(fitinfo, run_dir / 'fitinfo.csv', **common)
+    if not medeff.empty:
+        # Older med runs predate the R-side contrast and simply lack this file.
+        io.write_table(medeff, run_dir / 'domain_med_effect.csv', **common)
     io.write_run_provenance(run_dir, script=SCRIPT, params=params,
                             parents=parents, subjects=subjects,
                             extra={'status': DISCLAIMER})
