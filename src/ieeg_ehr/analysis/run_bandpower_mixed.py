@@ -630,7 +630,7 @@ def stage_fit(args):
             # `--dx-only`: the diagnosis-interaction model and nothing else, so
             # the run holds exactly the fits whose BH family is being asked about.
             slopes, blups = None, None
-            if not args.dx_only:
+            if not (args.dx_only or args.med_only):
                 rec, slopes, blups = fit_one_cell(df, meta)
                 rec['model'] = 'pain'
                 records.append(rec)
@@ -654,6 +654,22 @@ def stage_fit(args):
                             dec.get('medw_beta', np.nan), dec.get('medw_p', np.nan),
                             dec.get('med_ix_beta', np.nan),
                             dec.get('med_ix_p', np.nan))
+            if args.med_model == 'decomposed_ix':
+                dix, _ = fit_decomposed(
+                    df, {**meta, 'freq_bin_index': meta['band_index'],
+                         'bin_low_hz': meta['band_lo_hz'],
+                         'bin_high_hz': meta['band_hi_hz']},
+                    formula=mm.FORMULA_MED_DECOMPOSED_IX,
+                    terms=mm.MED_DECOMPOSED_IX_TERMS,
+                    fit_reduced=not args.med_only)
+                dix.update({'band': band, 'model': 'med_decomposed_ix'})
+                records.append(dix)
+                logger.info('%-18s %-11s | pain x med_WITHIN %+.5f (p %.3g)  '
+                            'pain x med_BETWEEN %+.5f (p %.3g)', region, band,
+                            dix.get('med_ix_beta', np.nan),
+                            dix.get('med_ix_p', np.nan),
+                            dix.get('medb_ix_beta', np.nan),
+                            dix.get('medb_ix_p', np.nan))
             if args.med_model in ('matched', 'both'):
                 mat = fit_matched(df, {**meta,
                                        'freq_bin_index': meta['band_index'],
@@ -760,6 +776,7 @@ def stage_fit(args):
                     'dx_min_subjects_per_arm': (args.dx_min_subjects_per_arm
                                                 if args.dx_model != 'none' else None),
                     'dx_only': args.dx_only,
+                    'med_only': args.med_only,
                     'excluded_regions': list(args.exclude_regions),
                     'excluded_regions_reason': args.exclude_reason,
                     'cells_selected': sorted(args.cells) if args.cells else None,
@@ -877,7 +894,9 @@ def stage_collect(args):
     # -- a between-subject difference in mean power, which the subject random
     # intercept exists to absorb -- and BH-correcting a nuisance term invites it
     # to be read as a result.
-    for prefix in ('medw', 'med_ix', 'dx_ix'):
+    # `medb_ix` (pain x between-patient medication, `--med-model decomposed_ix`)
+    # is its own question too, and gets its own family on the same grounds.
+    for prefix in ('medw', 'med_ix', 'medb_ix', 'dx_ix'):
         col = f'{prefix}_p'
         if col not in cells.columns:
             continue
@@ -1314,7 +1333,8 @@ def med_figure(run_dir, cells, args):
 def write_methods(run_dir, cells, args):
     bands = BAND_SETS[args.band_set]
     if 'model' in cells.columns:
-        med = cells[cells['model'].isin(('med_decomposed', 'med_matched'))]
+        med = cells[cells['model'].isin(('med_decomposed', 'med_decomposed_ix',
+                                          'med_matched'))]
         dx = cells[cells['model'].str.startswith('dx_')]
         cells = cells[cells['model'] == 'pain']
     else:
@@ -1410,6 +1430,7 @@ correct each hypothesis for the others' tests:
 |---|---|
 | `medw_beta` | within a patient, is power different when recently dosed? |
 | `med_ix_beta` | does being dosed CHANGE the pain slope? |
+| `medb_ix_beta` (`decomposed_ix` only) | do heavily-medicated PATIENTS have a different pain slope? Between-patient, and confounded with mean pain |
 | `beta_med` (matched) | at the SAME reported score, is power different when dosed? |
 | `nonparam_diff` | the same contrast without a model: per subject, the mean difference between dosed and undosed epochs AT EQUAL NRS, averaged unweighted over the levels present in both |
 
@@ -1420,6 +1441,7 @@ difference wearing a medication label.
 
 """)
         for model, label in (('med_decomposed', 'decomposed'),
+                             ('med_decomposed_ix', 'decomposed, both parts x pain'),
                              ('med_matched', 'matched')):
             sub = med[med['model'] == model]
             if not len(sub):
@@ -1527,7 +1549,8 @@ def main():
                     help='Which cell `--stage perm` shuffles.')
     ap.add_argument('--band-set', choices=list(BAND_SETS),
                     default='paper_bands_6_hg200')
-    ap.add_argument('--med-model', choices=['none', 'decomposed', 'matched', 'both'],
+    ap.add_argument('--med-model', choices=['none', 'decomposed', 'decomposed_ix',
+                                            'matched', 'both'],
                     default='none',
                     help="Add medication to the model. 'decomposed' splits "
                          'med_state into within- and between-patient parts and '
@@ -1597,6 +1620,10 @@ def main():
                     help='Fit ONLY the diagnosis-interaction model: no pain-only '
                          'fit, no reduced refit for the heterogeneity LRT. '
                          'Requires --dx-model interaction.')
+    ap.add_argument('--med-only', action='store_true',
+                    help='Fit ONLY the medication model(s) named by --med-model: '
+                         'no pain-only fit, no reduced refit for the '
+                         'heterogeneity LRT.')
     ap.add_argument('--exclude-regions', nargs='*', default=[],
                     help='Regions to leave out of the run ENTIRELY -- not fitted, '
                          'not in the BH family, not on the figures. Use for a '
@@ -1663,6 +1690,9 @@ def main():
     if args.dx_only and args.dx_model != 'interaction':
         raise SystemExit('--dx-only needs --dx-model interaction; without it '
                          'there is no model left to fit.')
+    if args.med_only and args.med_model == 'none':
+        raise SystemExit('--med-only needs a --med-model; without it there is '
+                         'no model left to fit.')
 
     if args.view_scheme is None:
         # The DOMAIN scheme names the folder when there is one: two domain

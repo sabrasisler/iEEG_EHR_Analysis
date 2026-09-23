@@ -213,6 +213,21 @@ MED_DECOMPOSED_TERMS = (('med_within', 'medw'),
                         ('med_submean', 'medb'),
                         ('NRS_within:med_within', 'med_ix'))
 
+# The decomposed model with BOTH medication parts moderating the pain slope:
+#
+#   NRS_within:med_within    does a dose change THIS patient's pain slope
+#   NRS_within:med_submean   do heavily-medicated patients have a different
+#                            pain slope from lightly-medicated ones
+#
+# The second is a BETWEEN-patient moderation (n = subjects, not epochs), and
+# med_submean tracks mean pain at rho ~0.69, so it is partly a pain-level
+# difference wearing a medication label -- read it as that, not as a drug effect.
+FORMULA_MED_DECOMPOSED_IX = ('log10_power ~ NRS_within * med_within'
+                             ' + NRS_within * med_submean + NRS_submean')
+
+MED_DECOMPOSED_IX_TERMS = MED_DECOMPOSED_TERMS + (
+    ('NRS_within:med_submean', 'medb_ix'),)
+
 
 def add_med_components(df):
     """Split `med_state` into within- and between-patient parts, on a copy.

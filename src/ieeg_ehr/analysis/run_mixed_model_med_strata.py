@@ -270,12 +270,15 @@ def fit_interaction(df, meta):
     return rec, blups
 
 
-def fit_decomposed(df, meta):
+def fit_decomposed(df, meta, formula=mm.FORMULA_MED_DECOMPOSED,
+                   terms=mm.MED_DECOMPOSED_TERMS, fit_reduced=True):
     """The interaction model with `med_state` split within/between.
 
     Same variance components as the undecomposed interaction fit, so the two are
     directly comparable and the only thing that changed is what `med_state` is
-    allowed to absorb.
+    allowed to absorb. `formula`/`terms` swap in a variant of the decomposed
+    design (e.g. `mm.FORMULA_MED_DECOMPOSED_IX`); `fit_reduced=False` skips the
+    refit that exists only for the heterogeneity LRT.
     """
     t0 = time.time()
     df = mm.add_med_components(df)
@@ -286,8 +289,7 @@ def fit_decomposed(df, meta):
         rec['cell_index'] = meta['cell_index']
         return rec, []
     try:
-        res, warn_full = mm.fit_cell(df, mm.VC_FULL,
-                                     formula=mm.FORMULA_MED_DECOMPOSED)
+        res, warn_full = mm.fit_cell(df, mm.VC_FULL, formula=formula)
     except mm.CellFitError as exc:
         rec = mm.failed_record(meta['region'], meta['freq_bin_index'],
                                meta['bin_low_hz'], meta['bin_high_hz'],
@@ -297,18 +299,19 @@ def fit_decomposed(df, meta):
         return rec, []
     t_full = time.time() - t0
 
-    try:
-        res_red, warn_red = mm.fit_cell(df, mm.VC_REDUCED,
-                                        formula=mm.FORMULA_MED_DECOMPOSED)
-    except mm.CellFitError as exc:
-        res_red, warn_red = None, [f'reduced failed: {exc}']
+    res_red, warn_red = None, []
+    if fit_reduced:
+        try:
+            res_red, warn_red = mm.fit_cell(df, mm.VC_REDUCED, formula=formula)
+        except mm.CellFitError as exc:
+            res_red, warn_red = None, [f'reduced failed: {exc}']
 
     rec = mm.cell_record(res, res_red, df, region=meta['region'],
                          freq_bin_index=meta['freq_bin_index'],
                          bin_low_hz=meta['bin_low_hz'],
                          bin_high_hz=meta['bin_high_hz'], fit_seconds=t_full,
                          warnings_full=warn_full, warnings_reduced=warn_red,
-                         extra_terms=mm.MED_DECOMPOSED_TERMS)
+                         extra_terms=terms)
     rec['cell_index'] = meta['cell_index']
     rec['group'] = 'decomposed'
     # The patient-level proportion medicated, for reading medb against.
