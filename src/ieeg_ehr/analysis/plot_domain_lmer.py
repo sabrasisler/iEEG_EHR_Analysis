@@ -35,6 +35,7 @@ EXPLORATORY. Discovery cohort only. Nominations, not findings.
 import argparse
 import logging
 import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -62,17 +63,33 @@ DISCLAIMER = ('EXPLORATORY -- discovery cohort, NOMINATIONS NOT FINDINGS. '
 SLOPE_COL = 'NRS_within.trend'
 
 
-def load_slopes(run_dir, fdr_q):
-    """The run's slopes, BH-corrected across the whole grid.
+def load_slopes(run_dir, fdr_q, drop_domain=None):
+    """The run's slopes, BH-corrected across the cells that will be PLOTTED.
 
     BH IS APPLIED HERE, NOT UPSTREAM. The R stage fits one band at a time and
     has no view of the other five, so it cannot correct across a family it
-    cannot see. The family is every cell on this figure.
+    cannot see.
+
+    DROPPED DOMAINS LEAVE THE FAMILY BEFORE THE CORRECTION, NOT AFTER. This
+    was the other way round once: BH ran over all 30 cells and `--drop-domain`
+    filtered the result, so the excluded rows still inflated the threshold for
+    the rows on the figure, and the footer -- counting after the drop -- named
+    a family size the correction had not used.
+
+    The caveat that goes with it: this is only honest when the exclusion is
+    decided A PRIORI, which is the case here (the excluded domain is a
+    different question, not a disappointing result). Dropping a domain BECAUSE
+    of how its cells came out and then correcting over what is left is
+    selective inference and would understate the false-discovery rate.
     """
     df = io.read_table(Path(run_dir) / 'domain_slopes.csv', on_stale='refuse')
     if SLOPE_COL not in df.columns:
         raise SystemExit(f'{run_dir}/domain_slopes.csv has no {SLOPE_COL!r}; '
                          f'columns are {list(df.columns)}')
+    if drop_domain:
+        df = df[~df['domain'].isin(drop_domain)].reset_index(drop=True)
+        if df.empty:
+            raise SystemExit(f'--drop-domain {drop_domain} removed every row.')
     m = df['p.value'].notna()
     df['p_bh'] = np.nan
     if m.any():
@@ -143,20 +160,27 @@ def figure(run_dir, df, domains, bands, args, out_name):
     strata = sorted(df['dx'].unique()) if 'dx' in df.columns else [None]
     cap = float(np.nanmax(np.abs(df[SLOPE_COL].to_numpy(dtype=float))))
 
-    fig, axes = plt.subplots(
-        1, len(strata), squeeze=False,
-        figsize=(1.55 * len(bands) * len(strata) + 4.2,
-                 0.78 * len(domains) + 4.6))
+    # THE COLOURBAR GETS ITS OWN GRIDSPEC COLUMN. Handing `ax=` to colorbar()
+    # steals space from the axes it is given, and under tight_layout it landed
+    # ON TOP of the last band -- high_gamma's cells were drawn and then covered,
+    # which is invisible unless you look at the rendered file.
+    ncol = len(strata)
+    fig = plt.figure(figsize=(1.9 * len(bands) * ncol + 3.0,
+                              0.82 * len(domains) + 5.0))
+    gs = fig.add_gridspec(1, ncol + 1,
+                          width_ratios=[1.0] * ncol + [0.035], wspace=0.10)
+    axes = [fig.add_subplot(gs[0, i]) for i in range(ncol)]
+    cax = fig.add_subplot(gs[0, ncol])
 
-    for ax, stratum in zip(axes[0], strata):
+    for ax, stratum in zip(axes, strata):
         sub = df if stratum is None else df[df['dx'] == stratum]
         title = ('pain-power slope by processing domain'
-                 if stratum is None else f'{stratum}')
+                 if stratum is None else str(stratum))
         im = heatmap(ax, sub, domains, bands, cap, title)
-        if stratum is not None and ax is not axes[0][0]:
-            ax.set_ylabel('')
+        if ax is not axes[0]:
+            ax.set_yticklabels([])
 
-    cb = fig.colorbar(im, ax=axes[0].tolist(), fraction=0.03, pad=0.02)
+    cb = fig.colorbar(im, cax=cax)
     cb.set_label('d log10 power / pain point', fontsize=9)
     cb.ax.tick_params(labelsize=8)
 
@@ -166,8 +190,7 @@ def figure(run_dir, df, domains, bands, args, out_name):
         'PROCESSING DOMAIN x FREQUENCY BAND, lme4 with crossed ROI effects\n'
         'each cell is that domain\'s marginal pain slope tested against ZERO',
         fontsize=12.5)
-    fig.text(
-        0.01, 0.005,
+    footer = (
         'ONE lme4 MODEL PER BAND over every channel x epoch at once: '
         'log10_power ~ 0 + domain + domain:NRS_within + domain:NRS_submean '
         '+ (1 + NRS_within || ROI) + (1 + NRS_within || subject) '
@@ -183,14 +206,31 @@ def figure(run_dir, df, domains, bands, args, out_name):
         f'{int(fit["n_rows"].iloc[0]):,} rows. '
         'NO OMNIBUS: whether the domains differ FROM EACH OTHER is a question '
         'about contrasts and is not on this grid -- see domain_pairs.csv. '
-        'A significant Control cell is NOT a contradiction: Occipital and '
-        'Auditory are the quasi-controls, so an effect there argues for a '
-        f'global or artifactual driver.\n{DISCLAIMER}',
-        fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
+        # The Control note is only true when Control is ON the figure. Left
+        # unconditional it told a reader to interpret a row that is not there,
+        # and hid the more important fact that the diagnostic was removed.
+        + ('A significant Control cell is NOT a contradiction: Occipital and '
+           'Auditory are the quasi-controls, so an effect there argues for a '
+           'global or artifactual driver.'
+           if 'Control' in domains else
+           'THE CONTROL DOMAIN (Occipital + Auditory) IS EXCLUDED from this '
+           'figure. It is the quasi-control whose own slope says whether an '
+           'effect is global rather than nociceptive -- in delta it is '
+           'significant, so the delta column here should NOT be read as '
+           'pain-specific. See the Control-inclusive figure in this run.'))
 
-    fig.tight_layout(rect=(0, 0.16, 1, 0.92))
+    # WRAPPED EXPLICITLY. matplotlib's `wrap=True` wraps to the FIGURE width,
+    # which on a wide figure still runs the footer off the rendered edge. A
+    # fixed character count against the figure's inch width is what fits.
+    body = textwrap.fill(footer, width=int(13.5 * fig.get_size_inches()[0]))
+    fig.text(0.012, 0.012, f'{body}\n{DISCLAIMER}',
+             fontsize=6.6, va='bottom', ha='left', color='0.35')
+
+    n_lines = body.count('\n') + 2
+    fig.subplots_adjust(left=0.085, right=0.945, top=0.84,
+                        bottom=0.07 + 0.020 * n_lines)
     out = Path(run_dir) / out_name
-    fig.savefig(out, dpi=150, bbox_inches='tight')
+    fig.savefig(out, dpi=150)
     plt.close(fig)
     logger.info('wrote %s', out)
     return out
@@ -211,13 +251,7 @@ def main(argv=None):
                         format='%(asctime)s %(levelname)s %(message)s')
 
     run_dir = Path(args.run_dir)
-    df = load_slopes(run_dir, args.fdr_q)
-
-    if args.drop_domain:
-        df = df[~df['domain'].isin(args.drop_domain)]
-        if df.empty:
-            raise SystemExit(f'--drop-domain {args.drop_domain} removed every '
-                             'row; nothing to plot.')
+    df = load_slopes(run_dir, args.fdr_q, drop_domain=args.drop_domain)
 
     # Order from the constants, INTERSECTED with what the run actually has, so
     # a scheme with fewer domains or bands plots without a row of blanks.

@@ -54,6 +54,7 @@ from ieeg_ehr import config, io
 from ieeg_ehr.analysis import fullres_cells, reference_run
 from ieeg_ehr.analysis.run_fullres_grid import resolve_cohort
 from ieeg_ehr.config import roi_schemes
+from ieeg_ehr.med_analysis import style
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s %(levelname)s %(message)s')
@@ -76,6 +77,17 @@ MEDIAN_COLOUR = '#b03a2e'
 #: hue reads as meaning. Applied through `_style` rather than rcParams so the
 #: two font sizes stay command-line arguments.
 SPINE_WIDTH = 1.0
+
+#: The combined figure (example subject over violins), in the med-figure house
+#: style. ONE hue for everything -- the domain-model Modulatory blue, Sabra's
+#: pick 2026-09-22 -- with the parts told apart by alpha rather than by colour:
+#: a faint violin envelope, near-opaque patient dots, and a darker shade of the
+#: same hue for the median so it reads as a summary of the dots, not a new
+#: series. Saved at EXACTLY the declared size (no bbox_inches='tight').
+COMBINED_COLOUR = '#447eae'
+COMBINED_MEDIAN_COLOUR = '#1f3f5b'
+COMBINED_WIDTH = 8.2
+COMBINED_DPI = 300
 GRID_MARKER, GRID_LINE = 3.2, 1.1
 BIG_MARKER, BIG_LINE = 6.0, 1.7
 
@@ -250,13 +262,14 @@ def _style(ax, args, xlabel=None, ylabel=None):
         ax.set_ylabel(ylabel, fontsize=args.font_label)
 
 
-def draw_timeline(ax, sub, args, label=None, small=False):
+def draw_timeline(ax, sub, args, label=None, small=False, colour=LINE_COLOUR,
+                  ms=None, lw=None):
     d = sub.dropna(subset=['hours']).sort_values('hours')
-    lw = GRID_LINE if small else BIG_LINE
-    ms = GRID_MARKER if small else BIG_MARKER
-    ax.plot(d['hours'], d['pain_score'], '-', color=LINE_COLOUR,
+    lw = lw or (GRID_LINE if small else BIG_LINE)
+    ms = ms or (GRID_MARKER if small else BIG_MARKER)
+    ax.plot(d['hours'], d['pain_score'], '-', color=colour,
             lw=lw, alpha=0.75, zorder=1)
-    ax.plot(d['hours'], d['pain_score'], 'o', color=LINE_COLOUR,
+    ax.plot(d['hours'], d['pain_score'], 'o', color=colour,
             ms=ms, mec='white', mew=0.4 if small else 0.9, zorder=2)
     ax.set_ylim(-0.6, 10.6)
     ax.set_yticks([0, 5, 10])
@@ -317,43 +330,12 @@ def fig_violins(stats, out_path, args):
     data does not have -- a bump where two patients sit. The strip makes the
     actual sample visible, and the violin is then just a readable envelope.
     """
-    panels = [('n_assessments', 'Assessments per patient', '{:.0f}'),
-              ('mean_pain', 'Mean pain score', '{:.1f}'),
-              ('pain_range', 'Pain score range', '{:.0f}')]
+    panels = VIOLIN_PANELS
     fig, axes = plt.subplots(1, 3, figsize=tuple(args.violin_figsize))
     rng = np.random.default_rng(0)
 
     for ax, (col, label, fmt) in zip(axes, panels):
-        v = stats[col].to_numpy(dtype=float)
-        v = v[np.isfinite(v)]
-        parts = ax.violinplot([v], showextrema=False,
-                              widths=args.violin_width)
-        for b in parts['bodies']:
-            b.set_facecolor(VIOLIN_COLOUR)
-            b.set_alpha(0.55)
-            b.set_edgecolor('0.35')
-            b.set_linewidth(0.8)
-        jitter = args.violin_width * 0.22
-        ax.scatter(1 + rng.uniform(-jitter, jitter, len(v)), v, s=20,
-                   color='0.22', alpha=0.65, edgecolor='none', zorder=3)
-        med = float(np.median(v))
-        half = args.violin_width * 0.62
-        ax.hlines(med, 1 - half, 1 + half, color=MEDIAN_COLOUR, lw=2.2,
-                  zorder=4)
-        # THE MEDIAN ALONE. The min-max in parentheses was redundant with the
-        # figure it sat on -- every patient is already drawn as a dot, so the
-        # extremes are the top and bottom dots -- and it made three short
-        # headings into three long ones.
-        txt = f'median {fmt.format(med)}'
-        if args.violin_annot == 'median_range':
-            txt += f'   {fmt.format(np.min(v))}–{fmt.format(np.max(v))}'
-        if args.violin_annot != 'none':
-            ax.text(0.5, 1.02, txt, transform=ax.transAxes, ha='center',
-                    va='bottom', fontsize=args.font_tick, color='0.3')
-        ax.set_xticks([])
-        # Tight to the violin, or a narrow violin just sits in a wide empty
-        # panel and looks smaller rather than neater.
-        ax.set_xlim(1 - args.violin_width, 1 + args.violin_width)
+        draw_violin(ax, stats[col], label, fmt, args, rng)
         _style(ax, args, ylabel=label)
         # THE BOTTOM SPINE STAYS, the tick labels do not. Hiding the spine
         # leaves the violin floating with nothing to sit on; the labels would
@@ -366,6 +348,140 @@ def fig_violins(stats, out_path, args):
     fig.savefig(out_path, dpi=args.dpi, bbox_inches='tight', pad_inches=0.05)
     plt.close(fig)
     logger.info('wrote %s', out_path.name)
+
+
+VIOLIN_PANELS = [('n_assessments', 'Assessments per patient', '{:.0f}'),
+                 ('mean_pain', 'Mean pain score', '{:.1f}'),
+                 ('pain_range', 'Pain score range', '{:.0f}')]
+
+
+def draw_violin(ax, values, label, fmt, args, rng, colours=None,
+                annot_size=None, dot_size=20):
+    """One violin, every patient as a dot over it, the median as a bar.
+
+    `colours` = (body, body_alpha, edge, dot, dot_alpha, median); the default
+    is this script's original look.
+    """
+    body, body_a, edge, dot, dot_a, median = colours or (
+        VIOLIN_COLOUR, 0.55, '0.35', '0.22', 0.65, MEDIAN_COLOUR)
+    v = values.to_numpy(dtype=float)
+    v = v[np.isfinite(v)]
+    parts = ax.violinplot([v], showextrema=False, widths=args.violin_width)
+    for b in parts['bodies']:
+        b.set_facecolor(body)
+        b.set_alpha(body_a)
+        b.set_edgecolor(edge)
+        b.set_linewidth(0.8)
+    jitter = args.violin_width * 0.22
+    ax.scatter(1 + rng.uniform(-jitter, jitter, len(v)), v, s=dot_size,
+               color=dot, alpha=dot_a, edgecolor='none', zorder=3)
+    med = float(np.median(v))
+    half = args.violin_width * 0.62
+    ax.hlines(med, 1 - half, 1 + half, color=median, lw=2.2, zorder=4)
+    # THE MEDIAN ALONE. The min-max in parentheses was redundant with the
+    # figure it sat on -- every patient is already drawn as a dot, so the
+    # extremes are the top and bottom dots -- and it made three short
+    # headings into three long ones.
+    txt = f'median {fmt.format(med)}'
+    if args.violin_annot == 'median_range':
+        txt += f'   {fmt.format(np.min(v))}–{fmt.format(np.max(v))}'
+    if args.violin_annot != 'none':
+        ax.text(0.5, 1.02, txt, transform=ax.transAxes, ha='center',
+                va='bottom', fontsize=annot_size or args.font_tick,
+                color='0.3')
+    ax.set_xticks([])
+    # Tight to the violin, or a narrow violin just sits in a wide empty
+    # panel and looks smaller rather than neater.
+    ax.set_xlim(1 - args.violin_width, 1 + args.violin_width)
+
+
+def fig_combined(df, stats, sid, out_path, args):
+    """The example subject on top, the three cohort violins beneath.
+
+    HOUSE STYLE (med_analysis.style + GROUPED_SIZES from
+    plot_poster_epoch_meds: labels 11, ticks 9.5, legend 8.5 pt), light-grey
+    left/bottom spines, black tick labels, no grid, one hue throughout.
+
+    `--combined-top-height` / `--combined-bottom-height` are the two ROW
+    SLOTS in inches, each including its own labels, so the file is
+    8.2 x (top + bottom) inches exactly. Laid out in inches rather than a
+    gridspec so the slot heights are what they say.
+    """
+    from ieeg_ehr.med_analysis.plot_poster_epoch_meds import GROUPED_SIZES
+
+    saved = {k: getattr(style, k) for k in GROUPED_SIZES}
+    for k, v in GROUPED_SIZES.items():
+        setattr(style, k, v)
+    try:
+        W = COMBINED_WIDTH
+        top_h, bot_h = args.combined_top_height, args.combined_bottom_height
+        H = top_h + bot_h
+        fig = plt.figure(figsize=(W, H))
+        col = args.combined_colour
+
+        def house(ax):
+            style.style_axes(ax, grid_axis=None, tick_color=style.TEXT_PRIMARY)
+
+        # Margins, inches. `inner` is the gap between violin panels, which has
+        # to hold the next panel's tick labels and rotated y label.
+        left, right, inner = 0.62, 0.06, 0.72
+        x_w = W - left - right
+
+        # -- top: the example subject ----------------------------------------
+        t_below, t_above = 0.44, 0.24       # x label below; legend above
+        ax_t = fig.add_axes((left / W, (bot_h + t_below) / H, x_w / W,
+                             (top_h - t_below - t_above) / H))
+        draw_timeline(ax_t, df[df['subject_id'] == sid], args, colour=col,
+                      ms=4.0, lw=1.3)
+        house(ax_t)
+        style.label_axes(ax_t, xlabel='Hours since admission',
+                         ylabel='Pain score')
+        handle = matplotlib.lines.Line2D(
+            [], [], color=col, lw=1.3, marker='o', ms=4.0, mec='white',
+            mew=0.9)
+        ax_t.legend([handle], [sid.replace('sub-', 'subject-')],
+                    loc='lower right', bbox_to_anchor=(1.0, 1.0),
+                    frameon=False, fontsize=style.LEGEND_SIZE, borderaxespad=0.1,
+                    handlelength=1.8)
+
+        # -- bottom: the three violins ---------------------------------------
+        b_below, b_above = 0.08, 0.26       # "median N" above each violin
+        p_w = (x_w - 2 * inner) / 3
+        p_h = bot_h - b_below - b_above
+        rng = np.random.default_rng(0)
+        colours = (col, 0.25, col, col, 0.85, COMBINED_MEDIAN_COLOUR)
+        axes = []
+        for i, (c, label, fmt) in enumerate(VIOLIN_PANELS):
+            ax = fig.add_axes(((left + i * (p_w + inner)) / W, b_below / H,
+                               p_w / W, p_h / H))
+            draw_violin(ax, stats[c], label, fmt, args, rng, colours=colours,
+                        annot_size=style.TICK_SIZE, dot_size=11)
+            house(ax)
+            style.label_axes(ax, ylabel=label)
+            ax.tick_params(axis='x', length=0)
+            axes.append(ax)
+        axes[1].set_ylim(0, 10)
+        fig.align_ylabels([ax_t, axes[0]])
+
+        fig.canvas.draw()
+        rend = fig.canvas.get_renderer()
+        off = []
+        for t in fig.findobj(matplotlib.text.Text):
+            if not t.get_visible() or not t.get_text().strip():
+                continue
+            e = t.get_window_extent(rend)
+            if (e.x0 < -0.5 or e.y0 < -0.5 or e.x1 > fig.bbox.width + 0.5
+                    or e.y1 > fig.bbox.height + 0.5):
+                off.append(t.get_text())
+        if off:
+            logger.warning('text off the canvas: %s', off)
+        fig.savefig(out_path, dpi=COMBINED_DPI, facecolor='white')
+        plt.close(fig)
+        logger.info('wrote %s  (%.2f x %.2f in at %d dpi, %s)', out_path.name,
+                    W, H, COMBINED_DPI, sid)
+    finally:
+        for k, v in saved.items():
+            setattr(style, k, v)
 
 
 def pick_example(stats, df):
@@ -418,6 +534,12 @@ def main():
                          'empty panel.')
     ap.add_argument('--violin-annot', default='median',
                     choices=['median', 'median_range', 'none'])
+    ap.add_argument('--combined-top-height', type=float, default=2.0,
+                    help='Inches for the example-subject row of '
+                         'fig_cohort_combined.png, labels included.')
+    ap.add_argument('--combined-bottom-height', type=float, default=2.5,
+                    help='Inches for the violin row, labels included.')
+    ap.add_argument('--combined-colour', default=COMBINED_COLOUR)
     ap.add_argument('--font-label', type=float, default=15)
     ap.add_argument('--font-tick', type=float, default=13)
     ap.add_argument('--dpi', type=int, default=400)
@@ -452,6 +574,7 @@ def main():
     fig_grid(df, stats, out_dir / 'fig_subject_grid.png', args)
     fig_example(df, stats, sid, out_dir / 'fig_example_subject.png', args)
     fig_violins(stats, out_dir / 'fig_cohort_violins.png', args)
+    fig_combined(df, stats, sid, out_dir / 'fig_cohort_combined.png', args)
 
     io.write_table(stats, out_dir / 'cohort_subjects.csv', script=SCRIPT,
                    parents=[str(run_dir / 'provenance.json')],

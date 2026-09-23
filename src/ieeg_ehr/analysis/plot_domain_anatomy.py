@@ -67,6 +67,7 @@ from ieeg_ehr.analysis.plot_domain_glass import (SUBDIR, electrode_coords,
                                                  inside_brain, load_run)
 from ieeg_ehr.analysis.run_domain_model import domain_caveat
 from ieeg_ehr.config import roi_schemes
+from ieeg_ehr.med_analysis import style
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s %(levelname)s %(message)s')
@@ -228,47 +229,35 @@ def assign_regions(subjects, scheme, insula_threshold, epoch_minutes):
     return el, n0
 
 
-def glass(el, colours, groups, other, mode, out_path, title, args, caveat,
-          counts):
-    """The brain. One view per axes rect, laid out with a controllable gap.
+def draw_brains(fig, el, colours, views, box, gap, args):
+    """The glass-brain views, on ONE scale, centred in `box` (figure fraction).
 
-    ONE `plot_markers` CALL PER (VIEW, REGION), not one per region with a
-    multi-view display_mode. Handing nilearn 'xz' lets IT lay the two views
-    out, and its spacing is generous -- on a 7-inch poster panel the two brains
-    sat far enough apart to waste most of the width. Splitting the mode into
-    single views and placing each in its own rect makes the gap a parameter
-    (`--brain-gap`, negative to overlap the bounding boxes) instead of
-    nilearn's default.
+    `box` is (left, bottom, width, height) and `gap` a fraction of figure
+    width. Returns nilearn's display objects, which the caller closes after
+    saving.
 
-    Regions are drawn LARGEST GROUP FIRST within each view, so the biggest go
-    down first and the small ones land on top: Lateral Temporal is 757 contacts
-    and would otherwise bury Auditory's 31 entirely.
+    ONE SCALE FOR EVERY VIEW. Widths are proportional to each view's own
+    anatomical extent, and the common mm-per-inch is whichever of the width
+    and height budgets binds first, so the brains come out the same size
+    instead of each being stretched to fill an equal box.
     """
     from nilearn import plotting
 
-    views = ['x', 'y', 'z'] if mode == 'ortho' else list(mode)
     order = sorted(colours, key=lambda r: -int((el['region'] == r).sum()))
-
-    fig = plt.figure(figsize=tuple(args.figsize))
-    fw, fh = args.figsize
-    brain_w, gap = args.brain_width, args.brain_gap
-
-    # ONE SCALE FOR EVERY VIEW. Widths are proportional to each view's own
-    # anatomical extent, and the common mm-per-inch is whichever of the width
-    # and height budgets binds first, so the brains come out the same size
-    # instead of each being stretched to fill an equal box.
+    fw, fh = fig.get_size_inches()
+    bx, by, bw, bh = box
     ext = [BRAIN_EXTENT_MM.get(v, (170, 170)) for v in views]
     n = len(views)
-    avail_w_in = (brain_w - gap * (n - 1)) * fw
-    avail_h_in = args.brain_height * fh
+    avail_w_in = (bw - gap * (n - 1)) * fw
+    avail_h_in = bh * fh
     mm_per_in = min(avail_w_in / sum(h for h, _ in ext),
                     avail_h_in / max(v for _, v in ext))
     widths = [h * mm_per_in / fw for h, _ in ext]
     heights = [v * mm_per_in / fh for _, v in ext]
     # Centred on the band, and centred vertically view by view, so a shorter
     # view sits on the same midline rather than on the same baseline.
-    x = (brain_w - sum(widths) - gap * (n - 1)) / 2
-    mid = args.brain_bottom + args.brain_height / 2
+    x = bx + (bw - sum(widths) - gap * (n - 1)) / 2
+    mid = by + bh / 2
 
     displays = []
     for i, view in enumerate(views):
@@ -291,12 +280,17 @@ def glass(el, colours, groups, other, mode, out_path, title, args, caveat,
                 node_kwargs={'edgecolors': args.edge_color,
                              'linewidths': args.edge_width})
         displays.append(d)
+    return displays
 
-    # -- legend on the RIGHT ------------------------------------------------
-    # COUNTS ARE NOT IN THESE LABELS. They were, and at 14 pt they doubled the
-    # width of every entry for information the bar figure beside it already
-    # carries per region, far more legibly than a parenthesis.
-    lax = fig.add_axes((brain_w + 0.01, 0.0, 1.0 - brain_w - 0.015, 1.0))
+
+def draw_legend(lax, groups, colours, fontsize, ncol, loc='center left',
+                anchor=None):
+    """Domain headers in bold, each domain's regions beneath in their shade.
+
+    COUNTS ARE NOT IN THESE LABELS. They were, and at 14 pt they doubled the
+    width of every entry for information the bar figure beside it already
+    carries per region, far more legibly than a parenthesis.
+    """
     handles, labels = [], []
     blank = mpatches.Patch(alpha=0, linewidth=0)
     for dom in groups:
@@ -311,12 +305,41 @@ def glass(el, colours, groups, other, mode, out_path, title, args, caveat,
             handles.append(mpatches.Patch(facecolor=colours[r],
                                           edgecolor='0.35', linewidth=0.4))
             labels.append(r)
-    lax.legend(handles=handles, labels=labels, loc='center left',
-               ncol=args.legend_cols, frameon=False,
-               fontsize=args.font_legend, handlelength=1.1, handleheight=1.1,
-               columnspacing=1.0, labelspacing=0.30, borderpad=0.0,
-               handletextpad=0.5)
+    leg = lax.legend(handles=handles, labels=labels, loc=loc,
+                     bbox_to_anchor=anchor, ncol=ncol, frameon=False,
+                     fontsize=fontsize, handlelength=1.1, handleheight=1.1,
+                     columnspacing=1.0, labelspacing=0.30, borderpad=0.0,
+                     handletextpad=0.5)
     lax.axis('off')
+    return leg
+
+
+def glass(el, colours, groups, other, mode, out_path, title, args, caveat,
+          counts):
+    """The brain. One view per axes rect, laid out with a controllable gap.
+
+    ONE `plot_markers` CALL PER (VIEW, REGION), not one per region with a
+    multi-view display_mode. Handing nilearn 'xz' lets IT lay the two views
+    out, and its spacing is generous -- on a 7-inch poster panel the two brains
+    sat far enough apart to waste most of the width. Splitting the mode into
+    single views and placing each in its own rect makes the gap a parameter
+    (`--brain-gap`, negative to overlap the bounding boxes) instead of
+    nilearn's default.
+
+    Regions are drawn LARGEST GROUP FIRST within each view, so the biggest go
+    down first and the small ones land on top: Lateral Temporal is 757 contacts
+    and would otherwise bury Auditory's 31 entirely.
+    """
+    views = ['x', 'y', 'z'] if mode == 'ortho' else list(mode)
+    fig = plt.figure(figsize=tuple(args.figsize))
+    brain_w = args.brain_width
+    displays = draw_brains(fig, el, colours, views,
+                           (0.0, args.brain_bottom, brain_w, args.brain_height),
+                           args.brain_gap, args)
+
+    # -- legend on the RIGHT ------------------------------------------------
+    lax = fig.add_axes((brain_w + 0.01, 0.0, 1.0 - brain_w - 0.015, 1.0))
+    draw_legend(lax, groups, colours, args.font_legend, args.legend_cols)
 
     if title:
         fig.suptitle(title, fontsize=args.font_title, y=0.995)
@@ -360,24 +383,6 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
     45 degrees is both easier to read and shorter, because a rotated label's
     footprint is its length times sin(angle).
     """
-    order, boundaries, labels_dom = [], [], []
-    for dom in groups:
-        regions = groups[dom] or [r for r in other if r in set(el['region'])]
-        regions = [r for r in regions if (el['region'] == r).any()]
-        if not regions:
-            continue
-        if order:
-            boundaries.append(len(order) - 0.5)
-        labels_dom.append((dom, len(order), len(order) + len(regions) - 1))
-        order.extend(regions)
-
-    n_el = el.groupby('region').size().reindex(order).fillna(0).to_numpy()
-    n_sub = (el.groupby('region')['subject_id'].nunique()
-             .reindex(order).fillna(0).to_numpy())
-    pct = 100.0 * n_sub / max(n_cohort, 1)
-    cols = [colours[r] for r in order]
-    x = np.arange(len(order))
-
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=tuple(args.bar_figsize))
     # EXPLICIT, NOT tight_layout: the x labels are region names set vertically
     # and tight_layout does not reserve for them reliably against a fixed
@@ -385,85 +390,22 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
     # axes-transform coordinates.
     fig.subplots_adjust(left=args.bar_left, right=0.995,
                         top=args.bar_top, bottom=0.30, hspace=0.10)
-
-    # Y LABELS MUST FIT THE AXES HEIGHT, because a rotated label's LENGTH runs
-    # along it. At 7x4 with 22 vertical region names each panel is only ~1.2
-    # inches tall, and "Patients with >=1 electrode (%)" at 14 pt is 3 inches
-    # of text -- the first version had the two labels printed through each
-    # other. They are arguments so a taller figure can carry the full wording.
-    for ax, vals, ylab, is_pct in (
-            (axes[0], pct, args.ylabel_top, True),
-            (axes[1], n_el, args.ylabel_bottom, False)):
-        ax.bar(x, vals, color=cols, edgecolor='0.3', linewidth=0.5, width=0.82)
-        # The unit lives in the TICK labels, not the axis label: a rotated
-        # axis label's length runs along the axes height, and at 7x4 each
-        # panel is under an inch tall, so "(%)" is three characters that do
-        # not fit anywhere useful.
-        ax.set_ylabel(ylab, fontsize=args.font_label)
-        ax.spines[['top', 'right']].set_visible(False)
-        ax.tick_params(axis='y', labelsize=args.font_tick)
-        for b in boundaries:
-            ax.axvline(b, color='0.82', lw=0.9, zorder=0)
-        for xi, v in zip(x, vals):
-            ax.text(xi, v, f'{v:.0f}', ha='center', va='bottom',
-                    fontsize=args.font_value, color='0.25',
-                    rotation=args.value_rotation)
-        ax.margins(y=0.20)
-    axes[0].set_ylim(0, 108)
-    axes[0].set_yticks([0, 50, 100])
-    if args.ylabel_top_ticks_percent:
-        axes[0].set_yticklabels(['0', '50', '100%'])
-
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(order, rotation=args.bar_rotation, ha='right',
-                            rotation_mode='anchor', fontsize=args.font_tick)
-    for t, r in zip(axes[1].get_xticklabels(), order):
-        t.set_color('0.35' if r in other else colours[r])
-    axes[1].set_xlim(-0.7, len(order) - 0.3)
+    fonts = dict(label=args.font_label, tick=args.font_tick,
+                 value=args.font_value)
+    draw_bars(axes, el, colours, groups, other, n_cohort, fonts, args)
 
     # MEASURE THE LABELS, DO NOT ESTIMATE THEM. Two guesses at "how tall is
     # 'Lateral Temporal' set vertically at 14 pt" were wrong in both
     # directions -- the first left an inch of white space below the names, the
     # second clipped them. Rendering once and asking the renderer is exact,
     # costs one draw, and keeps working at any figure size or font size.
-    fig.canvas.draw()
-    rend = fig.canvas.get_renderer()
-    h_px = max((t.get_window_extent(rend).height
-                for t in axes[1].get_xticklabels()), default=0.0)
-    need = h_px / fig.dpi / fig.get_size_inches()[1]
+    need = xlabel_height_in(fig, axes[1]) / fig.get_size_inches()[1]
     bottom = (args.bar_bottom if args.bar_bottom is not None
               else min(0.62, need + 0.05))
     fig.subplots_adjust(bottom=bottom)
 
-    # Domain names above the top panel, spanning their own regions.
-    #
-    # A LABEL IS STAGGERED ONLY IF IT WOULD HIT ITS NEIGHBOUR, which is not
-    # the same question as "does the word fit the span it labels". The first
-    # version asked the latter and pushed Modulatory -- one region, so a
-    # narrow span -- onto a second row even on a 13-inch figure where its
-    # nearest neighbouring label is inches away. What decides a collision is
-    # centre-to-centre clearance against the labels actually drawn, so that
-    # is what is tested.
-    width, alt = fig.get_size_inches()[0], False
-    span_in = (width * (0.995 - args.bar_left)) / max(len(order), 1)
-    char_in = CHAR_EM * args.font_label / 72.0
-    placed, right_edge = [], -1e9
-    for dom, i0, i1 in labels_dom:
-        centre = (i0 + i1) / 2
-        half = (char_in * len(dom) / 2) / span_in      # in bar-index units
-        if centre - half >= right_edge + 0.25:
-            row, right_edge = 0, centre + half
-        else:
-            row, alt = 1, True
-        placed.append((dom, centre, row))
-
-    for dom, centre, row in placed:
-        axes[0].text(centre, 1.04 if row == 0 else 1.19, dom,
-                     transform=axes[0].get_xaxis_transform(), ha='center',
-                     va='bottom', fontsize=args.font_label,
-                     color=('0.35' if dom == OTHER_LABEL
-                            else colours[groups[dom][0]]))
-    if alt:
+    if draw_domain_labels(axes[0], el, colours, groups, other,
+                          args.font_label):
         # The staggered row needs headroom the default `top` does not leave.
         fig.subplots_adjust(top=min(args.bar_top, 0.84))
 
@@ -474,6 +416,228 @@ def bars(el, colours, groups, other, n_cohort, out_path, title, args, caveat):
     w, h = fig.get_size_inches()
     logger.info('wrote %s  (%.2f x %.2f in at %d dpi)', out_path.name, w, h,
                 args.dpi)
+
+
+def bar_layout(el, groups, other):
+    """Region order along the x axis, domain boundaries, domain spans."""
+    order, boundaries, labels_dom = [], [], []
+    for dom in groups:
+        regions = groups[dom] or [r for r in other if r in set(el['region'])]
+        regions = [r for r in regions if (el['region'] == r).any()]
+        if not regions:
+            continue
+        if order:
+            boundaries.append(len(order) - 0.5)
+        labels_dom.append((dom, len(order), len(order) + len(regions) - 1))
+        order.extend(regions)
+    return order, boundaries, labels_dom
+
+
+def draw_bars(axes, el, colours, groups, other, n_cohort, fonts, args,
+              house=False):
+    """Reach (axes[0]) over depth (axes[1]); see `bars` for why both.
+
+    `fonts` carries 'label', 'tick' and 'value' sizes. `house=True` applies
+    the med-figure axis style (`med_analysis.style`): light-grey left/bottom
+    spines, black tick labels, no grid -- the region names keep their domain
+    colour either way.
+    """
+    order, boundaries, _ = bar_layout(el, groups, other)
+    n_el = el.groupby('region').size().reindex(order).fillna(0).to_numpy()
+    n_sub = (el.groupby('region')['subject_id'].nunique()
+             .reindex(order).fillna(0).to_numpy())
+    pct = 100.0 * n_sub / max(n_cohort, 1)
+    cols = [colours[r] for r in order]
+    x = np.arange(len(order))
+
+    # Y LABELS MUST FIT THE AXES HEIGHT, because a rotated label's LENGTH runs
+    # along it. At 7x4 with 22 vertical region names each panel is only ~1.2
+    # inches tall, and "Patients with >=1 electrode (%)" at 14 pt is 3 inches
+    # of text -- the first version had the two labels printed through each
+    # other. They are arguments so a taller figure can carry the full wording.
+    for ax, vals, ylab in ((axes[0], pct, args.ylabel_top),
+                           (axes[1], n_el, args.ylabel_bottom)):
+        ax.bar(x, vals, color=cols, edgecolor='0.3', linewidth=0.5, width=0.82)
+        # The unit lives in the TICK labels, not the axis label: a rotated
+        # axis label's length runs along the axes height, and at 7x4 each
+        # panel is under an inch tall, so "(%)" is three characters that do
+        # not fit anywhere useful.
+        if house:
+            style.style_axes(ax, grid_axis=None, tick_color=style.TEXT_PRIMARY)
+            style.label_axes(ax, ylabel=ylab)
+        else:
+            ax.set_ylabel(ylab, fontsize=fonts['label'])
+            ax.spines[['top', 'right']].set_visible(False)
+        ax.tick_params(axis='both', labelsize=fonts['tick'])
+        for b in boundaries:
+            ax.axvline(b, color='0.82', lw=0.9, zorder=0)
+        for xi, v in zip(x, vals):
+            ax.text(xi, v, f'{v:.0f}', ha='center', va='bottom',
+                    fontsize=fonts['value'], color='0.25',
+                    rotation=args.value_rotation)
+        ax.margins(y=0.20)
+    axes[0].set_ylim(0, 108)
+    axes[0].set_yticks([0, 50, 100])
+    if args.ylabel_top_ticks_percent:
+        axes[0].set_yticklabels(['0', '50', '100%'])
+
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(order, rotation=args.bar_rotation, ha='right',
+                            rotation_mode='anchor', fontsize=fonts['tick'])
+    for t, r in zip(axes[1].get_xticklabels(), order):
+        t.set_color('0.35' if r in other else colours[r])
+    axes[1].set_xlim(-0.7, len(order) - 0.3)
+
+
+def xlabel_height_in(fig, ax):
+    """Rendered height, in inches, of the tallest x tick label on `ax`."""
+    fig.canvas.draw()
+    rend = fig.canvas.get_renderer()
+    h_px = max((t.get_window_extent(rend).height
+                for t in ax.get_xticklabels()), default=0.0)
+    return h_px / fig.dpi
+
+
+def draw_domain_labels(ax, el, colours, groups, other, fontsize):
+    """Domain names above `ax`, spanning their own regions. True if staggered.
+
+    Call AFTER the axes are at their final width: the collision test is in
+    inches along that width.
+
+    A LABEL IS STAGGERED ONLY IF IT WOULD HIT ITS NEIGHBOUR, which is not
+    the same question as "does the word fit the span it labels". The first
+    version asked the latter and pushed Modulatory -- one region, so a
+    narrow span -- onto a second row even on a 13-inch figure where its
+    nearest neighbouring label is inches away. What decides a collision is
+    centre-to-centre clearance against the labels actually drawn, so that
+    is what is tested.
+    """
+    order, _, labels_dom = bar_layout(el, groups, other)
+    fig = ax.figure
+    ax_w_in = ax.get_position().width * fig.get_size_inches()[0]
+    span_in = ax_w_in / max(len(order), 1)
+    char_in = CHAR_EM * fontsize / 72.0
+    placed, right_edge, alt = [], -1e9, False
+    for dom, i0, i1 in labels_dom:
+        centre = (i0 + i1) / 2
+        half = (char_in * len(dom) / 2) / span_in      # in bar-index units
+        if centre - half >= right_edge + 0.25:
+            row, right_edge = 0, centre + half
+        else:
+            row, alt = 1, True
+        placed.append((dom, centre, row))
+
+    for dom, centre, row in placed:
+        ax.text(centre, 1.04 if row == 0 else 1.19, dom,
+                transform=ax.get_xaxis_transform(), ha='center',
+                va='bottom', fontsize=fontsize,
+                color=('0.35' if dom == OTHER_LABEL
+                       else colours[groups[dom][0]]))
+    return alt
+
+
+#: The combined figure: glass brains + legend on top, bars beneath, at the
+#: size of one page column pair. Exact -- saved WITHOUT bbox_inches='tight',
+#: so the file is the declared size and `check_inside` is what guards against
+#: clipping instead.
+COMBINED_FIGSIZE = (8.2, 8.0)
+COMBINED_DPI = 300
+#: Per-bar numbers. Not one of the house sizes (it has no per-bar value); a
+#: step below the 9.5 pt ticks so "757" still fits over a 0.3-inch bar.
+COMBINED_FONT_VALUE = 7.5
+
+
+def check_inside(fig):
+    """Warn about any text that runs off the canvas. Needs a drawn figure."""
+    rend = fig.canvas.get_renderer()
+    W, H = fig.bbox.width, fig.bbox.height
+    bad = []
+    for t in fig.findobj(matplotlib.text.Text):
+        if not t.get_visible() or not t.get_text().strip():
+            continue
+        e = t.get_window_extent(rend)
+        if e.x0 < -0.5 or e.y0 < -0.5 or e.x1 > W + 0.5 or e.y1 > H + 0.5:
+            bad.append(t.get_text())
+    if bad:
+        logger.warning('text off the canvas: %s', bad)
+    return bad
+
+
+def combined(el, colours, groups, other, n_cohort, out_path, args):
+    """Brains and legend on the top row, reach-over-depth bars below.
+
+    THE HOUSE STYLE, NOT THIS SCRIPT'S POSTER ONE: DejaVu Sans, the grouped
+    med-figure sizes (`GROUPED_SIZES`, plot_poster_epoch_meds: labels 11,
+    ticks 9.5, legend 8.5 pt), light-grey left/bottom spines, black tick
+    labels, no grid. The COLOURS are this script's -- domain hue, region
+    shade -- because the colour is the content here; the med palette
+    (`style.PALETTE`) is for drug classes and has no business on a brain.
+
+    Laid out in INCHES and converted, rather than a gridspec: the brains need
+    a rect of a fixed aspect, the legend's width is only known once it is
+    drawn, and the bars' bottom margin depends on the rendered region names.
+    Each is measured and the rest is fitted around it.
+    """
+    from ieeg_ehr.med_analysis.plot_poster_epoch_meds import GROUPED_SIZES
+
+    saved = {k: getattr(style, k) for k in GROUPED_SIZES}
+    for k, v in GROUPED_SIZES.items():
+        setattr(style, k, v)
+    try:
+        W, H = COMBINED_FIGSIZE
+        fig = plt.figure(figsize=COMBINED_FIGSIZE)
+        pad = 0.06                                   # inches, canvas margin
+        top_h = args.combined_top_height
+        row_y0 = H - pad - top_h
+
+        # -- top row: legend first, so the brains get whatever it leaves ----
+        lax = fig.add_axes((0, row_y0 / H, 1, top_h / H))
+        leg = draw_legend(lax, groups, colours, style.LEGEND_SIZE,
+                          args.combined_legend_cols, loc='center right',
+                          anchor=(1 - pad / W, 0.5))
+        fig.canvas.draw()
+        leg_w = leg.get_window_extent(fig.canvas.get_renderer()).width / fig.dpi
+        brain_w = W - 2 * pad - leg_w - 0.12
+        node_args = argparse.Namespace(**{**vars(args),
+                                          'node_size': args.combined_node_size,
+                                          'edge_width': 0.2})
+        displays = draw_brains(
+            fig, el, colours, ['x', 'z'],
+            (pad / W, row_y0 / H, brain_w / W, top_h / H),
+            args.brain_gap, node_args)
+
+        # -- bottom row: bars --------------------------------------------------
+        left, right = 0.95 / W, 1 - pad / W
+        dom_h = 0.30          # the domain names above the reach panel
+        bars_top = row_y0 - 0.10 - dom_h
+        ax0 = fig.add_axes((left, 0.5, right - left, 0.2))
+        ax1 = fig.add_axes((left, 0.2, right - left, 0.2), sharex=ax0)
+        ax0.tick_params(labelbottom=False)
+        fonts = dict(label=style.LABEL_SIZE, tick=style.TICK_SIZE,
+                     value=COMBINED_FONT_VALUE)
+        draw_bars((ax0, ax1), el, colours, groups, other, n_cohort, fonts,
+                  args, house=True)
+        bottom = xlabel_height_in(fig, ax1) + 0.12 + pad
+        gap = 0.15
+        panel_h = (bars_top - bottom - gap) / 2
+        ax1.set_position((left, bottom / H, right - left, panel_h / H))
+        ax0.set_position((left, (bottom + panel_h + gap) / H, right - left,
+                          panel_h / H))
+        fig.align_ylabels([ax0, ax1])
+        draw_domain_labels(ax0, el, colours, groups, other, style.LABEL_SIZE)
+
+        fig.canvas.draw()
+        check_inside(fig)
+        fig.savefig(out_path, dpi=COMBINED_DPI, facecolor='white')
+        plt.close(fig)
+        for d in displays:
+            if d is not None:
+                d.close()
+        logger.info('wrote %s  (%.2f x %.2f in at %d dpi)', out_path.name,
+                    W, H, COMBINED_DPI)
+    finally:
+        for k, v in saved.items():
+            setattr(style, k, v)
 
 
 def main():
@@ -527,6 +691,17 @@ def main():
     ap.add_argument('--brain-bottom', type=float, default=0.02)
     ap.add_argument('--brain-height', type=float, default=0.96)
     ap.add_argument('--legend-cols', type=int, default=2)
+    ap.add_argument('--combined-legend-cols', type=int, default=2,
+                    help='Legend columns in fig_anatomy_combined.png. 1 frees '
+                         'width for larger brains at the cost of a taller '
+                         'legend.')
+    ap.add_argument('--combined-top-height', type=float, default=3.4,
+                    help='Inches of the 8-inch combined figure given to the '
+                         'brains + legend row; the bars take the rest.')
+    ap.add_argument('--combined-node-size', type=float, default=6,
+                    help='Marker area on the combined figure, whose brains '
+                         'are ~3.4 in tall against ~5.8 in on the standalone '
+                         'one -- 17 there would be a solid smear here.')
     ap.add_argument('--bar-rotation', type=float, default=45,
                     help='Angle of the region names under the bars.')
     ap.add_argument('--value-rotation', type=float, default=0,
@@ -651,7 +826,8 @@ def main():
                 'figures': [f'fig_anatomy_glass_{m}.png'
                             for m in args.display_modes]
                            + ['fig_anatomy_bars.png',
-                              'fig_anatomy_bars_tall.png'],
+                              'fig_anatomy_bars_tall.png',
+                              'fig_anatomy_combined.png'],
                 'insula_threshold': params.get('insula_threshold')},
         parents=[str(run_dir / 'provenance.json')],
         subjects=sorted(el['subject_id'].unique()),
@@ -705,6 +881,8 @@ def main():
         bars(el, colours, groups, other, len(subjects),
              out_dir / 'fig_anatomy_bars_tall.png', btitle,
              alt, domain_caveat(scheme))
+    combined(el, colours, groups, other, len(subjects),
+             out_dir / 'fig_anatomy_combined.png', args)
     logger.info('done -> %s', out_dir)
 
 
