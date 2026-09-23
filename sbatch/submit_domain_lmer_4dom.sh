@@ -60,7 +60,7 @@ for spec in "${JOBS[@]}"; do
       -J "lmer4_${LABEL}" -p "${PARTITION}" --array=0-5 \
       --requeue --open-mode=append \
       -o "logs/lmer4_${LABEL}_%A_%a.out" -e "logs/lmer4_${LABEL}_%A_%a.err" \
-      --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_GLOB="${FRAMES_DIR}",VIEW_SCHEME="${VIEW_SCHEME}",DROP_DOMAIN="${DROP_DOMAIN}",BANDS="delta,theta,alpha,beta,gamma,high_gamma" \
+      --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_GLOB="${FRAMES_DIR}",VIEW_SCHEME="${VIEW_SCHEME}",DROP_DOMAIN="${DROP_DOMAIN}" \
       sbatch/domain_lmer_band_array.sbatch)
 
     REAP=$(sbatch --parsable \

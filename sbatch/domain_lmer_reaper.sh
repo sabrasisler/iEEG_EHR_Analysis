@@ -70,17 +70,19 @@ if [ "${ATTEMPT}" -ge "${MAX_ATTEMPTS}" ]; then
     exit 1
 fi
 
+# RESUBMIT THE FULL 0-5 ARRAY, not just the missing subset. Passing a subset
+# needs a list over --export, and --export is comma-separated, so a
+# comma-joined value gets split by Slurm itself. The array's idempotency check
+# makes the full resubmission free: bands that already landed exit immediately.
 NEXT=$((ATTEMPT + 1))
-JOINED=$(IFS=,; echo "${missing[*]}")
-LAST=$(( ${#missing[@]} - 1 ))
 
 ARR=$(sbatch --parsable \
-  -J "${LABEL}_a${NEXT}" -p "${PARTITION}" --array=0-${LAST} \
+  -J "${LABEL}_a${NEXT}" -p "${PARTITION}" --array=0-5 \
   --requeue --open-mode=append \
   -o "logs/${LABEL}_%A_%a.out" -e "logs/${LABEL}_%A_%a.err" \
-  --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_GLOB="${FRAMES_GLOB}",VIEW_SCHEME="${VIEW_SCHEME}",DROP_DOMAIN="${DROP_DOMAIN}",BANDS="${JOINED}" \
+  --export=ALL,RUN_DIR="${RUN_DIR}",FRAMES_GLOB="${FRAMES_GLOB}",VIEW_SCHEME="${VIEW_SCHEME}",DROP_DOMAIN="${DROP_DOMAIN}" \
   sbatch/domain_lmer_band_array.sbatch)
-echo "resubmitted ${#missing[@]} band(s) as ${ARR}"
+echo "resubmitted (full array; ${#missing[@]} band(s) actually missing) as ${ARR}"
 
 REAP=$(sbatch --parsable \
   --dependency=afterany:"${ARR}" \

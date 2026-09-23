@@ -53,11 +53,19 @@ if [ -z "${FRAMES_DIR}" ]; then
     exit 1
 fi
 
-# COMMA OR SPACE separated. The reaper passes a comma-separated subset through
-# --export, where an embedded space is fragile.
-read -r -a BAND_ARR <<< "${BANDS//,/ }"
-if [ ${#BAND_ARR[@]} -eq 0 ]; then
-    read -r -a BAND_ARR <<< "delta theta alpha beta gamma high_gamma"
+# THE BAND LIST IS FIXED AND NEVER PASSED IN.
+#
+# It used to arrive as BANDS="delta,theta,..." over --export, which does not
+# work: `--export` is ITSELF comma-separated, so Slurm split the value and set
+# BANDS=delta, leaving tasks 1-5 to die on `BAND_ARR[i]: unbound variable`.
+# Passing a subset is also unnecessary -- the idempotency check below means a
+# full 0-5 array costs nothing for bands that already landed, so the reaper can
+# just resubmit the whole array and let finished tasks exit immediately.
+BAND_ARR=(delta theta alpha beta gamma high_gamma)
+
+if [ "${SLURM_ARRAY_TASK_ID}" -ge "${#BAND_ARR[@]}" ]; then
+    echo "task ${SLURM_ARRAY_TASK_ID} exceeds the ${#BAND_ARR[@]} bands" >&2
+    exit 1
 fi
 BAND=${BAND_ARR[$SLURM_ARRAY_TASK_ID]}
 
