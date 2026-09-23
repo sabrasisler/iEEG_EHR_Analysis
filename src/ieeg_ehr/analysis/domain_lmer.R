@@ -107,6 +107,24 @@ cat(sprintf("[%s] rows=%d subjects=%d ROIs=%d domains=%d channels=%d\n",
 # is a BETWEEN-subject comparison at n=51 -- unlike the pain slope, which is
 # within-subject. Expect wide intervals and small Satterthwaite df here.
 has_dx <- "dx_state" %in% names(d)
+
+# THE HANDSHAKE. `--expect-dx` is what the CALLER believes it sent. Selecting
+# the model from the column alone is how a dropped column once produced six
+# converged fits of the WRONG model with a sidecar that named the right one.
+# A disagreement is a bug in the caller, so it stops here rather than being
+# resolved by guessing.
+expect_dx <- arg_of("--expect-dx", "")
+if (nzchar(expect_dx)) {
+  want <- expect_dx == "1"
+  if (want != has_dx) {
+    stop(sprintf(
+      paste("--expect-dx=%s but dx_state is %s in the input frame.",
+            "Refusing to choose a model by guessing:",
+            "fix the caller's column selection."),
+      expect_dx, if (has_dx) "PRESENT" else "ABSENT"))
+  }
+}
+
 if (has_dx) {
   d[, dx := factor(ifelse(dx_state > 0.5, "case", "control"))]
   cat(sprintf("[%s] dx strata: %s\n", band,

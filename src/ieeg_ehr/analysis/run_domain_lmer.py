@@ -140,6 +140,23 @@ def fit_band(frame_path, band, run_dir, work_dir, args):
 
     keep = ['subject', 'channel_uid', 'log10_power', 'NRS_within',
             'NRS_submean', 'parcel', 'domain']
+
+    # dx_state MUST be carried across, and its presence MUST be asserted to R.
+    #
+    # It was omitted from `keep` once. R's model choice keyed off whether the
+    # column was in the CSV, so its absence did not fail -- it silently selected
+    # the NO-DX formula and fitted the all-subjects model, while this side wrote
+    # provenance naming the dx model, because the probe reads the PARQUET (which
+    # has the column) and R reads the CSV (which did not). Six converged fits,
+    # a self-consistent sidecar, and the wrong model.
+    #
+    # The `--expect-dx` handshake is why that cannot recur: the caller declares
+    # what it believes it is sending, and R REFUSES to guess when the two
+    # disagree, rather than falling back to a model nobody asked for.
+    has_dx = 'dx_state' in df.columns
+    if has_dx:
+        keep.append('dx_state')
+
     missing = [c for c in keep if c not in df.columns]
     if missing:
         raise SystemExit(f'{frame_path} lacks {missing}. It was probably built '
@@ -152,7 +169,8 @@ def fit_band(frame_path, band, run_dir, work_dir, args):
 
     cmd = ['Rscript', str(R_SCRIPT), '--in', str(csv),
            '--out', str(run_dir / 'bands'), '--band', band,
-           '--df', args.df_method, '--optimizer', args.optimizer]
+           '--df', args.df_method, '--optimizer', args.optimizer,
+           '--expect-dx', '1' if has_dx else '0']
     if args.drop_domain:
         cmd += ['--drop-domain', ','.join(args.drop_domain)]
 
