@@ -280,15 +280,33 @@ GRID_DPI = 300
 BAND_TEXT = {'high_gamma': 'high gamma'}
 
 
-def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=()):
-    """F1 over F2 in one 2 x 4 figure: rows are the two readouts, columns the
-    domains. The HOUSE STYLE of `plot_domain_anatomy.combined` -- grouped sizes,
+#: Vertical layout in INCHES, so one row or two come out at the same panel size
+#: and the same type: margins above the first row (legend, heading, domain
+#: names, coverage line), between rows (x ticks + label, next heading, domain
+#: names), and below the last (x ticks + label, footnote). Two rows at these
+#: values total exactly GRID_FIGSIZE's 7.5 in.
+GRID_TOP_IN = 0.98
+GRID_GAP_IN = 1.27
+GRID_BOTTOM_IN = 1.09
+GRID_AXES_H_IN = (GRID_FIGSIZE[1] - GRID_TOP_IN - GRID_GAP_IN
+                  - GRID_BOTTOM_IN) / 2
+
+
+def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
+                rows=('F1', 'F2')):
+    """F1 over F2 as one figure: rows are the readouts, columns the domains.
+
+    `rows=('F1', 'F2')` is the 2 x 4, 7.5 x 7.5 in figure. `rows=('F2',)`
+    draws the F2 row alone at the same width, panel size and type -- for runs
+    fitted before the R stage saved the med effect, which have no F1.
+
+    The HOUSE STYLE of `plot_domain_anatomy.combined` -- grouped sizes,
     light-grey left/bottom spines, black ticks, no grid, domain-hued titles --
     and no footnote essay: the model and BH families are stated once in a
-    one-line note, and the full record is in the two tables beside it.
+    short note, and the full record is in the tables beside it.
 
     Each ROW shares its x scale (the two rows are in different units), and all
-    eight panels share the band axis.
+    panels share the band axis.
     """
     import matplotlib
     matplotlib.use('Agg')
@@ -299,11 +317,15 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=()):
     from ieeg_ehr.med_analysis import style
     from ieeg_ehr.med_analysis.plot_poster_epoch_meds import GROUPED_SIZES
 
-    f1_src = run_dir / 'domain_med_effect.csv'
-    if not f1_src.exists():
-        raise SystemExit(f'{f1_src} is missing; the grid needs F1. Refit.')
-    f1 = bh(io.read_table(f1_src, on_stale='refuse')
-            .pipe(lambda d: d[d['domain'].isin(domains)]), args.fdr_q)
+    rows = tuple(rows)
+    f1 = None
+    if 'F1' in rows:
+        f1_src = run_dir / 'domain_med_effect.csv'
+        if not f1_src.exists():
+            raise SystemExit(f'{f1_src} is missing; F1 needs it. Refit, or '
+                             'draw the F2 row alone (--figures grid_f2).')
+        f1 = bh(io.read_table(f1_src, on_stale='refuse')
+                .pipe(lambda d: d[d['domain'].isin(domains)]), args.fdr_q)
     sl = io.read_table(run_dir / 'domain_slopes.csv', on_stale='refuse')
     sl = sl[sl['domain'].isin(domains)]
     pr = io.read_table(run_dir / 'domain_pairs.csv', on_stale='refuse')
@@ -313,39 +335,65 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=()):
     dos = sl[sl['med'] == 'on'].set_index(['domain', 'band'])
     inter = pr.set_index(['domain', 'band'])
 
+    n_rows = len(rows)
+    W = GRID_FIGSIZE[0]
+    H = (GRID_TOP_IN + n_rows * GRID_AXES_H_IN + (n_rows - 1) * GRID_GAP_IN
+         + GRID_BOTTOM_IN)
+    window = f'{args.med_window_hours:g} h'
+    drugs = f'{drug_set.replace("_", " ")}, within {window}'
+    grey = '0.3'
+    spec = {
+        'F1': dict(
+            head='Power shift when dosed',
+            xlab='Δ log$_{10}$ power, dosed − undosed (at own mean pain)',
+            legend=[Line2D([], [], marker='o', color=grey,
+                           markerfacecolor='white', ls='none', ms=5,
+                           label='n.s.'),
+                    Line2D([], [], marker='o', color=grey,
+                           markerfacecolor=grey, ls='none', ms=5,
+                           label='BH q < .05')]),
+        'F2': dict(
+            head='Pain slope, undosed vs dosed',
+            xlab='Pain slope (Δ log$_{10}$ power per NRS point)',
+            legend=[Line2D([], [], marker='o', color=grey,
+                           markerfacecolor='white', ls='none', ms=4.5,
+                           label='undosed'),
+                    Line2D([], [], marker='D', color=grey,
+                           markerfacecolor=grey, ls='none', ms=4,
+                           label='dosed'),
+                    Line2D([], [], marker='$*$', color=grey, ls='none', ms=7,
+                           label='slope change BH q < .05')]),
+    }
+
     saved = {k: getattr(style, k) for k in GROUPED_SIZES}
     for k, v in GROUPED_SIZES.items():
         setattr(style, k, v)
     try:
-        fig, axes = plt.subplots(2, len(domains), figsize=GRID_FIGSIZE,
+        fig, axes = plt.subplots(n_rows, len(domains), figsize=(W, H),
                                  sharey=True, squeeze=False)
-        fig.subplots_adjust(left=0.15, right=0.985, top=0.87, bottom=0.145,
-                            wspace=0.10, hspace=0.62)
+        fig.subplots_adjust(left=0.15, right=0.985, wspace=0.10,
+                            top=1 - GRID_TOP_IN / H,
+                            bottom=GRID_BOTTOM_IN / H,
+                            hspace=GRID_GAP_IN / GRID_AXES_H_IN)
         y = np.arange(len(bands))
-        lim_a = float(np.nanmax(np.abs(f1[['lower.CL', 'upper.CL']]
-                                       .to_numpy()))) * 1.08
-        lim_b = float(np.nanmax(np.abs(sl[['lower.CL', 'upper.CL']]
-                                       .to_numpy()))) * 1.08
         OFF = 0.18
         EB = dict(lw=1.0, capsize=2.0, zorder=3)
 
-        for j, dom in enumerate(domains):
-            colour = DOMAIN_COLOURS.get(dom, '0.4')
-            a, b = axes[0][j], axes[1][j]
-
+        def draw_f1(ax, dom, colour):
             d = f1[f1['domain'] == dom].set_index('band').reindex(bands)
             for i, band in enumerate(bands):
                 r = d.loc[band]
                 if not np.isfinite(r.get('estimate', np.nan)):
                     continue
                 sig = bool(r['p_bh_reject'])
-                a.errorbar(r['estimate'], i,
-                           xerr=[[r['estimate'] - r['lower.CL']],
-                                 [r['upper.CL'] - r['estimate']]],
-                           fmt='o', ms=5, color=colour,
-                           markerfacecolor=colour if sig else 'white', **EB)
+                ax.errorbar(r['estimate'], i,
+                            xerr=[[r['estimate'] - r['lower.CL']],
+                                  [r['upper.CL'] - r['estimate']]],
+                            fmt='o', ms=5, color=colour,
+                            markerfacecolor=colour if sig else 'white', **EB)
 
-            star = blended_transform_factory(b.transAxes, b.transData)
+        def draw_f2(ax, dom, colour):
+            star = blended_transform_factory(ax.transAxes, ax.transData)
             for i, band in enumerate(bands):
                 key = (dom, band)
                 if key not in und.index or key not in dos.index:
@@ -353,106 +401,105 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=()):
                 u, v = und.loc[key], dos.loc[key]
                 sig = bool(inter.loc[key, 'p_bh_reject']) \
                     if key in inter.index else False
-                b.plot([u[col], v[col]], [i - OFF, i + OFF], '-',
-                       color=colour, lw=1.6 if sig else 0.8,
-                       alpha=0.9 if sig else 0.35, zorder=2)
+                ax.plot([u[col], v[col]], [i - OFF, i + OFF], '-',
+                        color=colour, lw=1.6 if sig else 0.8,
+                        alpha=0.9 if sig else 0.35, zorder=2)
                 for r, yy, fmt, fc, ms in ((u, i - OFF, 'o', 'white', 4.5),
                                            (v, i + OFF, 'D', colour, 4.0)):
-                    b.errorbar(r[col], yy,
-                               xerr=[[r[col] - r['lower.CL']],
-                                     [r['upper.CL'] - r[col]]],
-                               fmt=fmt, ms=ms, color=colour,
-                               markerfacecolor=fc, **EB)
+                    ax.errorbar(r[col], yy,
+                                xerr=[[r[col] - r['lower.CL']],
+                                      [r['upper.CL'] - r[col]]],
+                                fmt=fmt, ms=ms, color=colour,
+                                markerfacecolor=fc, **EB)
                 if sig:
-                    b.text(0.97, i, '*', transform=star, ha='right',
-                           va='center', fontsize=13, color=colour, zorder=4)
+                    ax.text(0.97, i, '*', transform=star, ha='right',
+                            va='center', fontsize=13, color=colour, zorder=4)
 
-            for ax, lim in ((a, lim_a), (b, lim_b)):
+        draw = {'F1': draw_f1, 'F2': draw_f2}
+        limits = {'F2': float(np.nanmax(np.abs(
+            sl[['lower.CL', 'upper.CL']].to_numpy()))) * 1.08}
+        if f1 is not None:
+            limits['F1'] = float(np.nanmax(np.abs(
+                f1[['lower.CL', 'upper.CL']].to_numpy()))) * 1.08
+
+        for ri, key in enumerate(rows):
+            first = ri == 0
+            for j, dom in enumerate(domains):
+                colour = DOMAIN_COLOURS.get(dom, '0.4')
+                ax = axes[ri][j]
+                draw[key](ax, dom, colour)
                 style.style_axes(ax, grid_axis=None,
                                  tick_color=style.TEXT_PRIMARY)
                 ax.axvline(0, color=style.ZERO_LINE_COLOR, lw=0.8, ls='--',
                            zorder=1)
                 for i in range(len(bands) - 1):
                     ax.axhline(i + 0.5, color='0.93', lw=0.6, zorder=0)
-                ax.set_xlim(-lim, lim)
+                ax.set_xlim(-limits[key], limits[key])
                 ax.xaxis.set_major_locator(MaxNLocator(3, symmetric=True))
                 ax.tick_params(axis='x', labelsize=style.TICK_SIZE - 1.5)
                 ax.tick_params(axis='y', length=0)
-            c = cov.get(dom)
-            a.set_title(dom, fontsize=style.LABEL_SIZE, color=colour, pad=16)
-            if c:
-                a.text(0.5, 1.02, f'{c["n_subjects"]} patients, '
-                       f'{c["n_channels"]} electrodes',
-                       transform=a.transAxes, ha='center', va='bottom',
-                       fontsize=style.TICK_SIZE - 2, color=style.TEXT_MUTED)
-            b.set_title(dom, fontsize=style.LABEL_SIZE, color=colour, pad=6)
+                # Coverage is a property of the domain, not the readout, so
+                # it is printed once, under the domain name of the top row.
+                c = cov.get(dom) if first else None
+                ax.set_title(dom, fontsize=style.LABEL_SIZE, color=colour,
+                             pad=16 if c else 6)
+                if c:
+                    ax.text(0.5, 1.02, f'{c["n_subjects"]} patients, '
+                            f'{c["n_channels"]} electrodes',
+                            transform=ax.transAxes, ha='center', va='bottom',
+                            fontsize=style.TICK_SIZE - 2,
+                            color=style.TEXT_MUTED)
+            axes[ri][0].set_yticks(y)
+            axes[ri][0].set_yticklabels([BAND_TEXT.get(x, x) for x in bands],
+                                        fontsize=style.TICK_SIZE)
+            axes[ri][0].set_ylim(len(bands) - 0.5, -0.5)
 
-        for row in axes:
-            row[0].set_yticks(y)
-            row[0].set_yticklabels([BAND_TEXT.get(x, x) for x in bands],
-                                   fontsize=style.TICK_SIZE)
-            row[0].set_ylim(len(bands) - 0.5, -0.5)
+            # Heading, shared x label and legend, placed in inches off the
+            # laid-out axes. The first row's legend sits in the top margin;
+            # a later row's shares the line with its heading.
+            pos0, pos1 = axes[ri][0].get_position(), axes[ri][-1].get_position()
+            letter = f'{"AB"[ri]}   ' if n_rows > 1 else ''
+            head = spec[key]['head'] + (f' ({drugs})' if first else '')
+            fig.text(0.015, pos0.y1 + (0.56 if first else 0.34) / H,
+                     letter + head, fontsize=style.LABEL_SIZE,
+                     fontweight='bold', color=style.TEXT_PRIMARY,
+                     ha='left', va='bottom')
+            fig.text((pos0.x0 + pos1.x1) / 2, pos0.y0 - 0.41 / H,
+                     spec[key]['xlab'], ha='center', va='top',
+                     fontsize=style.LABEL_SIZE - 1, color=style.TEXT_PRIMARY)
+            fig.legend(handles=spec[key]['legend'],
+                       loc='upper right' if first else 'lower right',
+                       bbox_to_anchor=(0.985, 1 - 0.04 / H) if first
+                       else (0.985, pos0.y1 + 0.30 / H),
+                       ncol=len(spec[key]['legend']),
+                       fontsize=style.LEGEND_SIZE, frameon=False,
+                       handletextpad=0.3, columnspacing=1.0)
 
-        # Row headings and shared x labels, placed off the laid-out axes.
-        window = f'{args.med_window_hours:g} h'
-        heads = (f'A   Power shift when dosed ({drug_set.replace("_", " ")}, '
-                 f'within {window})',
-                 'B   Pain slope, undosed vs dosed')
-        xlabs = ('Δ log$_{10}$ power, dosed − undosed '
-                 '(at own mean pain)',
-                 'Pain slope (Δ log$_{10}$ power per NRS point)')
-        for row, head, xlab in zip(axes, heads, xlabs):
-            top = row[0].get_position().y1
-            bot = row[0].get_position().y0
-            x0, x1 = row[0].get_position().x0, row[-1].get_position().x1
-            fig.text(0.015, top + (0.075 if row is axes[0] else 0.045), head,
-                     fontsize=style.LABEL_SIZE, fontweight='bold',
-                     color=style.TEXT_PRIMARY, ha='left', va='bottom')
-            fig.text((x0 + x1) / 2, bot - 0.055, xlab, ha='center',
-                     va='top', fontsize=style.LABEL_SIZE - 1,
-                     color=style.TEXT_PRIMARY)
-
-        grey = '0.3'
-        fig.legend(handles=[
-            Line2D([], [], marker='o', color=grey, markerfacecolor='white',
-                   ls='none', ms=5, label='n.s.'),
-            Line2D([], [], marker='o', color=grey, markerfacecolor=grey,
-                   ls='none', ms=5, label='BH q < .05')],
-            loc='upper right', bbox_to_anchor=(0.985, 0.995), ncol=2,
-            fontsize=style.LEGEND_SIZE, frameon=False, handletextpad=0.3,
-            columnspacing=1.0)
-        b_top = axes[1][0].get_position().y1
-        fig.legend(handles=[
-            Line2D([], [], marker='o', color=grey, markerfacecolor='white',
-                   ls='none', ms=4.5, label='undosed'),
-            Line2D([], [], marker='D', color=grey, markerfacecolor=grey,
-                   ls='none', ms=4, label='dosed'),
-            Line2D([], [], marker='$*$', color=grey, ls='none', ms=7,
-                   label='slope change BH q < .05')],
-            loc='lower right', bbox_to_anchor=(0.985, b_top + 0.040), ncol=3,
-            fontsize=style.LEGEND_SIZE, frameon=False, handletextpad=0.3,
-            columnspacing=1.0)
-
-        fig.text(0.015, 0.012,
+        n_cells = len(pr)
+        fig.text(0.015, 0.09 / H,
                  'lme4, one fit per band'
                  + (f' ({", ".join(dropped)} excluded from the fit)'
                     if dropped else ', every domain in the fit')
-                 + f'; 95% CIs; BH within each row across its {len(f1)} '
-                 'cells.\n' + DISCLAIMER, fontsize=style.FOOTNOTE_SIZE - 1,
-                 linespacing=1.3,
+                 + '; 95% CIs; BH '
+                 + ('within each row ' if n_rows > 1 else '')
+                 + f'across {"its" if n_rows > 1 else "the"} {n_cells} cells.\n' + DISCLAIMER,
+                 fontsize=style.FOOTNOTE_SIZE - 1, linespacing=1.3,
                  color=style.TEXT_MUTED, ha='left', va='bottom')
 
-        out = run_dir / 'fig_F1F2_grid.png'
+        name = ('fig_F1F2_grid.png' if 'F1' in rows
+                else 'fig_F2_pain_slope_by_dose_grid.png')
+        out = run_dir / name
         fig.savefig(out, dpi=GRID_DPI, facecolor='white')
         plt.close(fig)
-        logger.info('wrote %s (%.1f x %.1f in, %d dpi)', out, *GRID_FIGSIZE,
-                    GRID_DPI)
+        logger.info('wrote %s (%.2f x %.2f in, %d dpi)', out, W, H, GRID_DPI)
     finally:
         for k, v in saved.items():
             setattr(style, k, v)
 
-    _save_table(f1, run_dir, 'table_F1_med_effect.csv', f1_src.name, args,
-                'every domain x band cell on F1')
+    if f1 is not None:
+        _save_table(f1, run_dir, 'table_F1_med_effect.csv',
+                    'domain_med_effect.csv', args,
+                    'every domain x band cell on F1')
     _save_table(pr, run_dir, 'table_F2_pain_slope_interaction.csv',
                 'domain_pairs.csv', args, 'every domain x band cell on F2')
 
@@ -463,7 +510,7 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run-dir', required=True, help='an lme4 MED domain run')
     ap.add_argument('--figures', nargs='*', default=['F1', 'F2'],
-                    choices=['F1', 'F2', 'grid'])
+                    choices=['F1', 'F2', 'grid', 'grid_f2'])
     ap.add_argument('--fdr-q', type=float, default=0.05)
     ap.add_argument('--drug-set', default=None,
                     help='default: read from the frames scheme folder name')
@@ -496,6 +543,9 @@ def main(argv=None):
         figure_f2(run_dir, domains, bands, cov, subtitle, args)
     if 'grid' in args.figures:
         figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped)
+    if 'grid_f2' in args.figures:
+        figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped,
+                    rows=('F2',))
     io.log_analysis(f'lme4 domain med figures {"/".join(args.figures)}',
                     run_dir)
     return 0
