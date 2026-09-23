@@ -37,12 +37,14 @@ recovered from row order (a reset of `epoch_id`), and uniqueness of (subject,
 session, channel, epoch) is ASSERTED per band -- a frame built differently fails
 here instead of pooling.
 
-THE PROFILE FILTERS are the region-level profile's, unchanged: a band where the
-subject has fewer than two ROI cells is dropped, then a subject needs at least
-`MIN_CELLS_FOR_R` = 12 cells to get an r. With only the significant cells in the
-map (13 delta ROIs + 6 beta ROIs = 19 at most) the 12-cell floor excludes far
-more subjects than it did over the full region map; the count is printed and is
-in the title's denominator.
+THE PROFILE FILTERS: a band where the subject has fewer than two ROI cells is
+dropped (the region-level profile's rule), then a subject needs at least
+`PROFILE_MIN_CELLS` = 4 cells to get an r (`--min-cells`). The region-level floor
+of 12 excluded 23 of 51 subjects here, because the map holds only the
+significant cells (13 delta ROIs + 6 beta ROIs = 19 at most); lowered to 4 at the
+analyst's instruction (2026-09-22). NOTE: with 4 cells there are only 24 distinct
+orderings, so the smallest attainable p is ~1/24 > 0.025 -- a 4-cell subject can
+be plotted but can never exceed their null. 5 cells is the least that can.
 
 THE PROFILE NULL IS A FREE SHUFFLE, at the analyst's instruction (2026-09-22):
 the subject's values are permuted across ALL their cells, not within band. The
@@ -63,7 +65,7 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import io
-from ieeg_ehr.analysis.plot_bandpower_consistency import MIN_CELLS_FOR_R, N_PERM
+from ieeg_ehr.analysis.plot_bandpower_consistency import N_PERM
 from ieeg_ehr.analysis.plot_domain_consistency import cell_stats
 from ieeg_ehr.analysis.plot_mixed_model_subject_lines import (epoch_level,
                                                               subject_slopes)
@@ -86,6 +88,7 @@ DOMAINS = ('Sensory', 'Affective', 'Cognitive', 'Modulatory')
 
 PROFILE_PERM = 5000
 PROFILE_SEED = 0
+PROFILE_MIN_CELLS = 4
 ALPHA_ONE_SIDED = 0.025
 BLUE, GREY, RED = '#2166AC', '#9E9E9E', '#B2182B'
 #: Panel (b) of the region-level `fig_consistency_profile` (13.6 x 6.6 in, two
@@ -149,14 +152,18 @@ def _rowwise_pearson(x, Y):
         return (Yc @ xc) / den
 
 
-def profile_table(roi_slopes, loo, cells, n_perm=PROFILE_PERM, seed=PROFILE_SEED):
+def profile_table(roi_slopes, loo, cells, n_perm=PROFILE_PERM, seed=PROFILE_SEED,
+                  min_cells=PROFILE_MIN_CELLS):
     """Per subject: n_cells, r_full (Spearman), free-shuffle p, exceeds.
 
     Coverage: the subject's cell slope must be finite and the LOO group slope
     must exist; a band with fewer than two such cells is dropped (the region-
-    level profile's filter), then < MIN_CELLS_FOR_R cells means no r.
+    level profile's filter), then < `min_cells` cells means no r.
+
+    Each subject gets its OWN seeded stream, (seed, position in the sorted
+    cohort), so a subject's p does not move when the floor changes who else is
+    scored.
     """
-    rng = np.random.default_rng(seed)
     cell_keys = pd.DataFrame(cells, columns=['parcel', 'band'])
     s = roi_slopes.merge(cell_keys, on=['parcel', 'band'])
     g = loo[loo['excluded'] != NONE].rename(
@@ -168,16 +175,20 @@ def profile_table(roi_slopes, loo, cells, n_perm=PROFILE_PERM, seed=PROFILE_SEED
     s = s[per_band >= 2]
 
     rows = []
-    for subj in sorted(roi_slopes['subject'].unique()):
+    for i, subj in enumerate(sorted(roi_slopes['subject'].unique())):
+        rng = np.random.default_rng([seed, i])
         d = s[s['subject'] == subj]
         n = len(d)
         rec = {'subject': subj, 'n_cells': n, 'n_bands': d['band'].nunique(),
                'r_full': np.nan, 'p': np.nan, 'exceeds': False,
                'r_within_band_p': np.nan}
-        if n >= MIN_CELLS_FOR_R:
+        if n >= min_cells:
             x = _ranks(d['slope'].to_numpy(float))
             y = _ranks(d['group'].to_numpy(float))
             r = float(np.corrcoef(x, y)[0, 1])
+            if not np.isfinite(r):   # all-tied ranks: no correlation defined
+                rows.append(rec)
+                continue
             # FREE shuffle of the subject's values across all their cells.
             X = np.tile(x, (n_perm, 1))
             rng.permuted(X, axis=1, out=X)
@@ -368,6 +379,8 @@ def main(argv=None):
     ap.add_argument('--figures', nargs='*', default=list(FIGURES),
                     choices=FIGURES)
     ap.add_argument('--n-perm-signflip', type=int, default=N_PERM)
+    ap.add_argument('--min-cells', type=int, default=PROFILE_MIN_CELLS,
+                    help='profile: fewest band x ROI cells a subject needs for an r')
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -436,7 +449,7 @@ def main(argv=None):
         members = loo.drop_duplicates('ROI').set_index('ROI')['domain']
         cells = [(r, b) for d, b in sig for r in members[members == d].index]
         logger.info('profile map: %d (ROI, band) cells', len(cells))
-        prof, used = profile_table(roi, loo, cells)
+        prof, used = profile_table(roi, loo, cells, min_cells=args.min_cells)
         n_all = len(prof)
         n_excl = int((~np.isfinite(prof['r_full'])).sum())
         io.write_table(used, out_dir / 'profile_sigcells_cell_slopes.csv',
@@ -449,7 +462,7 @@ def main(argv=None):
                                'n_perm': PROFILE_PERM, 'seed': PROFILE_SEED,
                                'p': '(1 + #{r_null >= r}) / (1 + n_perm)',
                                'exceeds': f'p < {ALPHA_ONE_SIDED}',
-                               'min_cells': MIN_CELLS_FOR_R,
+                               'min_cells': args.min_cells,
                                'min_cells_per_band': 2, 'cells': cells,
                                'r_within_band_p': 'comparison only, not plotted'},
                        **common)
@@ -458,7 +471,7 @@ def main(argv=None):
         print(prof.sort_values('r_full', ascending=False).to_string(
             index=False, float_format=lambda v: f'{v:.4f}'))
         print(f"\nN={counts['N']}  n_pos={counts['n_pos']}  n_sig={counts['n_sig']}  "
-              f"n_excluded={n_excl} (of {n_all}; < {MIN_CELLS_FOR_R} cells)  "
+              f"n_excluded={n_excl} (of {n_all}; < {args.min_cells} cells)  "
               f"within-band p<0.025: {int((prof['r_within_band_p'] < 0.025).sum())}")
 
     io.log_analysis('lme4 domain-run consistency: domain sign map, significant-'
