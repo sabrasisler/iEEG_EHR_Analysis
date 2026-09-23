@@ -280,7 +280,7 @@ GRID_DPI = 300
 BAND_TEXT = {'high_gamma': 'high gamma'}
 
 
-def figure_grid(run_dir, domains, bands, cov, drug_set, args):
+def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=()):
     """F1 over F2 in one 2 x 4 figure: rows are the two readouts, columns the
     domains. The HOUSE STYLE of `plot_domain_anatomy.combined` -- grouped sizes,
     light-grey left/bottom spines, black ticks, no grid, domain-hued titles --
@@ -319,7 +319,7 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args):
     try:
         fig, axes = plt.subplots(2, len(domains), figsize=GRID_FIGSIZE,
                                  sharey=True, squeeze=False)
-        fig.subplots_adjust(left=0.15, right=0.985, top=0.885, bottom=0.135,
+        fig.subplots_adjust(left=0.15, right=0.985, top=0.87, bottom=0.145,
                             wspace=0.10, hspace=0.62)
         y = np.arange(len(bands))
         lim_a = float(np.nanmax(np.abs(f1[['lower.CL', 'upper.CL']]
@@ -434,9 +434,12 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args):
             columnspacing=1.0)
 
         fig.text(0.015, 0.012,
-                 'lme4, one fit per band, all domains in the fit; 95% CIs; BH '
-                 f'within each row across its {len(f1)} cells. '
-                 + DISCLAIMER, fontsize=style.FOOTNOTE_SIZE - 1,
+                 'lme4, one fit per band'
+                 + (f' ({", ".join(dropped)} excluded from the fit)'
+                    if dropped else ', every domain in the fit')
+                 + f'; 95% CIs; BH within each row across its {len(f1)} '
+                 'cells.\n' + DISCLAIMER, fontsize=style.FOOTNOTE_SIZE - 1,
+                 linespacing=1.3,
                  color=style.TEXT_MUTED, ha='left', va='bottom')
 
         out = run_dir / 'fig_F1F2_grid.png'
@@ -492,7 +495,7 @@ def main(argv=None):
     if 'F2' in args.figures:
         figure_f2(run_dir, domains, bands, cov, subtitle, args)
     if 'grid' in args.figures:
-        figure_grid(run_dir, domains, bands, cov, drug_set, args)
+        figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped)
     io.log_analysis(f'lme4 domain med figures {"/".join(args.figures)}',
                     run_dir)
     return 0
