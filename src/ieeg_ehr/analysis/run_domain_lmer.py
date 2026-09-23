@@ -52,6 +52,7 @@ from pathlib import Path
 import pandas as pd
 
 from ieeg_ehr import config, io
+from ieeg_ehr.analysis import mixed_model as mm
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,16 @@ DX_FORMULA = ('log10_power ~ 0 + domain:dx + domain:dx:NRS_within '
               '+ domain:NRS_submean '
               '+ (1 + NRS_within || ROI) + (1 + NRS_within || subject) '
               '+ (1 + NRS_within || subj_roi) + (1 | chan_id)')
+
+#: The medication variant. `med` is EPOCH-level, so unlike dx this is a
+#: WITHIN-subject contrast and `med_within` can carry a subject random slope.
+#: `med_submean` holds the between-patient exposure difference out of the on/off
+#: comparison -- without it the contrast absorbs why a patient was medicated.
+MED_FORMULA = ('log10_power ~ 0 + domain:med + domain:med:NRS_within '
+               '+ domain:NRS_submean + med_submean '
+               '+ (1 + NRS_within || ROI) '
+               '+ (1 + NRS_within + med_within || subject) '
+               '+ (1 + NRS_within || subj_roi) + (1 | chan_id)')
 
 RANDOM_EFFECTS = {
     'ROI': '1 + NRS_within, CROSSED with subject',
@@ -157,6 +168,22 @@ def fit_band(frame_path, band, run_dir, work_dir, args):
     if has_dx:
         keep.append('dx_state')
 
+    # MEDICATION. The saved frame carries raw `med_state` only: run_domain_model
+    # writes frames/<band>.parquet BEFORE calling add_med_components, so the
+    # within/between split does not exist on disk and must be made here. Doing
+    # it with the same helper the statsmodels path uses is the point -- the
+    # decomposition is row-weighted over the rows entering THIS fit, and a
+    # hand-rolled groupby mean would silently differ for any subject that lost
+    # rows to masking.
+    has_med = 'med_state' in df.columns
+    if has_med:
+        df = mm.add_med_components(df)
+        keep += ['med_state', 'med_within', 'med_submean']
+
+    if has_dx and has_med:
+        raise SystemExit('frame carries BOTH dx_state and med_state; this '
+                         'script fits one moderator at a time.')
+
     missing = [c for c in keep if c not in df.columns]
     if missing:
         raise SystemExit(f'{frame_path} lacks {missing}. It was probably built '
@@ -170,7 +197,8 @@ def fit_band(frame_path, band, run_dir, work_dir, args):
     cmd = ['Rscript', str(R_SCRIPT), '--in', str(csv),
            '--out', str(run_dir / 'bands'), '--band', band,
            '--df', args.df_method, '--optimizer', args.optimizer,
-           '--expect-dx', '1' if has_dx else '0']
+           '--expect-dx', '1' if has_dx else '0',
+           '--expect-med', '1' if has_med else '0']
     if args.drop_domain:
         cmd += ['--drop-domain', ','.join(args.drop_domain)]
 
@@ -307,14 +335,21 @@ def main(argv=None):
     # a sidecar claiming the pain-only formula on a dx run is the provenance
     # error that cannot be caught later, because the file looks self-consistent.
     has_dx = 'dx_state' in probe.columns
+    has_med = 'med_state' in probe.columns
     n_case = int((probe.groupby('subject')['dx_state'].first() > 0.5).sum()) \
         if has_dx else None
 
     params = {
-        'formula': DX_FORMULA if has_dx else FORMULA,
+        'formula': (DX_FORMULA if has_dx
+                    else MED_FORMULA if has_med else FORMULA),
         'dx_model': bool(has_dx),
         'dx_n_case': n_case,
         'dx_n_control': (len(subjects) - n_case) if has_dx else None,
+        'med_model': bool(has_med),
+        'med_n_epoch_rows_on': (int((probe['med_state'] > 0.5).sum())
+                                if has_med else None),
+        'med_n_epoch_rows_off': (int((probe['med_state'] <= 0.5).sum())
+                                 if has_med else None),
         'random_effects': RANDOM_EFFECTS,
         'engine': 'R lme4::lmer via lmerTest, REML=TRUE',
         'df_method_requested': args.df_method,
@@ -326,6 +361,9 @@ def main(argv=None):
         'marginal_slopes': ("emtrends(~ dx | domain, var='NRS_within'); "
                             "pairs() gives case-minus-control WITHIN a domain"
                             if has_dx else
+                            "emtrends(~ med | domain, var='NRS_within'); "
+                            "pairs() gives ON-minus-OFF drug WITHIN a domain"
+                            if has_med else
                             "emtrends(~ domain, var='NRS_within')"),
         'omnibus': ('NONE COMPUTED -- removed at the analyst\'s instruction. '
                     'joint_tests() is also the wrong test under 0 + domain '

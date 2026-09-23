@@ -125,6 +125,38 @@ if (nzchar(expect_dx)) {
   }
 }
 
+# THE MEDICATION MODEL, when a medication state is present.
+#
+#   0 + domain:med + domain:med:NRS_within + domain:NRS_submean + med_submean
+#
+# STRUCTURALLY DIFFERENT FROM dx, and the difference is the whole point.
+# `med_state` is EPOCH-level: it varies WITHIN a patient as doses come and go,
+# so "on-drug minus off-drug pain slope" is a WITHIN-subject contrast. The dx
+# contrast was between-subject at n=51 and had almost nothing to work with;
+# this one is powered by epochs.
+#
+# `med_submean` IS NOT OPTIONAL. Without it the `med` contrast absorbs the
+# between-patient difference between heavily and lightly medicated patients,
+# which is confounded with why they were medicated at all. Holding it lets the
+# on/off comparison stay inside a patient.
+#
+# `med_within` GETS A SUBJECT RANDOM SLOPE, which dx could not have: it varies
+# within subject, so patients can genuinely differ in how a dose moves their
+# power, and pretending otherwise understates the standard error the same way
+# the missing subject x ROI slope did.
+has_med <- "med_state" %in% names(d)
+
+expect_med <- arg_of("--expect-med", "")
+if (nzchar(expect_med)) {
+  want_med <- expect_med == "1"
+  if (want_med != has_med) {
+    stop(sprintf(
+      paste("--expect-med=%s but med_state is %s in the input frame.",
+            "Refusing to choose a model by guessing."),
+      expect_med, if (has_med) "PRESENT" else "ABSENT"))
+  }
+}
+
 if (has_dx) {
   d[, dx := factor(ifelse(dx_state > 0.5, "case", "control"))]
   cat(sprintf("[%s] dx strata: %s\n", band,
@@ -132,6 +164,15 @@ if (has_dx) {
   fml <- log10_power ~ 0 + domain:dx + domain:dx:NRS_within +
     domain:NRS_submean +
     (1 + NRS_within || ROI) + (1 + NRS_within || subject) +
+    (1 + NRS_within || subj_roi) + (1 | chan_id)
+} else if (has_med) {
+  d[, med := factor(ifelse(med_state > 0.5, "on", "off"), levels = c("off", "on"))]
+  cat(sprintf("[%s] med epochs: %s\n", band,
+              paste(names(table(d$med)), table(d$med), sep = "=", collapse = " ")))
+  fml <- log10_power ~ 0 + domain:med + domain:med:NRS_within +
+    domain:NRS_submean + med_submean +
+    (1 + NRS_within || ROI) +
+    (1 + NRS_within + med_within || subject) +
     (1 + NRS_within || subj_roi) + (1 | chan_id)
 } else {
   fml <- log10_power ~ 0 + domain + domain:NRS_within + domain:NRS_submean +
@@ -163,7 +204,7 @@ emm_options(lmer.df = df_mode, lmerTest.limit = 2e6, pbkrtest.limit = 2e6)
 #: With a dx stratum the marginal grid is `dx | domain`, so `pairs()` below
 #: gives case-minus-control WITHIN each domain -- the circuit-level question --
 #: rather than pooling strata or contrasting domains across them.
-spec <- if (has_dx) ~ dx | domain else ~ domain
+spec <- if (has_dx) ~ dx | domain else if (has_med) ~ med | domain else ~ domain
 
 df_used <- df_mode
 tr <- tryCatch(

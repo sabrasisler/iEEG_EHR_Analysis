@@ -1,0 +1,70 @@
+#!/bin/bash
+#SBATCH -J lmer_band
+#SBATCH -p ckeller1
+#SBATCH -t 04:00:00
+#SBATCH -c 4
+#SBATCH --mem=32GB
+#SBATCH --array=0-5
+#SBATCH -o logs/lmer_band_%A_%a.out
+#SBATCH -e logs/lmer_band_%A_%a.err
+#
+# ONE ARRAY TASK PER BAND for any lme4 domain run. Generic over the moderator:
+# the FRAME decides the model (dx_state -> diagnosis strata, med_state ->
+# medication, neither -> all subjects) and run_domain_lmer asserts that choice
+# to R over --expect-dx / --expect-med, so a dropped column fails loudly rather
+# than silently selecting a different model.
+#
+# Supersedes domain_lmer_mdd_array.sbatch, which hard-coded the MDD view scheme.
+#
+# Required from the submit wrapper:
+#   RUN_DIR      the SHARED run every task writes into. Without it each task
+#                timestamps its own directory and there is nothing to collect.
+#   FRAMES_GLOB  a glob, not a path -- analysis_run_dir appends its own stamp.
+#   VIEW_SCHEME  level-4 folder name.
+# Optional:
+#   DROP_DOMAIN  comma-separated domains removed BEFORE the fit, so excluding a
+#                domain is a genuinely different model, not a masked figure.
+#   BANDS        space-separated override of the six-band default.
+
+set -euo pipefail
+export PATH="$HOME/bin:$PATH"
+
+module load math R/4.4.2
+module load python/3.12
+source "$GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate"
+
+export PYTHONPATH="${SLURM_SUBMIT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+export R_LIBS_USER="$GROUP_HOME/R/4.4.2"
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}
+
+: "${RUN_DIR:?RUN_DIR must be exported by the submit wrapper}"
+: "${FRAMES_GLOB:?FRAMES_GLOB must be exported by the submit wrapper}"
+: "${VIEW_SCHEME:?VIEW_SCHEME must be exported by the submit wrapper}"
+
+FRAMES_DIR=$(ls -1d ${FRAMES_GLOB} 2>/dev/null | sort | tail -1)
+if [ -z "${FRAMES_DIR}" ]; then
+    echo "FATAL: no frames matched ${FRAMES_GLOB}" >&2
+    exit 1
+fi
+
+read -r -a BAND_ARR <<< "${BANDS:-delta theta alpha beta gamma high_gamma}"
+BAND=${BAND_ARR[$SLURM_ARRAY_TASK_ID]}
+
+DROP_ARG=()
+if [ -n "${DROP_DOMAIN:-}" ]; then
+    DROP_ARG=(--drop-domain ${DROP_DOMAIN//,/ })
+fi
+
+echo "=== lmer | band=${BAND} | task=${SLURM_ARRAY_TASK_ID} | $(date) ==="
+echo "run dir: ${RUN_DIR}"
+echo "frames:  ${FRAMES_DIR}"
+echo "drop:    ${DROP_DOMAIN:-<none>}"
+
+python -m ieeg_ehr.analysis.run_domain_lmer \
+    --frames-dir "${FRAMES_DIR}" \
+    --run-dir "${RUN_DIR}" \
+    --bands "${BAND}" \
+    --view-scheme "${VIEW_SCHEME}" \
+    "${DROP_ARG[@]}"
+
+echo "=== done ${BAND} ($(date)) ==="
