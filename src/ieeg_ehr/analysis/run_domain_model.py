@@ -928,6 +928,13 @@ def main():
                          'Lets a convergence probe try alternative random-effect '
                          'specifications on the IDENTICAL data without paying the '
                          'view load again.')
+    ap.add_argument('--frames-only', action='store_true',
+                    help='Write the model frames and STOP -- no fits, no '
+                         'figures. For an alternative engine (run_domain_lmer) '
+                         'that needs the frames but already has the '
+                         'statsmodels results: refitting them to obtain a '
+                         'by-product costs ~20 min per band for nothing. '
+                         'Implies --save-frames.')
     ap.add_argument('--per-domain', action='store_true',
                     help='PANEL F MODEL: fit each DOMAIN SEPARATELY '
                          '(log10_power ~ NRS_within * med_within + '
@@ -1274,7 +1281,7 @@ def main():
             frame = frame.merge(dx_lookup, on='subject_id', how='inner')
             extra.append('dx_state')
         df = mm.build_cell_frame(frame, extra_columns=tuple(extra))
-        if args.save_frames:
+        if args.save_frames or args.frames_only:
             # The model frame EXACTLY as fitted, so a convergence probe can try
             # alternative specifications without re-reading the view (minutes)
             # and without the risk of rebuilding a subtly different frame.
@@ -1282,6 +1289,12 @@ def main():
                            params={'band': band, 'unit': args.unit,
                                    'roi_scheme': args.roi_scheme},
                            script=SCRIPT)
+        if args.frames_only:
+            # Stop BEFORE the fit. Nothing downstream is written, so this run
+            # directory holds frames and nothing else -- deliberately, so it
+            # cannot be mistaken for a results run.
+            logger.info('[%s] frames-only: frame written, skipping fit', band)
+            continue
         if med_lookup is not None:
             df = mm.add_med_components(df)
         if args.per_domain:
@@ -1299,6 +1312,24 @@ def main():
                                    drop_parcel=args.drop_parcel_term)
             records.append(rec)
             slope_parts.append(slopes)
+
+    if args.frames_only:
+        # A run provenance is still written: the frames are real artifacts that
+        # another engine consumes, and an artifact without provenance cannot be
+        # traced back to the view and cohort that produced it.
+        io.write_run_provenance(
+            run_dir, script=SCRIPT,
+            params={'frames_only': True, 'unit': args.unit,
+                    'roi_scheme': args.roi_scheme, 'band_set': args.band_set,
+                    'bands': bands, 'notched_bins_excluded': notched,
+                    'epoch_minutes': epoch_minutes,
+                    'note': 'FRAMES ONLY -- no model was fitted in this run.'},
+            parents=[str(Path(args.reference_run) / 'provenance.json'),
+                     str(view_dir)],
+            subjects=sorted(subjects),
+            extra={'status': DISCLAIMER})
+        logger.info('frames-only: wrote %s', run_dir / 'frames')
+        return 0
 
     cells = pd.DataFrame(records)
     slopes = pd.concat(slope_parts, ignore_index=True)
