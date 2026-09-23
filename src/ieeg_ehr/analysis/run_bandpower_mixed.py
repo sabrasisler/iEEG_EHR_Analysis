@@ -329,7 +329,8 @@ def fit_one_cell(df, meta):
     return rec, slopes, blups
 
 
-def fit_dx_interaction(df, meta):
+def fit_dx_interaction(df, meta, min_per_arm=DX_MIN_SUBJECTS_PER_ARM,
+                       fit_reduced=True):
     """The diagnosis-moderator fit for one cell: does the pain slope differ?
 
     Same variance components as the pain-only fit (`mm.VC_FULL`), so the two are
@@ -351,12 +352,12 @@ def fit_dx_interaction(df, meta):
     # explicit branch on.
     n_case = int(df.loc[df['dx_state'] == 1, 'subject'].nunique())
     n_ctrl = int(df.loc[df['dx_state'] == 0, 'subject'].nunique())
-    if min(n_case, n_ctrl) < DX_MIN_SUBJECTS_PER_ARM:
+    if min(n_case, n_ctrl) < min_per_arm:
         rec = mm.failed_record(
             meta['region'], meta['band_index'], meta['band_lo_hz'],
             meta['band_hi_hz'],
             f'dx strata too small: {n_case} case / {n_ctrl} control subjects, '
-            f'need {DX_MIN_SUBJECTS_PER_ARM} in each', df=df)
+            f'need {min_per_arm} in each', df=df)
         rec.update({k: meta[k] for k in ('band', 'cell_index')})
         rec.update({'n_subjects_case': n_case, 'n_subjects_control': n_ctrl})
         return rec
@@ -374,11 +375,15 @@ def fit_dx_interaction(df, meta):
         return rec
     t_full = time.time() - t0
 
-    try:
-        res_red, warn_red = mm.fit_cell(df, mm.VC_REDUCED,
-                                        formula=mm.FORMULA_DX_INTERACTION)
-    except mm.CellFitError as exc:
-        res_red, warn_red = None, [f'reduced failed: {exc}']
+    # The reduced fit exists only for the slope-heterogeneity LRT. Skipped under
+    # `--dx-only`, which leaves the LRT columns NaN rather than half-computed.
+    res_red, warn_red = None, []
+    if fit_reduced:
+        try:
+            res_red, warn_red = mm.fit_cell(df, mm.VC_REDUCED,
+                                            formula=mm.FORMULA_DX_INTERACTION)
+        except mm.CellFitError as exc:
+            res_red, warn_red = None, [f'reduced failed: {exc}']
 
     rec = mm.cell_record(res, res_red, df, region=meta['region'],
                          freq_bin_index=meta['band_index'],
@@ -622,12 +627,18 @@ def stage_fit(args):
             df = mm.build_cell_frame(frame, region=region,
                                      freq_bin_index=meta['band_index'],
                                      extra_columns=extra)
-            rec, slopes, blups = fit_one_cell(df, meta)
-            rec['model'] = 'pain'
-            records.append(rec)
+            # `--dx-only`: the diagnosis-interaction model and nothing else, so
+            # the run holds exactly the fits whose BH family is being asked about.
+            slopes, blups = None, None
+            if not args.dx_only:
+                rec, slopes, blups = fit_one_cell(df, meta)
+                rec['model'] = 'pain'
+                records.append(rec)
 
             if args.dx_model == 'interaction':
-                dx_rec = fit_dx_interaction(df, meta)
+                dx_rec = fit_dx_interaction(
+                    df, meta, min_per_arm=args.dx_min_subjects_per_arm,
+                    fit_reduced=not args.dx_only)
                 dx_rec['model'] = f'dx_{args.dx}'
                 records.append(dx_rec)
 
@@ -746,8 +757,9 @@ def stage_fit(args):
                                   if dx_labels is not None else None),
                     'dx_n_control': (int((~dx_labels['dx_state']).sum())
                                      if dx_labels is not None else None),
-                    'dx_min_subjects_per_arm': (DX_MIN_SUBJECTS_PER_ARM
+                    'dx_min_subjects_per_arm': (args.dx_min_subjects_per_arm
                                                 if args.dx_model != 'none' else None),
+                    'dx_only': args.dx_only,
                     'excluded_regions': list(args.exclude_regions),
                     'excluded_regions_reason': args.exclude_reason,
                     'cells_selected': sorted(args.cells) if args.cells else None,
@@ -961,7 +973,7 @@ def stage_collect(args):
     else:
         logger.info('--no-figures: tables and BH written, no plots drawn')
     if cells['model'].str.startswith('dx_').any():
-        dx_report(cells, args.fdr_q)
+        dx_report(cells, args.fdr_q, args.dx_min_subjects_per_arm)
     write_methods(run_dir, cells, args)
     io.log_analysis(f'band-power mixed-effects models, {len(cells)} region x band '
                     'cells, BH-corrected (EXPLORATORY)', run_dir)
@@ -1082,7 +1094,7 @@ def figures(run_dir, cells, args):
     logger.info('wrote %s and %s', p1.name, p2.name)
 
 
-def dx_report(cells, q):
+def dx_report(cells, q, min_per_arm=DX_MIN_SUBJECTS_PER_ARM):
     """Log the interaction cells that survive their own BH family."""
     d = cells[cells['model'].str.startswith('dx_')]
     if not len(d):
@@ -1091,7 +1103,7 @@ def dx_report(cells, q):
     n_fit = int(d['dx_ix_beta'].notna().sum())
     logger.info('DIAGNOSIS MODERATION: %d of %d cells fitted (%d refused for a '
                 'stratum under %d subjects)', n_fit, len(d), len(d) - n_fit,
-                DX_MIN_SUBJECTS_PER_ARM)
+                min_per_arm)
     sig = d[d.get('dx_ix_p_bh_reject', pd.Series(dtype=object)) == True]  # noqa: E712
     logger.info('  interaction BH-significant at q=%.2f: %d', q, len(sig))
     for r in sig.sort_values('dx_ix_p').itertuples():
@@ -1201,7 +1213,7 @@ def dx_figure(run_dir, cells, args):
              f'than the non-{args.dx.upper()} arm ({n_ctrl}) everywhere from '
              'power alone. '
              'Only the right panel tests a difference. Grey = not fitted '
-             f'(a stratum under {DX_MIN_SUBJECTS_PER_ARM} subjects).\n'
+             f'(a stratum under {args.dx_min_subjects_per_arm} subjects).\n'
              f'{DX_CAVEAT}\n{WALD_CAVEAT} {DISCLAIMER}',
              fontsize=6.3, va='bottom', ha='left', color='0.35', wrap=True)
     out = run_dir / 'fig_dx_effects.png'
@@ -1473,7 +1485,7 @@ arms are unequal ({n_case} vs {n_ctrl}), so the smaller one carries wider
 standard errors everywhere and looks weaker from power alone; reading that as a
 group difference is the difference-of-significance fallacy. A stratified fit
 also estimates its own variance components per arm, which costs every region
-whose smaller arm falls under {DX_MIN_SUBJECTS_PER_ARM} subjects. Here
+whose smaller arm falls under {args.dx_min_subjects_per_arm} subjects. Here
 {n_fit} of {len(dx)} cells were fitted and {len(dx) - n_fit} were refused on
 that rule; the refused cells are ROWS carrying the reason, and they are still
 fitted by the pain-only model above.
@@ -1574,6 +1586,17 @@ def main():
                          'HL7-historical entries -- worth running, because most '
                          'cases are labelled by a billing code alone, but it '
                          'costs most of the arm.')
+    ap.add_argument('--dx-min-subjects-per-arm', type=int,
+                    default=DX_MIN_SUBJECTS_PER_ARM,
+                    help='Subjects required in EACH diagnosis arm before a '
+                         f'cell\'s interaction is fitted (default '
+                         f'{DX_MIN_SUBJECTS_PER_ARM}). Lowering it fits sparse '
+                         'cells; the per-arm counts are in every row, so read '
+                         'them beside the estimate.')
+    ap.add_argument('--dx-only', action='store_true',
+                    help='Fit ONLY the diagnosis-interaction model: no pain-only '
+                         'fit, no reduced refit for the heterogeneity LRT. '
+                         'Requires --dx-model interaction.')
     ap.add_argument('--exclude-regions', nargs='*', default=[],
                     help='Regions to leave out of the run ENTIRELY -- not fitted, '
                          'not in the BH family, not on the figures. Use for a '
@@ -1637,6 +1660,9 @@ def main():
                 f'unset); got {args.roi_scheme!r}.')
         args.roi_scheme = base
     args.roi_scheme = args.roi_scheme or 'roi_v2_ofc'
+    if args.dx_only and args.dx_model != 'interaction':
+        raise SystemExit('--dx-only needs --dx-model interaction; without it '
+                         'there is no model left to fit.')
 
     if args.view_scheme is None:
         # The DOMAIN scheme names the folder when there is one: two domain
