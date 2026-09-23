@@ -227,7 +227,9 @@ def figure_f2(run_dir, domains, bands, cov, subtitle, args):
                ls='none', ms=5.5, label='dosed'),
         Line2D([], [], color='0.35', lw=2.0,
                label='* interaction BH-significant')],
-        loc='lower right', fontsize=6.5, frameon=True, framealpha=0.9)
+        # Outside the panel: inside, it sat on the Modulatory high-band rows.
+        loc='upper left', bbox_to_anchor=(1.02, 1.0), fontsize=6.5,
+        frameon=True, framealpha=0.9)
 
     _finish(fig, run_dir, 'fig_F2_pain_slope_by_dose.png',
             'F2 -- the PAIN SLOPE undosed vs dosed, lme4 domain model\n'
