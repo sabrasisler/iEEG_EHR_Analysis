@@ -112,8 +112,14 @@ def categorical_markers(keys):
     return {key: MARKERS[i] for i, key in enumerate(keys)}
 
 
-def style_axes(ax, grid_axis='y'):
-    """The house axis style: light horizontal grid behind, no top/right spines."""
+def style_axes(ax, grid_axis='y', tick_color=None):
+    """The house axis style: light horizontal grid behind, no top/right spines.
+
+    `grid_axis=None` draws no grid at all — poster panels are read from across
+    a room, where a grid is one more thing competing with the data. Pass
+    `tick_color=TEXT_PRIMARY` for the same reason: muted grey tick labels are
+    right on screen and too faint in print.
+    """
     if grid_axis in ('y', 'both'):
         ax.yaxis.grid(True, color=GRID_COLOR, linewidth=1, zorder=0)
     if grid_axis in ('x', 'both'):
@@ -123,7 +129,8 @@ def style_axes(ax, grid_axis='y'):
         ax.spines[spine].set_visible(False)
     ax.spines['left'].set_color(AXIS_COLOR)
     ax.spines['bottom'].set_color(AXIS_COLOR)
-    ax.tick_params(colors=TEXT_MUTED, labelsize=TICK_SIZE)
+    ax.tick_params(colors=TEXT_MUTED if tick_color is None else tick_color,
+                   labelsize=TICK_SIZE)
 
 
 def label_axes(ax, xlabel=None, ylabel=None, title=None, title_loc='left'):

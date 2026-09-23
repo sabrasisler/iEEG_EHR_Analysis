@@ -1,32 +1,41 @@
 """
-Poster panels A-E — analgesic exposure around pain epochs.
+Poster panels — analgesic exposure around pain epochs.
 
-Five standalone figures at poster sizes, each written separately so a panel can
-be dropped into a layout on its own:
+Standalone panels, each written separately so one can be placed on its own,
+plus a combined 2x2 for the panels that carry the story:
 
-  A  figA_subjects_by_drug.png     % of subjects with each drug in the 2 h
-                                   before at least one of their pain epochs
-  B  figB_medicated_epochs.png     per subject, the % of their epochs that are
-                                   dosed — one bar per subject
-  C  figC_dose_probability.png     within-subject P(dose | pain score) in the
-                                   2 h AFTER a score, averaged over subjects
-  D  figD_pain_dosed_vs_undosed.png    mean pain in dosed vs undosed epochs,
-                                       paired within subject
-  E  figE_pain_deviation.png       the same, as deviation from that session's
-                                   own mean pain
+  A   figA_subjects_by_drug.png      % of subjects with each drug in the 2 h
+                                     before >=1 of their pain epochs, led by
+                                     an "Any analgesic" bar
+  B   figB_medicated_epochs.png      per subject, the % of their epochs that
+                                     are dosed, split by medication class
+  C   figC_dose_probability.png      P(dose within 30 min) by pain score, one
+                                     curve per class plus any analgesic
+  C2  figC2_dose_probability_deviation.png   the same against the deviation
+                                     from that subject's own mean pain
+  D   figD_pain_dosed_vs_undosed.png mean pain in dosed vs undosed epochs
+  E   figE_pain_deviation.png        the same, as pain minus subject mean
+  --  figABC2E_grouped.png           A, B, C2 and E in one 2x2, no subplot
+                                     titles, with a gap between the rows for
+                                     text
 
-COHORT. Discovery only, by default and by design: the unit here is a pain
-epoch, so `CLAUDE.md`'s hold-out gate applies (unlike the pure-EHR figures,
-where DECISIONS 2026-09-03 call 4 reasoned it did not). `--split` exists but
-cannot name the hold-out.
+TWO WINDOWS, deliberately. Exposure (A, B, D, E) asks what a patient was under
+when the score was given, and uses 2 h. The dose-probability panels (C, C2) ask
+whether a score was ACTED on, which is a much tighter question, and use 30 min.
+Mixing them in one figure would be wrong; keeping them in different panels with
+the window named on each axis is not.
 
-THE CONFOUND, which every panel here shares and D and E state outright. Dosing
-is not randomised: the patient in more pain is the one who gets a dose. So a
-HIGHER pain score in dosed epochs is the expected result of confounding by
-indication and is not evidence that analgesia failed. Panel E removes
-between-subject differences by centring on each session's own mean, which
-helps with "who gets dosed" but does nothing about "when within a session",
-and that is the direction the bias runs. These are nominations.
+COHORT. The pain study's 51 subjects (`--cohort pain-study`), intersected with
+the discovery split rather than replacing it, so no cohort file can smuggle a
+hold-out subject past the gate. The unit is a pain epoch, so that gate applies
+here even though no neural power is read.
+
+THE CONFOUND. Dosing is not randomised: the patient in more pain is the one who
+gets dosed. Higher pain in dosed epochs is the expected result of confounding
+by indication, NOT evidence that analgesia failed. E and C2 remove
+between-subject differences by centring on each subject's own mean; neither
+touches the within-subject timing, which is the direction the bias runs.
+Nominations, not findings.
 
 Run on Slurm, never the login node:
     python -m ieeg_ehr.med_analysis.plot_poster_epoch_meds
@@ -58,25 +67,51 @@ DEFAULT_DRUGS = ('ACETAMINOPHEN', 'HYDROCODONE-ACETAMINOPHEN', 'OXYCODONE',
 DOSED_COLOR = '#eb6834'
 UNDOSED_COLOR = '#2a78d6'
 
+ANY_ANALGESIC = 'Any analgesic'
+ALL_ANALGESICS = 'All analgesics'
+MULTI_CLASS = 'Multiple classes'
 
-def _class_colors(drug_order, summary):
-    classes = [c for c in med_taxonomy.ANALGESIC_SUBCLASS_ORDER
-               if c in set(summary['level2'])]
-    classes += [c for c in summary['level2'].unique() if c not in classes]
-    return classes, style.categorical_colors(classes)
+
+def _axes(ax, grid=None):
+    """Poster axis style: no grid, black tick labels."""
+    style.style_axes(ax, grid_axis=grid, tick_color=style.TEXT_PRIMARY)
+
+
+def _class_palette():
+    colors = style.categorical_colors(
+        list(med_taxonomy.ANALGESIC_SUBCLASS_ORDER))
+    colors[MULTI_CLASS] = style.TEXT_MUTED
+    colors[ANY_ANALGESIC] = style.TEXT_PRIMARY
+    colors[ALL_ANALGESICS] = style.TEXT_PRIMARY
+    return colors
 
 
 # --------------------------------------------------------------- panel A ---
-def panel_a_table(per_epoch_drug, epochs, drugs, class_of):
+def panel_a_table(per_epoch_drug, per_epoch, drugs, class_of):
     """Per drug: subjects with it in the window before >=1 epoch.
 
-    `class_of` is passed in rather than looked up from `per_epoch_drug`,
-    because a drug with zero exposed epochs has no row there to read a class
-    from — and a drug nobody was exposed to is a real 0% bar that belongs on
-    the figure, not a missing one.
+    `Any analgesic` leads the table because it is the headline: the per-drug
+    bars answer "which drug", but the number a reader wants first is how much
+    of the cohort was exposed at all. It is a set union over drugs, never a
+    sum — most subjects received more than one.
+
+    `class_of` is passed in because a drug with zero exposed epochs has no row
+    in `per_epoch_drug` to read a class from, and a drug nobody was exposed to
+    is a real 0% bar rather than a missing one.
+
+    ACETAMINOPHEN here is single-ingredient only. The combination products are
+    separate `drug` strings classed as Opioids, so neither this table nor the
+    class colouring folds hydrocodone-acetaminophen into acetaminophen.
     """
-    n_subjects = epochs['subject'].nunique()
-    rows = []
+    n_subjects = per_epoch['subject'].nunique()
+    rows = [{
+        'drug': ANY_ANALGESIC,
+        'level2': ANY_ANALGESIC,
+        'n_subjects': per_epoch.loc[per_epoch['dosed'], 'subject'].nunique(),
+        'pct_subjects': 100.0 * per_epoch.loc[per_epoch['dosed'],
+                                              'subject'].nunique() / n_subjects,
+        'n_epochs_exposed': int(per_epoch['dosed'].sum()),
+    }]
     for drug in drugs:
         sub = per_epoch_drug[per_epoch_drug['drug'] == drug]
         rows.append({
@@ -89,60 +124,51 @@ def panel_a_table(per_epoch_drug, epochs, drugs, class_of):
     return pd.DataFrame(rows), n_subjects
 
 
-def plot_panel_a(summary, n_subjects, out_path, window_hours):
-    classes, colors = _class_colors(list(summary['drug']), summary)
-    ordered = (summary.assign(_c=summary['level2'].map(
-                                  {c: i for i, c in enumerate(classes)}))
-               .sort_values(['_c', 'pct_subjects'], ascending=[True, False])
-               .reset_index(drop=True))
+def draw_panel_a(ax, summary):
+    colors = _class_palette()
+    classes = [c for c in med_taxonomy.ANALGESIC_SUBCLASS_ORDER
+               if c in set(summary['level2'])]
 
-    fig, ax = plt.subplots(figsize=(16, 10))
+    head = summary[summary['drug'] == ANY_ANALGESIC]
+    rest = (summary[summary['drug'] != ANY_ANALGESIC]
+            .assign(_c=lambda d: d['level2'].map(
+                {c: i for i, c in enumerate(classes)}))
+            .sort_values(['_c', 'pct_subjects'], ascending=[True, False]))
+    ordered = pd.concat([head, rest], ignore_index=True)
+
     x = np.arange(len(ordered), dtype=float)
     ax.bar(x, ordered['pct_subjects'], width=0.7, zorder=3,
-           color=[colors[c] for c in ordered['level2']],
-           edgecolor='white')
-    for xi, v, n in zip(x, ordered['pct_subjects'], ordered['n_subjects']):
-        ax.annotate(f'{v:.0f}%\n({n})', (xi, v), textcoords='offset points',
+           color=[colors[c] for c in ordered['level2']], edgecolor='white')
+    for xi, v in zip(x, ordered['pct_subjects']):
+        ax.annotate(f'{v:.0f}%', (xi, v), textcoords='offset points',
                     xytext=(0, 6), ha='center', va='bottom',
-                    fontsize=style.TICK_SIZE, color=style.TEXT_MUTED)
+                    fontsize=style.TICK_SIZE, color=style.TEXT_PRIMARY)
 
-    # Rotated rather than wrapped: at poster type a 25 pt drug name is wide
-    # enough that seven of them collide horizontally whatever the wrapping.
     ax.set_xticks(x)
-    ax.set_xticklabels([d.title() for d in ordered['drug']],
+    ax.set_xticklabels([d.title() if d != ANY_ANALGESIC else d
+                        for d in ordered['drug']],
                        rotation=28, ha='right', fontsize=style.TICK_SIZE)
-    ax.set_ylim(0, 100)
-    style.style_axes(ax, grid_axis='y')
-    # Titles stay short and stay within ~45 characters a line. At poster type
-    # a long title is wider than the axes, and `bbox_inches='tight'` then
-    # stretches the canvas to fit it, leaving the panel adrift in whitespace.
-    # Cohort size is deliberately absent from every panel — it is stated once
-    # on the poster instead of five times on the figures.
-    style.label_axes(ax, None, '% of subjects',
-                     f'Analgesic exposure before a pain epoch\n'
-                     f'{window_hours:g} h window', title_loc='center')
-    handles = [plt.Rectangle((0, 0), 1, 1, color=colors[c]) for c in classes]
-    # Upper LEFT: the tallest bar is on the right, and at poster size the
-    # legend is big enough to sit on its value label.
-    ax.legend(handles, classes, frameon=False, fontsize=style.LEGEND_SIZE,
-              loc='upper left')
-    fig.tight_layout()
-    return style.save(fig, out_path)
+    ax.set_ylim(0, 105)
+    _axes(ax)
+    style.label_axes(ax, None, '% of subjects')
+    handles = [plt.Rectangle((0, 0), 1, 1, color=colors[c])
+               for c in [ANY_ANALGESIC] + classes]
+    # Upper CENTRE: the two tall bars are the leading "Any analgesic" and
+    # acetaminophen near the right, so centre is the only corner-ish space
+    # that clears both a bar and its value label.
+    ax.legend(handles, [ANY_ANALGESIC] + classes, frameon=False,
+              fontsize=style.LEGEND_SIZE, loc='upper center')
+    return ordered
 
 
 # --------------------------------------------------------------- panel B ---
-MULTI_CLASS = 'Multiple classes'
-
-
 def panel_b_table(per_epoch, per_epoch_drug):
     """Per subject: % of epochs dosed, split into MUTUALLY EXCLUSIVE classes.
 
     An epoch can be preceded by drugs of more than one class, so classes
     cannot simply be stacked — the segments would sum past the share of epochs
-    that were dosed at all, and the bar would stop meaning "% dosed". Each
-    dosed epoch is therefore assigned to exactly one segment: its class if
-    only one was given, `Multiple classes` otherwise. The bar total is then
-    still the share of that subject's epochs with any analgesic.
+    dosed at all and the bar would stop meaning "% dosed". Each dosed epoch is
+    assigned exactly one segment: its class, or `Multiple classes`.
     """
     classes = (per_epoch_drug.groupby(['subject', 'epoch_id'])['level2']
                .agg(lambda v: sorted(set(v))).rename('classes').reset_index())
@@ -164,15 +190,12 @@ def panel_b_table(per_epoch, per_epoch_drug):
     return out.sort_values('pct_dosed', ascending=False).reset_index(drop=True)
 
 
-def plot_panel_b(per_subject, out_path, window_hours):
+def draw_panel_b(ax, per_subject):
+    colors = _class_palette()
     segments = [c for c in med_taxonomy.ANALGESIC_SUBCLASS_ORDER
                 if per_subject.get(f'pct_{c}', pd.Series(dtype=float)).sum() > 0]
     segments.append(MULTI_CLASS)
-    colors = style.categorical_colors(
-        list(med_taxonomy.ANALGESIC_SUBCLASS_ORDER))
-    colors[MULTI_CLASS] = style.TEXT_MUTED   # a mixture, so neutral
 
-    fig, ax = plt.subplots(figsize=(16, 9))
     x = np.arange(len(per_subject), dtype=float)
     bottom = np.zeros(len(per_subject))
     for seg in segments:
@@ -188,87 +211,65 @@ def plot_panel_b(per_subject, out_path, window_hours):
                 va='bottom', fontsize=style.LEGEND_SIZE,
                 color=style.TEXT_PRIMARY)
 
-    # One tick per subject would be unreadable at poster size and says nothing
-    # — the subjects are anonymous and the ordering is the message.
+    # Anonymous subjects: a tick per bar would be unreadable and say nothing.
     ax.set_xticks([])
     ax.set_xlim(-0.8, len(per_subject) - 0.2)
     ax.set_ylim(0, 100)
-    style.style_axes(ax, grid_axis='y')
-    style.label_axes(
-        ax, 'Subjects (sorted)', '% of pain epochs dosed',
-        f'Medicated pain epochs per subject\n'
-        f'analgesic in the previous {window_hours:g} h', title_loc='center')
+    _axes(ax)
+    style.label_axes(ax, 'Subjects', '% of pain epochs dosed')
     ax.legend(frameon=False, fontsize=style.LEGEND_SIZE, loc='upper right')
-    fig.tight_layout()
-    return style.save(fig, out_path)
 
 
-# --------------------------------------------------------------- panel C ---
-def panel_c_table(per_subject_score):
-    """Across subjects, at each score: mean of the within-subject P(dose)."""
+# ------------------------------------------------------------ panels C/C2 ---
+def panel_c_table(per_subject_value, value_col):
+    """Across subjects, at each x: mean of the within-subject P(dose)."""
     rows = []
-    for score, g in per_subject_score.groupby('pain_score'):
+    for value, g in per_subject_value.groupby(value_col):
         p = g['p_dose']
         rows.append({
-            'pain_score': float(score),
+            value_col: float(value),
             'n_subjects': len(g),
             'mean_p_dose': float(p.mean()),
-            'sem_p_dose': float(p.std(ddof=1) / np.sqrt(len(p)))
-                          if len(p) > 1 else float('nan'),
+            'sem_p_dose': (float(p.std(ddof=1) / np.sqrt(len(p)))
+                           if len(p) > 1 else float('nan')),
             'median_p_dose': float(p.median()),
             'n_assessments': int(g['n_assessments'].sum()),
         })
-    return pd.DataFrame(rows).sort_values('pain_score').reset_index(drop=True)
+    return pd.DataFrame(rows).sort_values(value_col).reset_index(drop=True)
 
 
-ALL_ANALGESICS = 'All analgesics'
+def draw_panel_c(ax, summaries, value_col, xlabel, window_minutes,
+                 min_subjects=5):
+    """One curve per medication class, plus one for any analgesic.
 
+    The class curves do NOT sum to the all-analgesics curve: an assessment
+    followed by both an opioid and acetaminophen counts once in each and once
+    overall, which is the right reading of "probability a drug of this class
+    followed" and the wrong one to add up.
 
-def plot_panel_c(summaries, per_subject_all, out_path, window_hours):
-    """One line per medication class, plus a line for any analgesic.
-
-    `summaries` is an ordered mapping label -> the per-score summary frame.
-    The three class lines do NOT sum to the all-analgesics line: an assessment
-    followed by both an opioid and acetaminophen counts once in each class and
-    once overall, which is the right reading of "probability a drug of this
-    class followed" and the wrong one to add up.
+    `min_subjects` trims x positions that rest on a handful of subjects. On
+    the deviation axis the tails are single subjects with one extreme epoch,
+    and at poster size a 0%-or-100% point there reads as a result.
     """
-    colors = style.categorical_colors(
-        list(med_taxonomy.ANALGESIC_SUBCLASS_ORDER))
-    colors[ALL_ANALGESICS] = style.TEXT_PRIMARY
-
-    fig, ax = plt.subplots(figsize=(14, 9))
-
-    # Individual subjects sit behind the all-analgesics line only. Four
-    # scatter clouds would bury the lines they are meant to support, and this
-    # is the line the spread matters for. Unlabelled, deliberately.
-    rng = np.random.default_rng(0)
-    ax.scatter(per_subject_all['pain_score']
-               + rng.uniform(-0.18, 0.18, len(per_subject_all)),
-               100 * per_subject_all['p_dose'],
-               s=26, color=style.AXIS_COLOR, alpha=0.45, linewidth=0, zorder=2)
-
+    colors = _class_palette()
     for label, summary in summaries.items():
-        width = 2.2 if label == ALL_ANALGESICS else 1.4
-        ax.errorbar(summary['pain_score'], 100 * summary['mean_p_dose'],
-                    yerr=100 * summary['sem_p_dose'], marker='o',
+        keep = summary[summary['n_subjects'] >= min_subjects]
+        if keep.empty:
+            continue
+        width = 2.4 if label == ALL_ANALGESICS else 1.5
+        ax.errorbar(keep[value_col], 100 * keep['mean_p_dose'],
+                    yerr=100 * keep['sem_p_dose'], marker='o',
                     color=colors[label], ecolor=colors[label], capsize=4,
                     linewidth=width, label=label,
                     zorder=5 if label == ALL_ANALGESICS else 4)
 
-    ax.set_xticks(range(0, 11))
-    ax.set_xlim(-0.6, 10.6)
     ax.set_ylim(0, 105)
     ax.set_yticks(range(0, 101, 20))
-    style.style_axes(ax, grid_axis='y')
-    style.label_axes(
-        ax, 'Pain score', f'P(dose within {window_hours:g} h)  [%]',
-        'Probability of a dose after a pain score', title_loc='center')
-    # Upper left: the curves rise left-to-right, so that corner is the one
-    # region no line passes through.
+    _axes(ax)
+    style.label_axes(ax, xlabel, f'P(dose within {window_minutes:g} min)  [%]')
+    # The curves rise left to right, so the upper left is the one region no
+    # line passes through.
     ax.legend(frameon=False, fontsize=style.LEGEND_SIZE, loc='upper left')
-    fig.tight_layout()
-    return style.save(fig, out_path)
 
 
 # ------------------------------------------------------------ panels D/E ---
@@ -277,8 +278,7 @@ def paired_stats(paired):
 
     A paired Wilcoxon over SUBJECTS, never over epochs: epochs within a
     subject are not independent, and CLAUDE.md asks for per-subject effects
-    and sign consistency rather than a pooled p-value that ignores that
-    structure.
+    and sign consistency rather than a pooled p-value that ignores that.
     """
     diff = paired['difference'].to_numpy(dtype=float)
     out = {
@@ -297,10 +297,7 @@ def paired_stats(paired):
     return out
 
 
-def plot_paired(paired, stats, out_path, ylabel, title, zero_line=False,
-                show_p=True):
-    fig, ax = plt.subplots(figsize=(11, 9))
-
+def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True):
     xs = np.array([0.0, 1.0])
     for row in paired.itertuples():
         ax.plot(xs, [row.undosed, row.dosed], color=style.AXIS_COLOR,
@@ -310,10 +307,8 @@ def plot_paired(paired, stats, out_path, ylabel, title, zero_line=False,
     ax.scatter(np.full(len(paired), 1.0), paired['dosed'], s=60,
                color=DOSED_COLOR, alpha=0.75, zorder=3, linewidth=0)
 
-    # The group summary sits ON its group, not beside it. Offset sideways it
-    # read as a stray extra point rather than as a summary of the column it
-    # belongs to. A white edge and a high zorder keep it legible on top of the
-    # subject points instead of needing its own x position.
+    # The group summary sits ON its group. Offset sideways it read as a stray
+    # extra point rather than a summary of the column it belongs to.
     for x, col, color in ((0.0, 'undosed', UNDOSED_COLOR),
                           (1.0, 'dosed', DOSED_COLOR)):
         m = float(paired[col].mean())
@@ -329,23 +324,80 @@ def plot_paired(paired, stats, out_path, ylabel, title, zero_line=False,
     ax.set_xticks(xs)
     ax.set_xticklabels(['Undosed', 'Dosed'], fontsize=style.LABEL_SIZE)
     ax.set_xlim(-0.45, 1.45)
-    style.style_axes(ax, grid_axis='y')
+    _axes(ax)
 
-    # The statistics go INSIDE the axes. In the title they ran to three lines
-    # and `bbox_inches='tight'` stretched the canvas sideways to fit them.
-    # Cohort size is not among them — it lives on the poster, not the panel.
-    p = stats.get('wilcoxon_p')
+    # Statistics inside the axes; in the title they ran to three lines and
+    # bbox_inches='tight' stretched the canvas sideways to fit them. Cohort
+    # size is not among them — it lives on the poster, not the panel.
     lines = [f'median diff {stats["median_difference"]:+.2f}',
              f'higher when dosed: '
              f'{stats["n_higher_in_dosed"]}/{stats["n_subjects"]}']
+    p = stats.get('wilcoxon_p')
     if p is not None and show_p:
         lines.append(f'Wilcoxon p={p:.1e}')
     ax.text(0.98, 0.98, '\n'.join(lines), transform=ax.transAxes,
             ha='right', va='top', fontsize=style.LEGEND_SIZE,
             color=style.TEXT_PRIMARY, linespacing=1.4)
+    style.label_axes(ax, None, ylabel)
 
-    style.label_axes(ax, None, ylabel, title, title_loc='center')
+
+# ------------------------------------------------------ standalone wrappers ---
+def _save(fig, out_path, title=None):
+    if title:
+        fig.suptitle(title, fontsize=style.TITLE_SIZE,
+                     color=style.TEXT_PRIMARY, ha='center')
+        fig.tight_layout(rect=(0, 0, 1, 0.94))
+    else:
+        fig.tight_layout()
+    return style.save(fig, out_path)
+
+
+def plot_panel_a(summary, out_path, window_hours):
+    fig, ax = plt.subplots(figsize=(16, 10))
+    draw_panel_a(ax, summary)
+    return _save(fig, out_path,
+                 f'Analgesic exposure before a pain epoch\n'
+                 f'{window_hours:g} h window')
+
+
+def plot_panel_b(per_subject, out_path, window_hours):
+    fig, ax = plt.subplots(figsize=(16, 9))
+    draw_panel_b(ax, per_subject)
+    return _save(fig, out_path,
+                 f'Medicated pain epochs per subject\n'
+                 f'analgesic in the previous {window_hours:g} h')
+
+
+def plot_panel_c(summaries, out_path, value_col, xlabel, window_minutes,
+                 title):
+    fig, ax = plt.subplots(figsize=(14, 9))
+    draw_panel_c(ax, summaries, value_col, xlabel, window_minutes)
+    return _save(fig, out_path, title)
+
+
+def plot_paired(paired, stats, out_path, ylabel, title, zero_line=False,
+                show_p=True):
+    fig, ax = plt.subplots(figsize=(11, 9))
+    draw_paired(ax, paired, stats, ylabel, zero_line=zero_line, show_p=show_p)
+    return _save(fig, out_path, title)
+
+
+def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
+                 score_window_minutes):
+    """A, B, C2 and E in one 2x2, no subplot titles.
+
+    The row gap is deliberately wide: it is where the poster's own text goes,
+    so the figure has to leave room rather than assume a caption underneath.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(26, 18))
+    draw_panel_a(axes[0][0], a_table)
+    draw_panel_b(axes[0][1], b_table)
+    draw_panel_c(axes[1][0], c2_summaries, 'pain_deviation',
+                 'Pain minus subject mean', score_window_minutes)
+    draw_paired(axes[1][1], e_paired, e_stats, 'Pain minus subject mean',
+                zero_line=True, show_p=False)
     fig.tight_layout()
+    fig.subplots_adjust(hspace=0.30)
     return style.save(fig, out_path)
 
 
@@ -359,12 +411,18 @@ def build_parser():
                         help='drugs to show in panel A')
     parser.add_argument('--window-hours', type=float,
                         default=epoch_meds.WINDOW_HOURS,
-                        help='exposure window (default: %(default)s)')
+                        help='exposure window for A, B, D, E (default: '
+                             '%(default)s)')
+    parser.add_argument('--score-window-minutes', type=float, default=30.0,
+                        help='response window for C and C2 (default: '
+                             '%(default)s)')
     parser.add_argument('--split', default='discovery',
                         help='cohort split; the hold-out is not reachable')
-    parser.add_argument('--epoch-minutes', type=int, default=None,
-                        help='epoch definition to read (default: the '
-                             'configured one)')
+    parser.add_argument('--cohort', default='pain-study',
+                        choices=('pain-study', 'split'),
+                        help='pain-study = the 51 subjects of the continuous-'
+                             'pain regression, intersected with the split')
+    parser.add_argument('--epoch-minutes', type=int, default=None)
     parser.set_defaults(question=QUESTION)
     return parser
 
@@ -374,7 +432,7 @@ def main():
     io.warn_if_dirty()
     style.use_poster(True)
 
-    epochs = epoch_meds.load_epochs(split=args.split,
+    epochs = epoch_meds.load_epochs(split=args.split, cohort=args.cohort,
                                     minutes_before=args.epoch_minutes)
     admin_all = load.load_administrations(paths=config.med_admin_files())
     analgesics = epoch_meds.load_analgesics()
@@ -385,9 +443,12 @@ def main():
 
     per_epoch, per_epoch_drug = epoch_meds.exposure_before_epochs(
         epochs, analgesics, window_hours=args.window_hours)
-    per_epoch = epoch_meds.subject_deviation(per_epoch)
+    per_epoch = epoch_meds.subject_deviation(per_epoch, by='subject')
+    epochs_dev = epoch_meds.subject_deviation(epochs, by='subject')
 
     drugs = load.select_drugs(analgesics, drugs=args.drugs)
+    class_of = (analgesics.drop_duplicates('drug')
+                .set_index('drug')['level2'].to_dict())
 
     run_dir = config.analysis_run_dir(
         question=args.question, output_type=OUTPUT_TYPE,
@@ -401,54 +462,61 @@ def main():
     params = vars(args)
     subjects = sorted(per_epoch['subject'].unique())
 
-    # A
-    class_of = (analgesics.drop_duplicates('drug')
-                .set_index('drug')['level2'].to_dict())
     a_table, n_subjects = panel_a_table(per_epoch_drug, per_epoch, drugs,
                                         class_of)
-    plot_panel_a(a_table, n_subjects, run_dir / 'figA_subjects_by_drug.png',
+    plot_panel_a(a_table, run_dir / 'figA_subjects_by_drug.png',
                  args.window_hours)
-    # B
+
     b_table = panel_b_table(per_epoch, per_epoch_drug)
     plot_panel_b(b_table, run_dir / 'figB_medicated_epochs.png',
                  args.window_hours)
-    # C — one curve per class, plus one for any analgesic. Each is computed on
-    # its own administration subset, so the nearest-preceding attribution is
-    # applied within that subset rather than inherited from the pooled one.
-    summaries, per_subject_all, c_long = {}, None, []
+
+    # C and C2 — same curves, two x axes, both at the tighter response window.
+    c_summaries, c2_summaries, c_long = {}, {}, []
     for label in list(med_taxonomy.ANALGESIC_SUBCLASS_ORDER) + [ALL_ANALGESICS]:
         subset = (analgesics if label == ALL_ANALGESICS
                   else analgesics[analgesics['level2'] == label])
         if subset.empty:
             continue
-        per_score = epoch_meds.dose_probability_by_score(
-            epochs, subset, window_hours=args.window_hours)
-        summaries[label] = panel_c_table(per_score)
-        c_long.append(per_score.assign(med_group=label))
-        if label == ALL_ANALGESICS:
-            per_subject_all = per_score
-    c_table = pd.concat([s.assign(med_group=k) for k, s in summaries.items()],
-                        ignore_index=True)
-    per_subject_score = pd.concat(c_long, ignore_index=True)
-    plot_panel_c(summaries, per_subject_all,
-                 run_dir / 'figC_dose_probability.png', args.window_hours)
-    # D
+        by_score = epoch_meds.dose_probability_by_value(
+            epochs_dev, subset, window_minutes=args.score_window_minutes,
+            value_col='pain_score')
+        by_dev = epoch_meds.dose_probability_by_value(
+            epochs_dev, subset, window_minutes=args.score_window_minutes,
+            value_col='pain_deviation')
+        c_summaries[label] = panel_c_table(by_score, 'pain_score')
+        c2_summaries[label] = panel_c_table(by_dev, 'pain_deviation')
+        c_long.append(by_score.assign(med_group=label))
+
+    plot_panel_c(c_summaries, run_dir / 'figC_dose_probability.png',
+                 'pain_score', 'Pain score', args.score_window_minutes,
+                 'Probability of a dose after a pain score')
+    plot_panel_c(c2_summaries,
+                 run_dir / 'figC2_dose_probability_deviation.png',
+                 'pain_deviation', 'Pain minus subject mean',
+                 args.score_window_minutes,
+                 'Probability of a dose after a pain score')
+
     d_paired, d_dropped = epoch_meds.paired_by_subject(per_epoch, 'pain_score')
     d_stats = paired_stats(d_paired)
     plot_paired(d_paired, d_stats, run_dir / 'figD_pain_dosed_vs_undosed.png',
                 'Mean pain score', 'Pain in dosed vs undosed epochs')
-    # E
+
     e_paired, e_dropped = epoch_meds.paired_by_subject(per_epoch,
                                                        'pain_deviation')
     e_stats = paired_stats(e_paired)
     plot_paired(e_paired, e_stats, run_dir / 'figE_pain_deviation.png',
-                'Pain minus session mean',
-                'Pain relative to the session mean',
+                'Pain minus subject mean', 'Pain relative to the subject mean',
                 zero_line=True, show_p=False)
+
+    plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats,
+                 run_dir / 'figABC2E_grouped.png', args.score_window_minutes)
 
     stats = {
         'split': args.split,
+        'cohort': args.cohort,
         'window_hours': args.window_hours,
+        'score_window_minutes': args.score_window_minutes,
         'n_epochs': int(len(per_epoch)),
         'n_subjects': len(subjects),
         'n_sessions': int(per_epoch.groupby(['subject', 'session']).ngroups),
@@ -457,19 +525,26 @@ def main():
         'frac_epochs_dosed': round(float(per_epoch['dosed'].mean()), 4),
         'panel_d': d_stats, 'panel_d_subjects_one_arm_only': d_dropped,
         'panel_e': e_stats, 'panel_e_subjects_one_arm_only': e_dropped,
+        'deviation_centred_on': 'subject',
     }
 
+    c_table = pd.concat([s.assign(med_group=k) for k, s in c_summaries.items()],
+                        ignore_index=True)
+    c2_table = pd.concat([s.assign(med_group=k)
+                          for k, s in c2_summaries.items()], ignore_index=True)
     for df, name in ((a_table, 'panelA_subjects_by_drug'),
                      (b_table, 'panelB_medicated_epochs'),
                      (c_table, 'panelC_dose_probability'),
-                     (per_subject_score, 'panelC_per_subject'),
+                     (c2_table, 'panelC2_dose_probability_deviation'),
+                     (pd.concat(c_long, ignore_index=True),
+                      'panelC_per_subject'),
                      (d_paired, 'panelD_paired'),
                      (e_paired, 'panelE_paired')):
         output.write_table(df, run_dir, name, SCRIPT, params=params,
                            parents=parents, extra=stats)
     output.write_table(
         per_epoch[['subject', 'session', 'epoch_id', 'pain_time', 'pain_score',
-                   'session_mean_pain', 'pain_deviation', 'n_doses', 'n_drugs',
+                   'mean_pain', 'pain_deviation', 'n_doses', 'n_drugs',
                    'dosed']],
         run_dir, 'epoch_exposure', SCRIPT, params=params, parents=parents,
         subjects=subjects, extra=stats)
@@ -481,20 +556,27 @@ def main():
             **stats,
             'unit': 'pain epoch (5 min before a pain assessment)',
             'cohort_note': (
-                'DISCOVERY ONLY. The unit is a pain epoch, so the CLAUDE.md '
-                'hold-out gate applies here even though no neural power is '
-                'read.'),
+                'The pain study cohort (51 subjects of the continuous-pain '
+                'regression), INTERSECTED with the discovery split so no '
+                'cohort file can reach a hold-out subject. The unit is a pain '
+                'epoch, so the CLAUDE.md gate applies even though no neural '
+                'power is read.'),
+            'acetaminophen_note': (
+                'ACETAMINOPHEN is single-ingredient only. Hydrocodone-, '
+                'oxycodone- and codeine-acetaminophen are separate drug '
+                'strings classed as Opioids, so they are counted neither in '
+                'the acetaminophen bar nor in the Acetaminophen class.'),
             'interpretation_note': (
                 'CONFOUNDED BY INDICATION and not causal: the patient in more '
                 'pain is the one who gets dosed, so higher pain in dosed '
                 'epochs is the expected artefact, not evidence that analgesia '
-                'failed. Panel E removes between-subject differences only. '
-                'Nominations, not findings (CLAUDE.md).'),
+                'failed. Nominations, not findings (CLAUDE.md).'),
         })
     io.log_analysis(
-        f'poster panels A-E: analgesic exposure around pain epochs, '
-        f'{args.window_hours:g} h window, {len(per_epoch)} epochs, '
-        f'n={len(subjects)} {args.split} subjects', run_dir)
+        f'poster panels: analgesic exposure around pain epochs, '
+        f'{args.window_hours:g} h exposure / {args.score_window_minutes:g} min '
+        f'response, {len(per_epoch)} epochs, n={len(subjects)} '
+        f'{args.cohort} subjects', run_dir)
     logger.info('figures + provenance -> %s', run_dir)
 
 

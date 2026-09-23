@@ -93,15 +93,34 @@ def test_drug_filter_restricts_what_counts_as_exposure():
     assert not bool(per['dosed'].iloc[0])
 
 
-def test_deviation_is_centred_on_the_SESSION_not_the_subject():
+def _two_session_subject():
+    return epochs([{'t': T0, 'score': 2, 'session': '01'},
+                   {'t': T0, 'score': 4, 'session': '01'},
+                   {'t': T0, 'score': 8, 'session': '02'},
+                   {'t': T0, 'score': 10, 'session': '02'}])
+
+
+def test_deviation_defaults_to_the_subject_mean():
+    """The figures say "pain minus subject mean", so the default must be that.
+
+    A label that does not match the arithmetic is worse than either centring
+    choice; see `subject_deviation.__doc__`.
+    """
+    out = epoch_meds.subject_deviation(_two_session_subject())
+    assert list(out['mean_pain']) == [6.0, 6.0, 6.0, 6.0]
+    assert list(out['pain_deviation']) == [-4.0, -2.0, 2.0, 4.0]
+
+
+def test_deviation_can_centre_per_session_instead():
     """Two sessions are separate admissions with independently shifted clocks."""
-    per = epochs([{'t': T0, 'score': 2, 'session': '01'},
-                  {'t': T0, 'score': 4, 'session': '01'},
-                  {'t': T0, 'score': 8, 'session': '02'},
-                  {'t': T0, 'score': 10, 'session': '02'}])
-    out = epoch_meds.subject_deviation(per)
-    assert list(out['session_mean_pain']) == [3.0, 3.0, 9.0, 9.0]
+    out = epoch_meds.subject_deviation(_two_session_subject(), by='session')
+    assert list(out['mean_pain']) == [3.0, 3.0, 9.0, 9.0]
     assert list(out['pain_deviation']) == [-1.0, 1.0, -1.0, 1.0]
+
+
+def test_deviation_rejects_an_unknown_centring():
+    with pytest.raises(ValueError, match='subject or session'):
+        epoch_meds.subject_deviation(_two_session_subject(), by='run')
 
 
 def test_paired_by_subject_needs_both_arms():

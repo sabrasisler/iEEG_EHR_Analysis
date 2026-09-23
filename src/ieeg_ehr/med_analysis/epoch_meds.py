@@ -31,6 +31,7 @@ direction that makes analgesia look harmful.
 
 import glob
 import logging
+from pathlib import Path
 
 import pandas as pd
 
@@ -47,7 +48,25 @@ DEFS_COLUMNS = ('epoch_id', 'subject_id', 'session_id', 'pain_event_id',
                 'pain_score', 'pain_time')
 
 
-def load_epochs(split='discovery', minutes_before=None):
+#: The subjects that entered the continuous-pain (pain_coef) regression — what
+#: "the pain study" means. Pinned from that run rather than recomputed:
+#: `pain_coef.eligible_subjects` alone returns 53 on the discovery epochs, and
+#: the two extra are subjects the region-level view layer could not serve, so
+#: the eligibility rule is necessary but not sufficient. Reading the pinned
+#: file keeps this figure's cohort identical to the analysis it describes.
+PAIN_STUDY_COHORT_JSON = (config.COHORTS_ROOT
+                          / 'pain-study-2026-08-08.json')
+
+
+def pain_study_subjects(path=None):
+    """The 51 subjects in the pain study, as anonymised ids without `sub-`."""
+    import json
+    path = path or PAIN_STUDY_COHORT_JSON
+    payload = json.loads(Path(path).read_text())
+    return sorted(s.replace('sub-', '') for s in payload['subjects'])
+
+
+def load_epochs(split='discovery', minutes_before=None, cohort=None):
     """Every pain epoch in `split`, one row each, with its wall-clock anchor.
 
     `split='discovery'` by default and `'heldout'` is not a legal value —
@@ -73,10 +92,18 @@ def load_epochs(split='discovery', minutes_before=None):
     n_all = len(defs)
     allowed = set(cohorts.subjects_for_split(
         split, available=sorted(defs['subject'].unique())))
+    if cohort == 'pain-study':
+        # Intersected with, never instead of, the split: the pinned list is
+        # already discovery, and keeping the gate in front of it means a
+        # future cohort file cannot smuggle a hold-out subject in.
+        allowed &= set(pain_study_subjects())
+    elif cohort not in (None, 'split'):
+        raise ValueError(f'unknown cohort {cohort!r}')
     defs = defs[defs['subject'].isin(allowed)].copy()
 
-    logger.info('epochs: %d of %d in split %r — %d subjects, %d sessions',
-                len(defs), n_all, split, defs['subject'].nunique(),
+    logger.info('epochs: %d of %d in split %r cohort %r — %d subjects, '
+                '%d sessions', len(defs), n_all, split, cohort or 'split',
+                defs['subject'].nunique(),
                 defs.groupby(['subject', 'session']).ngroups)
     return defs.sort_values(['subject', 'session', 'pain_time']).reset_index(
         drop=True)
@@ -151,18 +178,24 @@ def exposure_before_epochs(epochs, analgesics, window_hours=WINDOW_HOURS,
     return per_epoch, pairs
 
 
-def subject_deviation(per_epoch):
-    """Add each epoch's pain relative to its SESSION's mean pain.
+def subject_deviation(per_epoch, by='subject'):
+    """Add each epoch's pain relative to its subject's (or session's) mean.
 
-    Session, not subject: two sessions of one subject are re-anchored
-    independently by de-identification and are separate admissions clinically,
-    so pooling them would centre on an average of two different baselines.
+    `by='subject'` is the default because that is what the figures call it —
+    "pain minus subject mean" — and a label that does not match the arithmetic
+    is worse than either choice. `by='session'` is the more careful option in
+    principle: two sessions of one subject are re-anchored independently by
+    de-identification and are separate admissions clinically, so pooling them
+    centres on an average of two baselines. It matters for exactly one subject
+    in this cohort, which is why the honest label wins.
     """
+    if by not in ('subject', 'session'):
+        raise ValueError(f'by must be subject or session, got {by!r}')
+    keys = ['subject'] if by == 'subject' else ['subject', 'session']
     out = per_epoch.copy()
-    session_mean = out.groupby(['subject', 'session'])['pain_score'].transform(
-        'mean')
-    out['session_mean_pain'] = session_mean
-    out['pain_deviation'] = out['pain_score'] - session_mean
+    mean = out.groupby(keys)['pain_score'].transform('mean')
+    out['mean_pain'] = mean
+    out['pain_deviation'] = out['pain_score'] - mean
     return out
 
 
@@ -198,6 +231,48 @@ def paired_by_subject(per_epoch, value_col):
     out = out[both].copy()
     out['difference'] = out['dosed'] - out['undosed']
     return out.reset_index(drop=True), n_dropped
+
+
+def dose_probability_by_value(epochs, analgesics, window_minutes,
+                              value_col='pain_score'):
+    """Per (subject, binned value): P(a dose follows within the window).
+
+    `value_col` is whatever the x axis is — the raw score, or the deviation
+    from a subject's own mean. Deviations are continuous, so they are ROUNDED
+    to the nearest integer to bin them: the underlying scores are integers, so
+    a deviation is an integer minus a constant, and rounding recovers a scale
+    with the same granularity the ratings actually had.
+
+    Attribution matters here and only here: with several assessments inside
+    one window a dose must not be credited to all of them, so each goes to its
+    NEAREST PRECEDING assessment — identical to truncating each window at the
+    next assessment. Same rule as `pain_link.response_by_assessment`.
+    """
+    from ieeg_ehr.med_analysis import pain_link
+
+    cols = ['subject', 'session', 'pain_time', 'pain_score']
+    if value_col not in cols:
+        cols.append(value_col)
+    anchors = (epochs[cols].drop_duplicates()
+               .rename(columns={'pain_time': 'score_dt'})
+               .sort_values(['subject', 'session', 'score_dt'])
+               .reset_index(drop=True))
+    anchors['bin'] = (anchors[value_col].round().astype(int) if value_col
+                      != 'pain_score' else anchors['pain_score'].astype(int))
+
+    linked, _ = pain_link.link_to_prior_score(
+        analgesics, anchors, window_minutes=window_minutes, allow_exact=True)
+    responded = set(map(tuple, linked[['subject', 'session', 'score_dt']]
+                        .drop_duplicates().to_numpy()))
+    anchors['responded'] = [
+        (s, ses, t) in responded
+        for s, ses, t in zip(anchors['subject'], anchors['session'],
+                             anchors['score_dt'])]
+
+    per = (anchors.groupby(['subject', 'bin'])['responded']
+           .agg(n_assessments='size', n_responded='sum').reset_index())
+    per['p_dose'] = per['n_responded'] / per['n_assessments']
+    return per.rename(columns={'bin': value_col})
 
 
 def dose_probability_by_score(epochs, analgesics, window_hours=WINDOW_HOURS):
