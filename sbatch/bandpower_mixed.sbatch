@@ -49,6 +49,15 @@ EXCLUDE_REASON=${EXCLUDE_REASON:-}
 args=()
 [ -n "${EXCLUDE_REGIONS}" ] && args+=(--exclude-regions "${EXCLUDE_REGIONS}")
 [ -n "${EXCLUDE_REASON}" ] && args+=(--exclude-reason "${EXCLUDE_REASON}")
+# CELLS: fit only these REGION:BAND cells, SEMICOLON-separated for the same
+# space-in-a-region-name reason, e.g. CELLS="M1:beta;Lateral Temporal:gamma".
+CELLS=${CELLS:-}
+CELL_SELECTION=${CELL_SELECTION:-}
+if [ -n "${CELLS}" ]; then
+    IFS=';' read -ra cell_list <<< "${CELLS}"
+    args+=(--cells "${cell_list[@]}")
+fi
+[ -n "${CELL_SELECTION}" ] && args+=(--cell-selection "${CELL_SELECTION}")
 # `${args[@]+...}` and NOT a bare "${args[@]}": under `set -u` bash treats an
 # EMPTY array's expansion as an unbound variable and kills the job before
 # python starts. It only bites when neither exclusion is passed, which is why

@@ -477,6 +477,28 @@ def stage_fit(args):
                                       epoch_minutes)
     band_names = list(bands)
 
+    # A NAMED CELL SUBSET. Only these region x band cells are fitted, so they --
+    # and nothing else -- are every BH family in collect. That is the point: a
+    # follow-up on cells chosen from an earlier run corrects over the cells it
+    # asks about. The choice was made on that earlier run's results, so this
+    # run's p-values are CONDITIONAL on the selection, and `cell_selection` in
+    # provenance records the reason verbatim. `cell_index` keeps its full-grid
+    # value, so a cell here joins to the same cell of the full run.
+    wanted = None
+    if args.cells:
+        wanted = set()
+        for spec in args.cells:
+            region, sep, band = spec.rpartition(':')
+            if not sep or region not in regions or band not in band_names:
+                raise SystemExit(
+                    f'--cells {spec!r} is not REGION:BAND of this run. Regions: '
+                    f'{regions}. Bands: {band_names}.')
+            wanted.add((region, band))
+        regions_in_order = [r for r in regions if any(r == w[0] for w in wanted)]
+        logger.warning('CELL SUBSET: %d cell(s) fitted, and they alone are the BH '
+                       'family: %s -- %s', len(wanted),
+                       sorted(wanted), args.cell_selection or 'no reason recorded')
+
     # ---- per-epoch medication state ------------------------------------
     med_lookup, med_summary, med_missing = None, None, []
     if args.med_model != 'none':
@@ -535,6 +557,8 @@ def stage_fit(args):
 
     todo = (regions if args.region_index is None
             else [regions[args.region_index]])
+    if wanted is not None:
+        todo = [r for r in todo if r in regions_in_order]
     if args.region_index is not None and not 0 <= args.region_index < len(regions):
         raise SystemExit(f'--region-index {args.region_index} outside '
                          f'0..{len(regions) - 1}')
@@ -555,6 +579,8 @@ def stage_fit(args):
                     time.time() - t0, stats['n_files'])
 
         for bi, band in enumerate(names):
+            if wanted is not None and (region, band) not in wanted:
+                continue
             lo, hi = bands[band]
             meta = {'region': region, 'band': band, 'band_index': band_names.index(band),
                     'band_lo_hz': float(lo), 'band_hi_hz': float(hi),
@@ -724,6 +750,8 @@ def stage_fit(args):
                                                 if args.dx_model != 'none' else None),
                     'excluded_regions': list(args.exclude_regions),
                     'excluded_regions_reason': args.exclude_reason,
+                    'cells_selected': sorted(args.cells) if args.cells else None,
+                    'cell_selection': args.cell_selection,
                     'aggregation': 'linear_then_log via axes.aggregate_bands',
                     'n_cells': len(records)},
             parents=[str(Path(args.reference_run) / 'provenance.json'), str(view_dir)],
@@ -1556,6 +1584,14 @@ def main():
                          'threshold.')
     ap.add_argument('--exclude-reason', default=None,
                     help='Recorded verbatim in provenance beside --exclude-regions.')
+    ap.add_argument('--cells', nargs='*', default=[],
+                    help='Fit ONLY these cells, each REGION:BAND (e.g. M1:beta '
+                         'IFG/vlPFC:beta). They alone form every BH family. For '
+                         'a follow-up on cells selected from an earlier run -- '
+                         'say how they were chosen in --cell-selection, because '
+                         'the p-values are conditional on that choice.')
+    ap.add_argument('--cell-selection', default=None,
+                    help='Recorded verbatim in provenance beside --cells.')
     ap.add_argument('--insula-threshold', type=float, default=None,
                     help='Pin the anterior/posterior insula cut (MNI y, mm) '
                          'instead of re-deriving this cohort\'s median. Only '
