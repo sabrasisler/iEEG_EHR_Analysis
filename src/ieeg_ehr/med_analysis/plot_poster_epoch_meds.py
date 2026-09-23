@@ -420,9 +420,16 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
         lines.append(_p_text(p))
     # The bracket owns the top centre-right, so the stats move left when one
     # is drawn rather than sitting on top of it.
-    tx, tha = (0.02, 'left') if show_bracket else (0.98, 'right')
-    ax.text(tx, 0.98, '\n'.join(lines), transform=ax.transAxes,
-            ha=tha, va='top', fontsize=style.LEGEND_SIZE,
+    # With a bracket, the stats go to the LOWER right: the bracket owns the
+    # top of the panel, and the space below the dosed violin is empty in every
+    # version of this figure (dosed subject means sit above the undosed ones).
+    # Upper left collided with the bracket's left riser once the panel shrank.
+    if show_bracket:
+        tx, ty, tha, tva = 0.98, 0.02, 'right', 'bottom'
+    else:
+        tx, ty, tha, tva = 0.98, 0.98, 'right', 'top'
+    ax.text(tx, ty, '\n'.join(lines), transform=ax.transAxes,
+            ha=tha, va=tva, fontsize=style.LEGEND_SIZE,
             color=style.TEXT_PRIMARY, linespacing=1.4)
     style.label_axes(ax, None, ylabel)
 
@@ -475,24 +482,62 @@ def plot_paired(paired, stats, out_path, ylabel, title, zero_line=False,
     return _save(fig, out_path, title)
 
 
+#: Type for the grouped figure. It is printed at 12.5 x 7 in, half the linear
+#: size the standalone poster panels were drawn at, so it gets its own scale:
+#: the POSTER sizes (30 / 25 / 21 pt) in a 3-in-tall panel leave no room for
+#: data. These are chosen for a panel read at poster distance at that size.
+GROUPED_SIZES = dict(TITLE_SIZE=13, LABEL_SIZE=11, TICK_SIZE=9.5,
+                     LEGEND_SIZE=8.5, FOOTNOTE_SIZE=7, DPI=300)
+GROUPED_FIGSIZE = (12.5, 7.0)
+
+#: Short panel titles for the grouped figure: enough to say what each panel
+#: is without a caption, and short enough to sit above a 6-in-wide panel.
+GROUPED_TITLES = (
+    'Exposure before a pain epoch (2 h)',
+    'Medicated epochs per subject',
+    'Dose after a pain score (30 min)',
+    'Pain in dosed vs undosed epochs',
+)
+
+
 def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
                  score_window_minutes):
-    """A, B, C2 and E in one 2x2, no subplot titles.
+    """A, B, C2 and E in one 2x2 at exactly 12.5 x 7 in.
 
-    The row gap is deliberately wide: it is where the poster's own text goes,
-    so the figure has to leave room rather than assume a caption underneath.
+    Saved WITHOUT `bbox_inches='tight'`, unlike everything else here: tight
+    cropping recomputes the canvas from whatever the text extends to, so the
+    file would come out at some other size. The layout is fitted inside the
+    fixed canvas instead, which is what a poster slot of a given size needs.
+
+    The row gap is deliberately wide: it is where the poster's own text goes.
     """
-    fig, axes = plt.subplots(2, 2, figsize=(26, 18))
-    draw_panel_a(axes[0][0], a_table)
-    draw_panel_b(axes[0][1], b_table)
-    draw_panel_c(axes[1][0], c2_summaries, 'pain_deviation',
-                 SUBJECT_CENTRED_LABEL, score_window_minutes)
-    draw_paired(axes[1][1], e_paired, e_stats, SUBJECT_CENTRED_LABEL,
-                zero_line=True, show_summary=False, show_violin=True,
-                show_bracket=True)
-    fig.tight_layout()
-    fig.subplots_adjust(hspace=0.30)
-    return style.save(fig, out_path)
+    saved = {k: getattr(style, k) for k in GROUPED_SIZES}
+    style.use_poster(False)            # screen line weights suit this size
+    for k, v in GROUPED_SIZES.items():
+        setattr(style, k, v)
+    try:
+        fig, axes = plt.subplots(2, 2, figsize=GROUPED_FIGSIZE)
+        draw_panel_a(axes[0][0], a_table)
+        draw_panel_b(axes[0][1], b_table)
+        draw_panel_c(axes[1][0], c2_summaries, 'pain_deviation',
+                     SUBJECT_CENTRED_LABEL, score_window_minutes)
+        draw_paired(axes[1][1], e_paired, e_stats, SUBJECT_CENTRED_LABEL,
+                    zero_line=True, show_summary=False, show_violin=True,
+                    show_bracket=True)
+        for ax, title in zip(axes.ravel(), GROUPED_TITLES):
+            # pad clears the significance bracket, which is drawn above E's
+            # axes and would otherwise run into E's title.
+            ax.set_title(title, fontsize=style.TITLE_SIZE,
+                         color=style.TEXT_PRIMARY, loc='center', pad=14)
+        fig.tight_layout(h_pad=3.5)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, dpi=style.DPI, facecolor='white')
+        plt.close(fig)
+    finally:
+        style.use_poster(True)
+        for k, v in saved.items():
+            setattr(style, k, v)
+    return out_path
 
 
 # ------------------------------------------------------------------ main ---
