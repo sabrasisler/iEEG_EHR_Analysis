@@ -71,6 +71,23 @@ ANY_ANALGESIC = 'Any analgesic'
 ALL_ANALGESICS = 'All analgesics'
 MULTI_CLASS = 'Multiple classes'
 
+#: Display order for these panels: acetaminophen first, then opioids. It is
+#: the escalation order a clinician reads, and it puts the most-given class
+#: first. Deliberately NOT `med_taxonomy.ANALGESIC_SUBCLASS_ORDER`, which is
+#: administration-count order and still drives Figs 1-6 — changing that
+#: constant would silently reorder figures that are already agreed.
+#:
+#: COLOUR is still assigned from the taxonomy order, so Opioids stays blue and
+#: Acetaminophen orange exactly as in every earlier figure. Order and colour
+#: are decoupled on purpose: re-ordering a legend should not repaint it.
+POSTER_CLASS_ORDER = ('Acetaminophen', 'Opioids', 'NSAIDs')
+
+#: Axis wording for the centred pain score, shared by C2 and E so the two
+#: cannot describe the same quantity differently. "Pain minus subject mean"
+#: read as a single subtraction; this is each epoch's score expressed
+#: relative to that subject's own average, which is what centring means.
+SUBJECT_CENTRED_LABEL = 'Subject-centered pain score'
+
 
 def _axes(ax, grid=None):
     """Poster axis style: no grid, black tick labels."""
@@ -84,6 +101,48 @@ def _class_palette():
     colors[ANY_ANALGESIC] = style.TEXT_PRIMARY
     colors[ALL_ANALGESICS] = style.TEXT_PRIMARY
     return colors
+
+
+def _wrap_drug(name):
+    """Break a long drug name after its hyphen.
+
+    Only the combination products are long enough to matter, and they all
+    carry a hyphen at the natural break. Wrapping shortens the diagonal reach
+    of a rotated tick label, which is what makes one name look far longer
+    than its neighbours.
+    """
+    title = name.title()
+    if len(title) > 16 and '-' in title:
+        return title.replace('-', '-\n', 1)
+    return title
+
+
+def _p_text(p):
+    """`p = 3.6 x 10^-9`, without naming the test."""
+    if p is None:
+        return None
+    if p >= 0.001:
+        return f'$p$ = {p:.3f}'
+    exponent = int(np.floor(np.log10(p)))
+    mantissa = p / (10 ** exponent)
+    return rf'$p$ = {mantissa:.1f} $\times$ 10$^{{{exponent}}}$'
+
+
+def _sig_bracket(ax, x1, x2, text):
+    """A bracket spanning the two groups, labelled above the data."""
+    lo, hi = ax.get_ylim()
+    span = hi - lo
+    y = max(ax.get_lines()[0].get_ydata().max() if ax.get_lines() else lo, hi)
+    y = hi + span * 0.02
+    tick = span * 0.025
+    ax.plot([x1, x1, x2, x2], [y, y + tick, y + tick, y],
+            color=style.TEXT_PRIMARY, linewidth=2.0, zorder=8,
+            clip_on=False)
+    ax.annotate(text, ((x1 + x2) / 2, y + tick), textcoords='offset points',
+                xytext=(0, 6), ha='center', va='bottom',
+                fontsize=style.LEGEND_SIZE, color=style.TEXT_PRIMARY,
+                annotation_clip=False)
+    ax.set_ylim(lo, hi + span * 0.16)
 
 
 # --------------------------------------------------------------- panel A ---
@@ -126,8 +185,7 @@ def panel_a_table(per_epoch_drug, per_epoch, drugs, class_of):
 
 def draw_panel_a(ax, summary):
     colors = _class_palette()
-    classes = [c for c in med_taxonomy.ANALGESIC_SUBCLASS_ORDER
-               if c in set(summary['level2'])]
+    classes = [c for c in POSTER_CLASS_ORDER if c in set(summary['level2'])]
 
     head = summary[summary['drug'] == ANY_ANALGESIC]
     rest = (summary[summary['drug'] != ANY_ANALGESIC]
@@ -145,7 +203,7 @@ def draw_panel_a(ax, summary):
                     fontsize=style.TICK_SIZE, color=style.TEXT_PRIMARY)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([d.title() if d != ANY_ANALGESIC else d
+    ax.set_xticklabels([d if d == ANY_ANALGESIC else _wrap_drug(d)
                         for d in ordered['drug']],
                        rotation=28, ha='right', fontsize=style.TICK_SIZE)
     ax.set_ylim(0, 105)
@@ -182,7 +240,7 @@ def panel_b_table(per_epoch, per_epoch_drug):
               .unstack(fill_value=0))
 
     out = totals.merge(counts, on='subject', how='left').fillna(0)
-    for seg in list(med_taxonomy.ANALGESIC_SUBCLASS_ORDER) + [MULTI_CLASS]:
+    for seg in list(POSTER_CLASS_ORDER) + [MULTI_CLASS]:
         if seg not in out.columns:
             out[seg] = 0
         out[f'pct_{seg}'] = 100.0 * out[seg] / out['n_epochs']
@@ -192,7 +250,7 @@ def panel_b_table(per_epoch, per_epoch_drug):
 
 def draw_panel_b(ax, per_subject):
     colors = _class_palette()
-    segments = [c for c in med_taxonomy.ANALGESIC_SUBCLASS_ORDER
+    segments = [c for c in POSTER_CLASS_ORDER
                 if per_subject.get(f'pct_{c}', pd.Series(dtype=float)).sum() > 0]
     segments.append(MULTI_CLASS)
 
@@ -297,8 +355,29 @@ def paired_stats(paired):
     return out
 
 
-def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True):
+def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
+                show_summary=True, show_violin=False, show_bracket=False):
+    """Paired subject means, dosed vs undosed.
+
+    `show_violin` draws the distribution behind the points; `show_summary`
+    draws a mean +/- SEM marker on each group. They are alternatives rather
+    than additions — a violin already shows where the mass is, and the marker
+    on top of it reads as a third, unexplained thing.
+    """
     xs = np.array([0.0, 1.0])
+
+    if show_violin:
+        data = [paired['undosed'].to_numpy(dtype=float),
+                paired['dosed'].to_numpy(dtype=float)]
+        parts = ax.violinplot(data, positions=xs, widths=0.62,
+                              showmedians=False, showextrema=False)
+        for body, color in zip(parts['bodies'], (UNDOSED_COLOR, DOSED_COLOR)):
+            body.set_facecolor(color)
+            body.set_edgecolor(color)
+            body.set_alpha(0.28)
+            body.set_linewidth(1.5)
+            body.set_zorder(1)
+
     for row in paired.itertuples():
         ax.plot(xs, [row.undosed, row.dosed], color=style.AXIS_COLOR,
                 alpha=0.5, zorder=2, linewidth=1.2)
@@ -309,14 +388,15 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True):
 
     # The group summary sits ON its group. Offset sideways it read as a stray
     # extra point rather than a summary of the column it belongs to.
-    for x, col, color in ((0.0, 'undosed', UNDOSED_COLOR),
-                          (1.0, 'dosed', DOSED_COLOR)):
-        m = float(paired[col].mean())
-        sem = float(paired[col].std(ddof=1) / np.sqrt(len(paired)))
-        ax.errorbar([x], [m], yerr=[sem], marker='s', color=color,
-                    ecolor=style.TEXT_PRIMARY, capsize=8, markersize=20,
-                    markeredgecolor='white', markeredgewidth=2.5,
-                    elinewidth=2.5, zorder=6)
+    if show_summary:
+        for x, col, color in ((0.0, 'undosed', UNDOSED_COLOR),
+                              (1.0, 'dosed', DOSED_COLOR)):
+            m = float(paired[col].mean())
+            sem = float(paired[col].std(ddof=1) / np.sqrt(len(paired)))
+            ax.errorbar([x], [m], yerr=[sem], marker='s', color=color,
+                        ecolor=style.TEXT_PRIMARY, capsize=8, markersize=20,
+                        markeredgecolor='white', markeredgewidth=2.5,
+                        elinewidth=2.5, zorder=6)
 
     if zero_line:
         ax.axhline(0, color=style.ZERO_LINE_COLOR, linestyle='--', zorder=1)
@@ -328,17 +408,27 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True):
 
     # Statistics inside the axes; in the title they ran to three lines and
     # bbox_inches='tight' stretched the canvas sideways to fit them. Cohort
-    # size is not among them — it lives on the poster, not the panel.
+    # size is not among them — it lives on the poster, not the panel. The
+    # test is not named anywhere on the figure: the p value is the number a
+    # reader needs, and which test produced it belongs in the caption and the
+    # provenance, both of which say Wilcoxon signed-rank.
     lines = [f'median diff {stats["median_difference"]:+.2f}',
              f'higher when dosed: '
              f'{stats["n_higher_in_dosed"]}/{stats["n_subjects"]}']
     p = stats.get('wilcoxon_p')
-    if p is not None and show_p:
-        lines.append(f'Wilcoxon p={p:.1e}')
-    ax.text(0.98, 0.98, '\n'.join(lines), transform=ax.transAxes,
-            ha='right', va='top', fontsize=style.LEGEND_SIZE,
+    if p is not None and show_p and not show_bracket:
+        lines.append(_p_text(p))
+    # The bracket owns the top centre-right, so the stats move left when one
+    # is drawn rather than sitting on top of it.
+    tx, tha = (0.02, 'left') if show_bracket else (0.98, 'right')
+    ax.text(tx, 0.98, '\n'.join(lines), transform=ax.transAxes,
+            ha=tha, va='top', fontsize=style.LEGEND_SIZE,
             color=style.TEXT_PRIMARY, linespacing=1.4)
     style.label_axes(ax, None, ylabel)
+
+    # Drawn last: the bracket sizes itself against the final y limits.
+    if show_bracket and p is not None:
+        _sig_bracket(ax, xs[0], xs[1], _p_text(p))
 
 
 # ------------------------------------------------------ standalone wrappers ---
@@ -376,9 +466,12 @@ def plot_panel_c(summaries, out_path, value_col, xlabel, window_minutes,
 
 
 def plot_paired(paired, stats, out_path, ylabel, title, zero_line=False,
-                show_p=True):
+                show_p=True, show_summary=True, show_violin=False,
+                show_bracket=False):
     fig, ax = plt.subplots(figsize=(11, 9))
-    draw_paired(ax, paired, stats, ylabel, zero_line=zero_line, show_p=show_p)
+    draw_paired(ax, paired, stats, ylabel, zero_line=zero_line, show_p=show_p,
+                show_summary=show_summary, show_violin=show_violin,
+                show_bracket=show_bracket)
     return _save(fig, out_path, title)
 
 
@@ -393,9 +486,10 @@ def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
     draw_panel_a(axes[0][0], a_table)
     draw_panel_b(axes[0][1], b_table)
     draw_panel_c(axes[1][0], c2_summaries, 'pain_deviation',
-                 'Pain minus subject mean', score_window_minutes)
-    draw_paired(axes[1][1], e_paired, e_stats, 'Pain minus subject mean',
-                zero_line=True, show_p=False)
+                 SUBJECT_CENTRED_LABEL, score_window_minutes)
+    draw_paired(axes[1][1], e_paired, e_stats, SUBJECT_CENTRED_LABEL,
+                zero_line=True, show_summary=False, show_violin=True,
+                show_bracket=True)
     fig.tight_layout()
     fig.subplots_adjust(hspace=0.30)
     return style.save(fig, out_path)
@@ -473,7 +567,7 @@ def main():
 
     # C and C2 — same curves, two x axes, both at the tighter response window.
     c_summaries, c2_summaries, c_long = {}, {}, []
-    for label in list(med_taxonomy.ANALGESIC_SUBCLASS_ORDER) + [ALL_ANALGESICS]:
+    for label in list(POSTER_CLASS_ORDER) + [ALL_ANALGESICS]:
         subset = (analgesics if label == ALL_ANALGESICS
                   else analgesics[analgesics['level2'] == label])
         if subset.empty:
@@ -493,7 +587,7 @@ def main():
                  'Probability of a dose after a pain score')
     plot_panel_c(c2_summaries,
                  run_dir / 'figC2_dose_probability_deviation.png',
-                 'pain_deviation', 'Pain minus subject mean',
+                 'pain_deviation', SUBJECT_CENTRED_LABEL,
                  args.score_window_minutes,
                  'Probability of a dose after a pain score')
 
@@ -506,8 +600,9 @@ def main():
                                                        'pain_deviation')
     e_stats = paired_stats(e_paired)
     plot_paired(e_paired, e_stats, run_dir / 'figE_pain_deviation.png',
-                'Pain minus subject mean', 'Pain relative to the subject mean',
-                zero_line=True, show_p=False)
+                SUBJECT_CENTRED_LABEL, 'Pain relative to the subject mean',
+                zero_line=True, show_summary=False, show_violin=True,
+                show_bracket=True)
 
     plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats,
                  run_dir / 'figABC2E_grouped.png', args.score_window_minutes)
