@@ -356,7 +356,8 @@ def paired_stats(paired):
 
 
 def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
-                show_summary=True, show_violin=False, show_bracket=False):
+                show_summary=True, show_violin=False, show_bracket=False,
+                point_size=60, line_width=1.2):
     """Paired subject means, dosed vs undosed.
 
     `show_violin` draws the distribution behind the points; `show_summary`
@@ -380,10 +381,10 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
 
     for row in paired.itertuples():
         ax.plot(xs, [row.undosed, row.dosed], color=style.AXIS_COLOR,
-                alpha=0.5, zorder=2, linewidth=1.2)
-    ax.scatter(np.full(len(paired), 0.0), paired['undosed'], s=60,
+                alpha=0.5, zorder=2, linewidth=line_width)
+    ax.scatter(np.full(len(paired), 0.0), paired['undosed'], s=point_size,
                color=UNDOSED_COLOR, alpha=0.75, zorder=3, linewidth=0)
-    ax.scatter(np.full(len(paired), 1.0), paired['dosed'], s=60,
+    ax.scatter(np.full(len(paired), 1.0), paired['dosed'], s=point_size,
                color=DOSED_COLOR, alpha=0.75, zorder=3, linewidth=0)
 
     # The group summary sits ON its group. Offset sideways it read as a stray
@@ -523,7 +524,10 @@ def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
                      SUBJECT_CENTRED_LABEL, score_window_minutes)
         draw_paired(axes[1][1], e_paired, e_stats, SUBJECT_CENTRED_LABEL,
                     zero_line=True, show_summary=False, show_violin=True,
-                    show_bracket=True)
+                    show_bracket=True,
+                    # s is an area in pt^2: 60 was sized for a 9-in panel and
+                    # read as a solid column of blobs in a 3-in one.
+                    point_size=14, line_width=0.7)
         for ax, title in zip(axes.ravel(), GROUPED_TITLES):
             # pad clears the significance bracket, which is drawn above E's
             # axes and would otherwise run into E's title.
