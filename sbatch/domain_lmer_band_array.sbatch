@@ -53,8 +53,22 @@ if [ -z "${FRAMES_DIR}" ]; then
     exit 1
 fi
 
-read -r -a BAND_ARR <<< "${BANDS:-delta theta alpha beta gamma high_gamma}"
+# COMMA OR SPACE separated. The reaper passes a comma-separated subset through
+# --export, where an embedded space is fragile.
+read -r -a BAND_ARR <<< "${BANDS//,/ }"
+if [ ${#BAND_ARR[@]} -eq 0 ]; then
+    read -r -a BAND_ARR <<< "delta theta alpha beta gamma high_gamma"
+fi
 BAND=${BAND_ARR[$SLURM_ARRAY_TASK_ID]}
+
+# IDEMPOTENT. A requeued or re-reaped task must not redo work that already
+# landed: on `owners` a task can be preempted after writing its output, and the
+# reaper resubmits by "which band files are missing", so a surviving result is
+# the signal to stop.
+if [ -f "${RUN_DIR}/bands/${BAND}_fitinfo.csv" ]; then
+    echo "[${BAND}] already fitted in ${RUN_DIR}; nothing to do"
+    exit 0
+fi
 
 DROP_ARG=()
 if [ -n "${DROP_DOMAIN:-}" ]; then
