@@ -987,3 +987,26 @@ positive control is least affected (its estimand does not depend on the label)
 but is refit alongside the rest.
 
 *Reverses if:* evidence that same-minute assessments are post-dose reassessments.
+
+---
+
+## 2026-10-06 — The epoch lookback is (t − h, t): a same-minute dose does not medicate the epoch before it
+
+Extends the same-day [t1, t2) call above to `med_state.epoch_med_state`, the
+2-hour lookback every epoch-level medication model uses (`run_domain_model`,
+`run_bandpower_mixed`, `run_mixed_model_med_strata`). The window was `(t − h, t]`,
+so a dose charted in the same minute as the score marked that epoch medicated.
+The epoch is the 5 min BEFORE the score and the nursing sequence is assess →
+administer → chart (DECISIONS 2026-09-03, call 2), so that dose follows the epoch
+and responds to its score.
+
+**Measured, 51-subject discovery cohort, analgesics, 2 h:** 325 of 1,192
+medicated epochs (27%) were medicated only by a same-minute dose. Medicated
+epochs fall to 867. Mean NRS medicated 4.15 → 3.56, unmedicated 2.02 → 2.80, so
+the old stratum split carried a large share of its indication confound through
+this tie.
+
+**Consequence:** every epoch-level medication result before this date is
+superseded, including the 4-domain lme4 run
+`paperbands6hg200-paindomainsv3-roiunit-analgesics-4dom-noparcel/domain_lmer_20260922-225934`
+and its poster figure.

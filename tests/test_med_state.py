@@ -48,7 +48,7 @@ def test_dose_outside_window_is_not_flagged():
 def test_window_is_half_open_exclusive_at_the_far_edge():
     """A dose EXACTLY `hours` before the score is outside.
 
-    The window is (t - hours, t]. Pinned because the boundary is arbitrary but
+    The window is (t - hours, t). Pinned because the boundary is arbitrary but
     has to be stable: a run that silently flips it would move epochs between
     strata and change every map without changing any code that looks relevant.
     """
@@ -58,17 +58,14 @@ def test_window_is_half_open_exclusive_at_the_far_edge():
     assert bool(out['med_state'].iloc[0]) is False
 
 
-def test_same_minute_dose_counts_as_prior():
-    """Charting is minute-resolution; a zero gap is 'just before', not 'after'.
-
-    Same reasoning as med_analysis.pain_link, which documents that 45% of
-    administrations carry a score stamped in the same minute.
-    """
+def test_same_minute_dose_is_not_prior():
+    """A dose charted in the score's minute is the response to that score, so
+    it does not medicate the 5-min epoch before it (DECISIONS 2026-10-06)."""
     defs = _defs(['2000-01-01 12:00'])
     admin = _admin(['2000-01-01 12:00'])
     out = med_state.epoch_med_state(defs, admin, hours=2.0)
-    assert bool(out['med_state'].iloc[0]) is True
-    assert out['minutes_since_last'].iloc[0] == pytest.approx(0.0)
+    assert not out['med_state'].iloc[0]
+    assert np.isnan(out['minutes_since_last'].iloc[0])
 
 
 def test_dose_after_the_score_is_not_flagged():

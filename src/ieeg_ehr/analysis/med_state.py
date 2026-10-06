@@ -10,7 +10,8 @@ medication table carries `taken_dt`. Both come from the same EHR export and shar
 the same de-identified anchor -- verified: pain_time spans 1999-12-31 17:39 ->
 2000-01-15 07:40 and taken_dt spans 1999-12-31 18:22 -> 2000-01-15 05:45. So an
 epoch's state is just "does any administration fall in (pain_time - hours,
-pain_time]".
+pain_time)" -- open at the score, because a same-minute dose is the response
+to that score (DECISIONS 2026-10-06).
 
 THE WINDOW IS ANCHORED ON THE ASSESSMENT, NOT THE EPOCH. The epoch is the 5
 minutes of recording BEFORE the score, so its start is 5 minutes earlier than
@@ -126,7 +127,7 @@ def load_epoch_defs(epoch_minutes=None, subjects=None):
 
 
 def epoch_med_state(defs, admin, hours=DEFAULT_WINDOW_HOURS):
-    """Per epoch: was anything in `admin` given in the `hours` before its score?
+    """Per epoch: was anything in `admin` given in the `hours` STRICTLY before its score?
 
     Returns `subject, session, epoch_id, med_state, n_admins, minutes_since_last`.
 
@@ -154,10 +155,12 @@ def epoch_med_state(defs, admin, hours=DEFAULT_WINDOW_HOURS):
         if doses.size:
             lo = times - window.to_timedelta64()
             for i, (a, b) in enumerate(zip(lo, times)):
-                # (lo, hi] -- a dose stamped in the same minute as the score
-                # counts, matching pain_link's reasoning that minute-resolution
-                # charting makes a zero gap "just before" rather than "after".
-                hit = doses[(doses > a) & (doses <= b)]
+                # (lo, hi): a dose stamped in the same minute as the score is
+                # the RESPONSE to that score (assess -> administer -> chart
+                # both, DECISIONS 2026-09-03 call 2). The epoch is the 5 min
+                # before the score, so that dose comes after it and belongs to
+                # the next epoch. DECISIONS 2026-10-06.
+                hit = doses[(doses > a) & (doses < b)]
                 n[i] = hit.size
                 if hit.size:
                     gap[i] = (b - hit.max()) / np.timedelta64(1, 'm')
