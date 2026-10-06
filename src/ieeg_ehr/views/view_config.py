@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, field
 # as bare strings at call sites so a typo fails at construction, not silently in
 # an `if` that never matches.
 DOMAINS = ('log', 'linear')
-BASELINES = ('zero_pain_epochs', 'whole_session')
+BASELINES = ('zero_pain_epochs', 'all_pain_epochs', 'whole_session')
 NORMALIZATIONS = ('none', 'baseline_subtract', 'zscore_vs_baseline')
 EPOCH_AGGS = ('mean', 'rms')
 #: 'fullres' = the native 0.5 Hz FFT axis of features/pain/psd_epochs_fullres,
@@ -53,6 +53,9 @@ NORMALIZATION_CODES = {'zscore_vs_baseline': 'zscore',
                        'baseline_subtract': 'delta',
                        'none': 'raw'}
 PAIN_BIN_CODES = {'subject_relative': 'relpain', 'absolute': 'abspain'}
+#: Appended to the normalization code only when the baseline is not the default,
+#: so every existing zero_pain_epochs path is unchanged.
+BASELINE_CODES = {'zero_pain_epochs': '', 'all_pain_epochs': 'allep'}
 
 # The ROI scheme is in the folder name too, because two schemes are two different
 # REGION SETS and a figure of one must not land in the other's directory. The
@@ -176,18 +179,22 @@ class ViewConfig:
             # default's.
             from pathlib import Path
             roi = Path(self.roi_scheme).stem.replace('_', '').replace('-', '')
-        code = (f'{NORMALIZATION_CODES[self.normalization]}'
-                f'-{PAIN_BIN_CODES[self.pain_bins]}')
+        norm = NORMALIZATION_CODES[self.normalization]
+        if self.normalization != 'none' and BASELINE_CODES[self.baseline]:
+            norm = f'{norm}{BASELINE_CODES[self.baseline]}'
+        code = f'{norm}-{PAIN_BIN_CODES[self.pain_bins]}'
         return f'{code}-{roi}' if roi else code
 
     @property
     def value_label(self):
         """Axis/colourbar label, so a figure cannot mislabel its own units."""
+        ref = {'zero_pain_epochs': '0-pain',
+               'all_pain_epochs': 'all-epoch'}.get(self.baseline)
         if self.normalization == 'zscore_vs_baseline':
-            return 'Mean z-score vs 0-pain baseline'
+            return f'Mean z-score vs {ref} baseline'
         if self.normalization == 'baseline_subtract':
             unit = 'log10(V^2/Hz)' if self.domain == 'log' else 'V^2/Hz'
-            return f'Mean change vs 0-pain baseline ({unit})'
+            return f'Mean change vs {ref} baseline ({unit})'
         return 'Mean log10(V^2/Hz)' if self.domain == 'log' else 'Mean power (V^2/Hz)'
 
     def to_dict(self):
@@ -231,7 +238,10 @@ def add_view_arguments(parser):
     """
     g = parser.add_argument_group('view axes (docs/view_registry.md)')
     g.add_argument('--domain', choices=DOMAINS, default='log')
-    g.add_argument('--baseline', choices=['zero_pain_epochs'], default='zero_pain_epochs')
+    g.add_argument('--baseline', choices=['zero_pain_epochs', 'all_pain_epochs'],
+                   default='zero_pain_epochs',
+                   help="'all_pain_epochs' takes the mean/SD over every masked "
+                        "window of every pain epoch in the session")
     g.add_argument('--normalization', choices=NORMALIZATIONS, default='zscore_vs_baseline')
     g.add_argument('--epoch-agg', choices=EPOCH_AGGS, default='mean',
                    help="'mean' averages log power over windows (a GEOMETRIC "

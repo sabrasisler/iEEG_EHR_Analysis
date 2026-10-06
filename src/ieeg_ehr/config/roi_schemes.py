@@ -408,6 +408,30 @@ _ROI_V2_INS_PATTERNS, _ROI_V2_INS_DISPLAY = _with_coordinate_regions(
 _ROI_V2_OFC_INS_PATTERNS, _ROI_V2_OFC_INS_DISPLAY = _with_coordinate_regions(
     _ROI_V2_OFC_PATTERNS, _ROI_V2_OFC_DISPLAY, _INSULA_SPLIT)
 
+# ---------------------------------------------------------------------------
+# roi_v3 -- roi_v2 with `dmPFC/SMA` renamed `dmPFC` (2026-09-23)
+# ---------------------------------------------------------------------------
+# A RENAME ONLY: same patterns, same contacts. `superiorfrontal` does not
+# straddle SMA in this cohort -- 339 of 378 contacts sit anterior to the VAC
+# line and SMA proper holds 6 subjects, below the 8-subject floor (measured in
+# docs/region_levels.md). A new name rather than an edit to roi_v2, because
+# runs cite their scheme by name.
+#
+#: Old ROI name -> current one. Apply to a run fitted under an older scheme to
+#: display it with current labels; valid only because every entry is a pure
+#: rename (identical patterns), never a change of membership.
+ROI_RENAMES = {'dmPFC/SMA': 'dmPFC'}
+
+
+def _renamed(patterns, display):
+    return ({ROI_RENAMES.get(k, k): v for k, v in patterns.items()},
+            [ROI_RENAMES.get(d, d) for d in display])
+
+
+_ROI_V3_PATTERNS, _ROI_V3_DISPLAY = _renamed(_ROI_V2_PATTERNS, _ROI_V2_DISPLAY)
+_ROI_V3_INS_PATTERNS, _ROI_V3_INS_DISPLAY = _renamed(_ROI_V2_INS_PATTERNS,
+                                                     _ROI_V2_INS_DISPLAY)
+
 ROI_SCHEMES = {
     'default': {'patterns': _DEFAULT_PATTERNS, 'display': _DEFAULT_DISPLAY},
     'roi_v2': {'patterns': _ROI_V2_PATTERNS, 'display': _ROI_V2_DISPLAY},
@@ -419,6 +443,10 @@ ROI_SCHEMES = {
     'roi_v2_ofc_ins': {'patterns': _ROI_V2_OFC_INS_PATTERNS,
                        'display': _ROI_V2_OFC_INS_DISPLAY,
                        'coordinate_regions': _INSULA_SPLIT},
+    'roi_v3': {'patterns': _ROI_V3_PATTERNS, 'display': _ROI_V3_DISPLAY},
+    'roi_v3_ins': {'patterns': _ROI_V3_INS_PATTERNS,
+                   'display': _ROI_V3_INS_DISPLAY,
+                   'coordinate_regions': _INSULA_SPLIT},
     'pain_domains': {'patterns': _PAIN_DOMAIN_PATTERNS,
                      'display': _PAIN_DOMAIN_DISPLAY},
     'pain_domains_v2': {'patterns': _PAIN_DOMAIN_V2_PATTERNS,
@@ -480,6 +508,23 @@ _PAIN_DOMAINS_V3 = {
 _PAIN_DOMAIN_V3_DISPLAY = ['Sensory', 'Affective', 'Cognitive', 'Modulatory',
                            'Control']
 
+# -- pain_domains_v4: no Control domain, dmPFC renamed (2026-09-23) ---------
+# Occipital is not a defensible negative control for pain, so `Control` goes;
+# every ROI outside the four domains (Auditory and Occipital included) is
+# `Other`: shown in ROI-level heatmaps, NOT fitted in any domain model.
+# `Other` is deliberately NOT a domain here -- FALLBACK is already 'Other', and
+# naming a domain that would let unmatched labels drain into it. Registered in
+# DOMAIN_SCHEMES only (no fused ROI scheme) for the same reason.
+# Unimplemented downstream: the domain model's contrast coding once there is no
+# `Control` reference (docs/region_levels.md, Pending changes).
+_PAIN_DOMAINS_V4 = {
+    'Sensory': ('S1', 'S2/PO', 'Thalamus', 'pIns'),
+    'Affective': ('rACC', 'dACC', 'Amygdala', 'aIns'),
+    'Cognitive': ('mOFC', 'lOFC', 'dlPFC', 'IFG/vlPFC', 'dmPFC'),
+    'Modulatory': ('M1',),
+}
+_PAIN_DOMAIN_V4_DISPLAY = ['Sensory', 'Affective', 'Cognitive', 'Modulatory']
+
 DOMAIN_SCHEMES = {
     'pain_domains': {'base': 'roi_v2_ofc', 'members': _PAIN_DOMAINS,
                      'display': _PAIN_DOMAIN_DISPLAY},
@@ -487,6 +532,8 @@ DOMAIN_SCHEMES = {
                         'display': _PAIN_DOMAIN_V2_DISPLAY},
     'pain_domains_v3': {'base': 'roi_v2_ins', 'members': _PAIN_DOMAINS_V3,
                         'display': _PAIN_DOMAIN_V3_DISPLAY},
+    'pain_domains_v4': {'base': 'roi_v3_ins', 'members': _PAIN_DOMAINS_V4,
+                        'display': _PAIN_DOMAIN_V4_DISPLAY},
 }
 
 

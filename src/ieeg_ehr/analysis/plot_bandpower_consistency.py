@@ -786,7 +786,9 @@ def fig_matrix(ctx, out):
     labels = [subjects[i] for i in order]
 
     cap = float(np.nanpercentile(np.abs(cube), 98)) or 0.05
-    cm = plt.get_cmap('RdBu_r').copy()
+    cmap = ctx.get('matrix_cmap') or 'RdBu_r'
+    diverging = cmap == 'RdBu_r'
+    cm = plt.get_cmap(cmap).copy()
     cm.set_bad('0.88')
 
     ncol = 3
@@ -841,7 +843,9 @@ def fig_matrix(ctx, out):
               'filled when BH-significant -- drawn as glyphs rather than a second colour row '
               'because subject slopes run roughly an order of magnitude larger than the fixed '
               'effect and a shared scale would wash the panel out. The figure is deliberately '
-              'unsummarised: a column that looks mostly blue under a blue triangle is a '
+              'unsummarised: a column that looks mostly ' +
+              ('blue under a blue triangle' if diverging else
+               'dark (low end of the scale) under a blue triangle') + ' is a '
               'consistent effect, a column that is half and half under a strongly coloured '
               'triangle is a group average over disagreeing patients, and only an '
               'unaggregated view can tell those apart. Row order is shared across all six '
@@ -1565,6 +1569,61 @@ def report(ctx):
     logger.info('=' * 74)
 
 
+#: Type (pt) and text of `fig_rfull_hist`. RFULL_FS is the original; the
+#: POSTER cut (`--rfull-hist --poster`) takes the poster figures' sizes
+#: (`plot_domain_lmer_consistency.POSTER_FS`): heading 12 bold and centred,
+#: axis labels 10, ticks 9.5. At 5.5 x 5 in the heading wraps.
+RFULL_FS = dict(size=(6.5, 5.0), title=10, title_weight='normal',
+                title_loc='left', tick=8, label=9, note=8.5,
+                title_text='Similarity of each patient\'s pain map to the '
+                           'group map',
+                xlabel='Pearson r, subject slope map vs. leave-one-out group '
+                       'map')
+RFULL_POSTER_FS = dict(size=(5.5, 5.0), title=12, title_weight='bold',
+                       title_loc='center', tick=9.5, label=10, note=9.5,
+                       title_text='Similarity of each patient\'s pain map\n'
+                                  'to the group map',
+                       xlabel='Pearson r, subject slope map vs. '
+                              'leave-one-out group map')
+
+
+def fig_rfull_hist(out_dir, out, fs=RFULL_FS):
+    """Panel (b) of `fig_profile_v2` on its own axis, as a histogram of `r_full`.
+
+    Reads the saved `consistency_subjects.csv`; nothing is recomputed. `r_full`
+    is the plain Pearson r between a subject's unpooled slope map and the
+    leave-one-out group map over every cell the subject has -- the spectral tilt
+    is IN it (see `subject_similarity`), which the axis label does not claim
+    otherwise. 6.5 x 5 in, no caption (2026-09-23, analyst's instruction);
+    `fs=RFULL_POSTER_FS` is the 5.5 x 5 in poster cut.
+    """
+    import matplotlib.pyplot as plt
+
+    sim = io.read_table(out_dir / 'consistency_subjects.csv', on_stale='warn')
+    r = sim['r_full'].dropna().to_numpy(dtype=float)
+    med = float(np.median(r))
+    fig, ax = plt.subplots(figsize=fs['size'], layout='constrained')
+    edges = np.arange(np.floor(r.min() * 20) / 20, r.max() + 0.05, 0.05)
+    ax.hist(r, bins=edges, color='#8c8c8c', edgecolor='white', linewidth=0.8,
+            zorder=2)
+    ax.axvline(0, color='black', lw=0.8, ls='--', zorder=3)
+    ax.axvline(med, color='black', lw=1.2, zorder=3)
+    ax.text(med, ax.get_ylim()[1] * 0.97, f'  median r = {med:.2f}',
+            ha='left', va='top', fontsize=fs['note'])
+    for s in ('top', 'right'):
+        ax.spines[s].set_visible(False)
+    ax.tick_params(labelsize=fs['tick'], colors='black')
+    ax.yaxis.get_major_locator().set_params(integer=True)
+    ax.set_xlabel(fs['xlabel'], fontsize=fs['label'])
+    ax.set_ylabel(f'subjects (n = {len(r)})', fontsize=fs['label'])
+    ax.set_title(fs['title_text'], fontsize=fs['title'],
+                 fontweight=fs['title_weight'], loc=fs['title_loc'])
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=300, facecolor='white')
+    plt.close(fig)
+    logger.info('wrote %s', out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1580,6 +1639,16 @@ def main():
                     help="Folder inside the run directory to write into. Pass "
                          "'' to write beside band_cells.parquet as the other "
                          "figures do.")
+    ap.add_argument('--matrix-cmap', default=None,
+                    help="Colormap for the matrix figure (default RdBu_r). A "
+                         "non-default map is written as "
+                         "fig_consistency_matrix_<cmap>.png.")
+    ap.add_argument('--rfull-hist', action='store_true',
+                    help='only draw fig_consistency_rfull_hist.png from the saved '
+                         'consistency_subjects.csv (no refit, no tables written)')
+    ap.add_argument('--poster', action='store_true',
+                    help='with --rfull-hist: the 5.5 x 5 in POSTER cut, into '
+                         '<run>/poster/<ts>/')
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -1589,11 +1658,34 @@ def main():
     import matplotlib
     matplotlib.use('Agg')
 
+    if args.rfull_hist and args.poster:
+        from datetime import datetime
+        run_dir = Path(args.run_dir)
+        od = run_dir / args.out_subdir
+        stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        pd_ = run_dir / 'poster' / f'rfull_hist_{stamp}'
+        fig_rfull_hist(od, pd_ / 'fig_consistency_rfull_hist.png',
+                       fs=RFULL_POSTER_FS)
+        parent = json.loads((run_dir / 'provenance.json').read_text())
+        io.write_run_provenance(
+            pd_, script=SCRIPT,
+            params={'fs': RFULL_POSTER_FS, 'source_run': str(run_dir)},
+            parents=[str(od / 'consistency_subjects.csv')],
+            subjects=parent.get('subjects'),
+            extra={'status': 'EXPLORATORY -- nominations, not findings.'})
+        io.log_analysis('consistency r_full histogram -- poster', pd_)
+        return
+    if args.rfull_hist:
+        od = Path(args.run_dir) / args.out_subdir
+        fig_rfull_hist(od, od / 'fig_consistency_rfull_hist.png')
+        return
+
     run_dir, cells, slopes, params, inventory = load_run(args.run_dir)
     logger.info('%d cells, %d subject-slope rows, %d subjects', len(cells),
                 len(slopes), slopes['subject'].nunique())
     ctx = build_context(run_dir, cells, slopes, params, inventory=inventory,
                         n_perm=args.n_perm, seed=args.seed)
+    ctx['matrix_cmap'] = args.matrix_cmap
     report(ctx)
 
     # Everything this script produces goes in ONE subfolder of the run. These
@@ -1607,10 +1699,18 @@ def main():
     wanted = args.figure or list(FIGURES)
     written = []
     for name in wanted:
-        out = out_dir / f'fig_consistency_{name}.png'
+        suffix = (f'_{args.matrix_cmap}' if name == 'matrix' and args.matrix_cmap
+                  else '')
+        out = out_dir / f'fig_consistency_{name}{suffix}.png'
         BUILDERS[name](ctx, out)
         written.append(out.name)
         logger.info('wrote %s', out.relative_to(run_dir))
+
+    # A --matrix-cmap run only restyles one figure; leave the existing tables
+    # (and their provenance) alone rather than rewriting them beside it.
+    if args.matrix_cmap:
+        logger.info('wrote %s (tables not rewritten)', ', '.join(written))
+        return
 
     # The two tables behind the figures. CSV under analysis/ per the IO contract:
     # small, terminal, read by eye.

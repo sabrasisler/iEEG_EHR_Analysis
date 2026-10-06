@@ -1,7 +1,7 @@
 # Pain iEEG — View Registry
 
-> One of three companion docs: `architecture.md` (the model),
-> `kickoff_plan.md` (the task plan), and this registry (the view axes).
+> One of two companion docs: `architecture.md` (the model) and this registry
+> (the view axes).
 > Cache format decision: **Parquet, one file per subject/session** (see architecture
 > PART 1). GLMM features expected in **log-power** (log is the default domain).
 
@@ -53,6 +53,9 @@ the exponentiate-in-view exception. Stats/GLMM default to log-power features.
 
 ## AXIS 2 — Baseline definition (what counts as the reference for normalization)
 - `zero_pain_epochs` (DEFAULT; mean power over the subject's 0-pain epoch windows)
+- `all_pain_epochs` (mean/SD over every masked window of every pain epoch in
+  the session; the `pain_change` baseline, built by
+  `views/build_pain_epoch_fullres_zscore.py`. Added 2026-10-06)
 - `whole_session` (mean/SD over all of the subject's windows)
 - (future) `pre_event_window` variants
 Notes: a view-time computation over the chosen windows' per-window values.
@@ -135,7 +138,7 @@ unit: the notch costs 4.0 Hz per harmonic (8 bins of 499) instead of 13.2 Hz
 
 **AXIS 2 caveat for `psd_epochs_fullres`:** `whole_session` baselines are
 UNAVAILABLE there — an epoch-only cache has no non-epoch windows. `zero_pain_epochs`
-(the default) is unaffected, since 0-pain epochs are epochs.
+(the default) and `all_pain_epochs` are unaffected, since both use only epoch windows.
 
 ## AXIS 6 — Region aggregation (channels -> region)
 - `none` (per-channel)

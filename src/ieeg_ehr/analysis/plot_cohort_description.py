@@ -404,7 +404,7 @@ def fig_combined(df, stats, sid, out_path, args):
 
     `--combined-top-height` / `--combined-bottom-height` are the two ROW
     SLOTS in inches, each including its own labels, so the file is
-    8.2 x (top + bottom) inches exactly. Laid out in inches rather than a
+    --combined-width (8.2) x (top + bottom) inches exactly. Laid out in inches rather than a
     gridspec so the slot heights are what they say.
     """
     from ieeg_ehr.med_analysis.plot_poster_epoch_meds import GROUPED_SIZES
@@ -413,7 +413,7 @@ def fig_combined(df, stats, sid, out_path, args):
     for k, v in GROUPED_SIZES.items():
         setattr(style, k, v)
     try:
-        W = COMBINED_WIDTH
+        W = args.combined_width
         top_h, bot_h = args.combined_top_height, args.combined_bottom_height
         H = top_h + bot_h
         fig = plt.figure(figsize=(W, H))
@@ -539,6 +539,9 @@ def main():
                          'fig_cohort_combined.png, labels included.')
     ap.add_argument('--combined-bottom-height', type=float, default=2.5,
                     help='Inches for the violin row, labels included.')
+    ap.add_argument('--combined-width', type=float, default=COMBINED_WIDTH,
+                    help='Inches wide for fig_cohort_combined.png (the file is '
+                         'exactly this x (top + bottom)).')
     ap.add_argument('--combined-colour', default=COMBINED_COLOUR)
     ap.add_argument('--font-label', type=float, default=15)
     ap.add_argument('--font-tick', type=float, default=13)

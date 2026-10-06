@@ -472,3 +472,20 @@ def test_non_finite_and_zero_se_subjects_are_excluded_not_crashed_on():
     se = np.array([0.001, 0.001, 0.001, 0.0, 0.001])
     _, _, _, k = dersimonian_laird(slope, se)
     assert k == 3          # the NaN slope and the zero-SE subject both leave
+
+
+def test_roi_v3_is_a_pure_rename_of_roi_v2():
+    for old, new in (('roi_v2', 'roi_v3'), ('roi_v2_ins', 'roi_v3_ins')):
+        a, b = roi_schemes.ROI_SCHEMES[old], roi_schemes.ROI_SCHEMES[new]
+        assert 'dmPFC/SMA' not in b['display'] and 'dmPFC' in b['display']
+        assert b['patterns']['dmPFC'] == a['patterns']['dmPFC/SMA']
+        assert len(a['patterns']) == len(b['patterns'])
+
+
+def test_pain_domains_v4_has_no_control_and_no_other_domain():
+    spec = roi_schemes.domain_scheme('pain_domains_v4')
+    assert spec['display'] == ['Sensory', 'Affective', 'Cognitive', 'Modulatory']
+    assert 'Control' not in spec['members'] and 'Other' not in spec['members']
+    assert spec['roi_to_domain']['dmPFC'] == 'Cognitive'
+    for roi in ('Auditory', 'Occipital'):
+        assert roi not in spec['roi_to_domain']

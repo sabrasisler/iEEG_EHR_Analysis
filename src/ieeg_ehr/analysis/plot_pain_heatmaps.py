@@ -18,8 +18,7 @@ build_pain_epoch_power.py to switch:
   no 'medium' bin (see common.assign_relative_pain_bins).
 
 Each run writes its own subdirectory under
-config.PLOTS_ROOT/delta_heatmap/<scheme>/<run_name>_<timestamp>/ (see
-docs/pain_analysis_context.md for the full naming convention -- a timestamp is
+config.PLOTS_ROOT/delta_heatmap/<scheme>/<run_name>_<timestamp>/ (a timestamp is
 always appended so reruns never collide/overwrite a prior run). Contains the
 PNGs plus a `provenance.json`: git commit/dirty state, script args, the
 subject list included, region-grouping config, and the source cache CSVs

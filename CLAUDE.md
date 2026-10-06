@@ -13,14 +13,16 @@ area:
 - `docs/io_conventions.md` — the artifact contract: the `io` helper API, the
   sidecar envelope, staleness rules, where outputs go, what stays CSV, and the
   pyarrow install recipe. Read before writing ANY script that produces output.
-- `docs/kickoff_plan.md` — repo org, background jobs, git workflow. Read before
-  writing sbatch. (The forward-looking half of this doc now lives in
-  `PLANNING.md` / `TASKS.md`; its IO section is superseded by
-  `docs/io_conventions.md`; what remains is reference material.)
 - `docs/WORKFLOW.md` — where every kind of record goes, and the commands that
   write them. Read before logging anything.
 - `docs/view_registry.md` — the seven view axes and their order. Read before
   writing or changing any view/normalization/averaging/binning code.
+- `docs/region_levels.md` — the four region levels (Channel → Anatomical Parcel
+  → ROI → Domain), the full parcel→ROI→domain map with contact counts, the
+  coordinate-derived insula parcels, and which level each model is fitted at.
+  Read before changing a region scheme, adding a domain, or interpreting a
+  region row. Derivative of `config/roi_schemes.py` and `analysis/insula_ap.py`
+  — those win on any conflict.
 - `docs/cluster_permutation.md` — the cluster-based permutation test on the
   region × frequency map: what is tested, the two correction scopes, why the
   `none` bin is a noise FLOOR and not a pass/fail control, and why a p-value never
@@ -50,8 +52,6 @@ above win on any conflict):
 - `docs/qc_context.md` — how the raw-voltage QC pipeline actually works:
   the four detectors, the metric/threshold split, mask labels, and a running
   log of threshold sweeps and case studies.
-- `docs/pain_analysis_context.md` — the pain epoch-power pipeline as it stood
-  before the Phase 1 refactor.
 
 Do not re-derive these decisions from scratch; they are settled. If a task seems
 to require violating a rule below, stop and ask.
@@ -186,6 +186,15 @@ eye or a model. A view is a step; an analysis is a stop.
   without a sidecar.
 - Materialize a view's output ONLY when recompute is measured slow AND something
   depends on it. Do not save cheap views by default.
+
+## Frequency bands
+
+- "The frequency bands" means `config.PAPER_BANDS_6_HG200_HZ`: delta 1-4,
+  theta 4-8, alpha 8-12, beta 15-25, gamma 25-70, high_gamma 70-200 Hz (the
+  12-15 Hz gap is the source paper's). Line-noise bins are notched BEFORE any
+  band average. Every new band-level analysis defaults to it; any other set
+  (`PAPER_BANDS_6_HZ`, `CANONICAL_BANDS_HZ`) only when the task names it.
+  (DECISIONS 2026-10-06)
 
 ## Feature-level QC
 

@@ -34,6 +34,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -292,9 +293,126 @@ GRID_BOTTOM_IN = 1.09
 GRID_AXES_H_IN = (GRID_FIGSIZE[1] - GRID_TOP_IN - GRID_GAP_IN
                   - GRID_BOTTOM_IN) / 2
 
+#: The F2-only figure as a 2 x 2 of domains: band rows in Greek, no separator
+#: lines, heading on top and the legend under the x label. Inches, as above:
+#: title + subtitle, domain name + coverage above each panel, the row gap
+#: (x ticks + next row's names), and the bottom (ticks, x label, legend, note).
+SQUARE = dict(W=7.5, top=1.20, gap=0.95, bottom=1.30, axes_h=2.35,
+              left=0.13, title_size=None)
+BAND_SYMBOL = {'delta': r'$\delta$', 'theta': r'$\theta$',
+               'alpha': r'$\alpha$', 'beta': r'$\beta$',
+               'gamma': r'$\gamma$', 'high_gamma': r'high-$\gamma$'}
+
+#: The POSTER cut of the same 2 x 2 (`--poster`): a fixed 7 x 6 in page, and
+#: only the title, domain names, axes and legend -- no subtitle, no coverage
+#: n's, no footnote. Those live in the run directory's full-record figure and
+#: in provenance.json beside the poster copy. Margins are tight; the title is
+#: centred over the panels and the legend sits INSIDE the `legend_in` panel,
+#: whose right half is empty (every Affective slope is near or below zero).
+#: The panel height is what is left of the 6 in after the margins.
+POSTER = dict(W=7.0, H=6.0, top=0.56, gap=0.55, bottom=0.62, left=0.075,
+              right=0.985, title_size=12, center_title=True,
+              legend_in='Affective')
+POSTER_TITLE = 'Pain–power slopes by MDD diagnosis across processing domains'
+POSTER_BAND_SYMBOL = {**BAND_SYMBOL, 'high_gamma': r'h$\gamma$'}
+
+
+def _f2_square(run_dir, name, domains, bands, cov, draw_f2, limit, xlab,
+               legend, title, subtitle=None, note=None, layout=SQUARE,
+               band_text=BAND_SYMBOL):
+    """Draw the F2 panels as a 2 x 2 of domains (see SQUARE / POSTER above).
+
+    `cov=None`, `subtitle=None` and `note=None` each drop that text, and its
+    margin with it.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+    from ieeg_ehr.med_analysis import style
+
+    ncol = 2
+    nrow = int(np.ceil(len(domains) / ncol))
+    L = layout
+    W = L['W']
+    if 'H' in L:
+        H = L['H']
+        axes_h = (H - L['top'] - (nrow - 1) * L['gap'] - L['bottom']) / nrow
+    else:
+        axes_h = L['axes_h']
+        H = L['top'] + nrow * axes_h + (nrow - 1) * L['gap'] + L['bottom']
+    cov = cov or {}
+    fig, axes = plt.subplots(nrow, ncol, figsize=(W, H), sharey=True,
+                             squeeze=False)
+    fig.subplots_adjust(left=L['left'], right=L.get('right', 0.97),
+                        wspace=0.12,
+                        top=1 - L['top'] / H, bottom=L['bottom'] / H,
+                        hspace=L['gap'] / axes_h)
+    y = np.arange(len(bands))
+    flat = axes.ravel()
+    for ax in flat[len(domains):]:
+        ax.set_visible(False)
+    for ax, dom in zip(flat, domains):
+        colour = DOMAIN_COLOURS.get(dom, '0.4')
+        draw_f2(ax, dom, colour)
+        style.style_axes(ax, grid_axis=None, tick_color=style.TEXT_PRIMARY)
+        ax.axvline(0, color=style.ZERO_LINE_COLOR, lw=0.8, ls='--', zorder=1)
+        ax.set_xlim(-limit, limit)
+        ax.xaxis.set_major_locator(MaxNLocator(3, symmetric=True))
+        ax.tick_params(axis='x', labelsize=style.TICK_SIZE - 1)
+        ax.tick_params(axis='y', length=0)
+        c = cov.get(dom)
+        ax.set_title(dom, fontsize=style.LABEL_SIZE, color=colour,
+                     pad=16 if c else 6)
+        if c:
+            ax.text(0.5, 1.02, f'{c["n_subjects"]} patients, '
+                    f'{c["n_channels"]} electrodes', transform=ax.transAxes,
+                    ha='center', va='bottom', fontsize=style.TICK_SIZE - 1.5,
+                    color=style.TEXT_MUTED)
+    for row in axes:
+        row[0].set_yticks(y)
+        row[0].set_yticklabels([band_text.get(b, b) for b in bands],
+                               fontsize=style.TICK_SIZE + 1.5)
+        row[0].set_ylim(len(bands) - 0.5, -0.5)
+
+    left, right = flat[0].get_position().x0, axes[0][-1].get_position().x1
+    bottom = axes[-1][0].get_position().y0
+    centre = L.get('center_title')
+    fig.text((left + right) / 2 if centre else 0.015, 1 - 0.08 / H, title,
+             fontsize=L['title_size'] or style.TITLE_SIZE,
+             fontweight='bold', color=style.TEXT_PRIMARY,
+             ha='center' if centre else 'left', va='top')
+    if subtitle:
+        fig.text(0.015, 1 - 0.46 / H, subtitle,
+                 fontsize=style.LABEL_SIZE - 1.5, color=style.TEXT_MUTED,
+                 ha='left', va='top')
+    in_panel = L.get('legend_in')
+    fig.text((left + right) / 2, bottom - (0.28 if in_panel else 0.33) / H,
+             xlab, ha='center', va='top', fontsize=style.LABEL_SIZE - 1,
+             color=style.TEXT_PRIMARY)
+    if in_panel in domains:
+        # Wrapped, so the legend fits the empty third of the panel.
+        for h in legend:
+            h.set_label(h.get_label().replace(' BH q', '\nBH q'))
+        flat[domains.index(in_panel)].legend(
+            handles=legend, loc='upper right', ncol=1,
+            fontsize=style.LEGEND_SIZE - 0.5, frameon=False,
+            handletextpad=0.3, borderaxespad=0.3, labelspacing=0.5)
+    else:
+        fig.legend(handles=legend, loc='upper center',
+                   bbox_to_anchor=((left + right) / 2, bottom - 0.68 / H),
+                   ncol=len(legend), fontsize=style.LEGEND_SIZE,
+                   frameon=False, handletextpad=0.3, columnspacing=1.4)
+    if note:
+        fig.text(0.015, 0.06 / H, note, fontsize=style.FOOTNOTE_SIZE - 1,
+                 linespacing=1.3, color=style.TEXT_MUTED, ha='left',
+                 va='bottom')
+    out = run_dir / name
+    fig.savefig(out, dpi=GRID_DPI, facecolor='white')
+    plt.close(fig)
+    logger.info('wrote %s (%.2f x %.2f in, %d dpi)', out, W, H, GRID_DPI)
+
 
 def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
-                rows=('F1', 'F2'), dx=None):
+                rows=('F1', 'F2'), dx=None, poster_dir=None):
     """F1 over F2 as one figure: rows are the readouts, columns the domains.
 
     `rows=('F1', 'F2')` is the 2 x 4, 7.5 x 7.5 in figure. `rows=('F2',)`
@@ -319,6 +437,9 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
     from ieeg_ehr.med_analysis.plot_poster_epoch_meds import GROUPED_SIZES
 
     rows = tuple(rows)
+    # POSTER (`poster_dir` set): the F2 2 x 2 in the POSTER cut, written to
+    # its own folder instead of the run directory.
+    poster = poster_dir is not None
     # DIAGNOSIS MODE (`dx` = {'n_case', 'n_control', 'window'}): the same F2
     # row, with the two slopes being MDD- and MDD+ instead of undosed/dosed.
     # There is NO F1 for a diagnosis run and asking for one is refused: its
@@ -443,7 +564,44 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
             limits['F1'] = float(np.nanmax(np.abs(
                 f1[['lower.CL', 'upper.CL']].to_numpy()))) * 1.08
 
-        for ri, key in enumerate(rows):
+        n_cells = len(pr)
+        note = ('lme4, one fit per band'
+                + (f' ({", ".join(dropped)} excluded from the fit)'
+                   if dropped else ', every domain in the fit')
+                + '; 95% CIs; BH '
+                + ('within each row ' if n_rows > 1 else '')
+                + f'across {"its" if n_rows > 1 else "the"} {n_cells} cells.\n'
+                + DISCLAIMER)
+        name = ('fig_F2_pain_slope_by_mdd_grid.png' if dx is not None
+                else 'fig_F1F2_grid.png' if 'F1' in rows
+                else 'fig_F2_pain_slope_by_dose_grid.png')
+        square = rows == ('F2',)
+        if poster and not square:
+            raise SystemExit('--poster draws the F2-only figure (grid_f2)')
+        if square and dx is not None:
+            coded = ('MDD ever coded' if dx['window'] == 'ever'
+                     else f'MDD coded {dx["window"]}')
+            title = 'Pain encoding in patients with and without depression'
+            subtitle = (f'MDD+: {coded} ({dx["n_case"]} patients)    '
+                        f'MDD−: not coded ({dx["n_control"]} patients)')
+        elif square:
+            title = 'Pain encoding, undosed vs dosed'
+            subtitle = drugs
+        if poster:
+            poster_dir.mkdir(parents=True, exist_ok=True)
+            _f2_square(poster_dir, name, domains, bands, None, draw_f2,
+                       limits['F2'], spec['F2']['xlab'], spec['F2']['legend'],
+                       POSTER_TITLE if dx is not None else
+                       'Pain–power slopes by '
+                       f'{drug_set.replace("_", " ").rstrip("s")} dosing '
+                       'across processing domains',
+                       layout=POSTER, band_text=POSTER_BAND_SYMBOL)
+        elif square:
+            _f2_square(run_dir, name, domains, bands, cov, draw_f2,
+                       limits['F2'], spec['F2']['xlab'], spec['F2']['legend'],
+                       title, subtitle, note)
+
+        for ri, key in enumerate(() if square else rows):
             first = ri == 0
             for j, dom in enumerate(domains):
                 colour = DOMAIN_COLOURS.get(dom, '0.4')
@@ -496,27 +654,32 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
                        fontsize=style.LEGEND_SIZE, frameon=False,
                        handletextpad=0.3, columnspacing=1.0)
 
-        n_cells = len(pr)
-        fig.text(0.015, 0.09 / H,
-                 'lme4, one fit per band'
-                 + (f' ({", ".join(dropped)} excluded from the fit)'
-                    if dropped else ', every domain in the fit')
-                 + '; 95% CIs; BH '
-                 + ('within each row ' if n_rows > 1 else '')
-                 + f'across {"its" if n_rows > 1 else "the"} {n_cells} cells.\n' + DISCLAIMER,
-                 fontsize=style.FOOTNOTE_SIZE - 1, linespacing=1.3,
-                 color=style.TEXT_MUTED, ha='left', va='bottom')
-
-        name = ('fig_F2_pain_slope_by_mdd_grid.png' if dx is not None
-                else 'fig_F1F2_grid.png' if 'F1' in rows
-                else 'fig_F2_pain_slope_by_dose_grid.png')
-        out = run_dir / name
-        fig.savefig(out, dpi=GRID_DPI, facecolor='white')
+        if not square:
+            fig.text(0.015, 0.09 / H, note,
+                     fontsize=style.FOOTNOTE_SIZE - 1, linespacing=1.3,
+                     color=style.TEXT_MUTED, ha='left', va='bottom')
+            out = run_dir / name
+            fig.savefig(out, dpi=GRID_DPI, facecolor='white')
+            logger.info('wrote %s (%.2f x %.2f in, %d dpi)', out, W, H,
+                        GRID_DPI)
         plt.close(fig)
-        logger.info('wrote %s (%.2f x %.2f in, %d dpi)', out, W, H, GRID_DPI)
     finally:
         for k, v in saved.items():
             setattr(style, k, v)
+
+    if poster:
+        # A poster copy is a new artifact of an existing run: provenance only,
+        # pointing back at the run; the BH tables stay in the run directory.
+        parent = json.loads((run_dir / 'provenance.json').read_text())
+        io.write_run_provenance(
+            poster_dir, script=SCRIPT,
+            params={'fdr_q': args.fdr_q, 'layout': POSTER,
+                    'figure': name, 'source_run': str(run_dir)},
+            parents=[str(run_dir / 'domain_slopes.csv'),
+                     str(run_dir / 'domain_pairs.csv')],
+            subjects=parent.get('subjects'),
+            extra={'status': DISCLAIMER})
+        return poster_dir
 
     if f1 is not None:
         _save_table(f1, run_dir, 'table_F1_med_effect.csv',
@@ -524,6 +687,19 @@ def figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped=(),
                     'every domain x band cell on F1')
     _save_table(pr, run_dir, 'table_F2_pain_slope_interaction.csv',
                 'domain_pairs.csv', args, 'every domain x band cell on F2')
+
+
+def poster_dir(args, run_dir, by):
+    """`<run_dir>/poster/F2_pain_slope_by_<by>_<ts>/`.
+
+    Poster cuts live INSIDE the lmer run they were drawn from, so the figure
+    and the fit it plots travel together. One folder per iteration: the
+    timestamp keeps every earlier cut.
+    """
+    if not args.poster:
+        return None
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    return run_dir / 'poster' / f'F2_pain_slope_by_{by}_{stamp}'
 
 
 def main(argv=None):
@@ -538,10 +714,16 @@ def main(argv=None):
                     help='default: read from the frames scheme folder name')
     ap.add_argument('--med-window-hours', type=float, default=2.0,
                     help='label only; the frames fix the actual window')
+    ap.add_argument('--poster', action='store_true',
+                    help='grid_f2 only: draw the 7 x 6 in POSTER cut into a '
+                         'new timestamped folder under <run-dir>/poster/ '
+                         'instead of the run directory')
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
 
+    if args.poster and set(args.figures) != {'grid_f2'}:
+        raise SystemExit('--poster draws --figures grid_f2 only')
     run_dir = Path(args.run_dir)
     prov = json.loads((run_dir / 'provenance.json').read_text())
     params = prov['params']
@@ -565,10 +747,12 @@ def main(argv=None):
                   else 'window unknown')
         dx = dict(n_case=params.get('dx_n_case'),
                   n_control=params.get('dx_n_control'), window=window)
-        figure_grid(run_dir, domains, bands, cov, None, args,
-                    params.get('dropped_domains') or [], rows=('F2',), dx=dx)
+        out = figure_grid(run_dir, domains, bands, cov, None, args,
+                          params.get('dropped_domains') or [], rows=('F2',),
+                          dx=dx, poster_dir=poster_dir(args, run_dir, 'mdd'))
         io.log_analysis('lme4 domain MDD figure grid_f2 (pain slope, MDD- vs '
-                        'MDD+)', run_dir)
+                        'MDD+)' + (' -- poster' if args.poster else ''),
+                        out or run_dir)
         return 0
 
     drug_set = args.drug_set or drug_set_of(Path(params['frames_dir']))
@@ -583,11 +767,13 @@ def main(argv=None):
         figure_f2(run_dir, domains, bands, cov, subtitle, args)
     if 'grid' in args.figures:
         figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped)
+    out = None
     if 'grid_f2' in args.figures:
-        figure_grid(run_dir, domains, bands, cov, drug_set, args, dropped,
-                    rows=('F2',))
-    io.log_analysis(f'lme4 domain med figures {"/".join(args.figures)}',
-                    run_dir)
+        out = figure_grid(run_dir, domains, bands, cov, drug_set, args,
+                          dropped, rows=('F2',),
+                          poster_dir=poster_dir(args, run_dir, 'dose'))
+    io.log_analysis(f'lme4 domain med figures {"/".join(args.figures)}'
+                    + (' -- poster' if args.poster else ''), out or run_dir)
     return 0
 
 

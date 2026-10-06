@@ -1010,3 +1010,65 @@ this tie.
 superseded, including the 4-domain lme4 run
 `paperbands6hg200-paindomainsv3-roiunit-analgesics-4dom-noparcel/domain_lmer_20260922-225934`
 and its poster figure.
+
+---
+
+## 2026-10-06 — `pain_change` z-scores each window against all of the session's pain-epoch windows
+
+The `pain_change` question z-scores every 2 s window per channel x native 0.5 Hz
+frequency against the mean and SD of that channel x frequency over every masked
+window of every pain epoch in the session. This is a new AXIS 2 value,
+`all_pain_epochs`, distinct from `zero_pain_epochs` (0-pain epochs only) and from
+`whole_session` (all windows, unavailable on the epoch-only fullres cache). The
+user made this call.
+
+**Properties:** a pair difference needs no reference state, and this baseline
+exists for every subject with epochs, unlike `zero_pain_epochs`. Every channel x
+frequency has window mean 0 and SD 1, so a pair's d_z is in units of that
+session's window-to-window SD and comparable across channels and frequencies.
+
+**Consequence:** a `pain_change` z is a within-session standardization. It says
+nothing about absolute power, and a session with low power variance inflates its
+z. The epoch mean of z equals (epoch mean of log power - mu) / sd, because the
+baseline is a fixed per-(channel, frequency) scalar.
+
+*Reverses if:* the analysis needs a pain-free reference state, in which case
+`zero_pain_epochs` applies.
+
+---
+
+## 2026-10-06 — `pain_change` model: change-score mixed model on z, no medication term, bands first
+
+One mixed model per ROI x frequency cell, rows = pair x channel, ROI scheme
+`roi_v3_ins`, discovery cohort:
+
+```
+d_z ~ d_pain + pain_1_within + gap_h + (1 | subject) + (0 + d_pain | subject)
+```
+
+The user made this call. It is the change-score grid's design
+(`mixed_model.VC_CHANGE`, no channel component) with three differences: the
+outcome is the pair change in epoch-mean z, `pain_1` is centred within subject,
+and there is no medication term. Canonical bands (`CANONICAL_BANDS_HZ`, mean d_z
+over the native frequencies in each band) run first. Native frequencies follow.
+
+*Reverses if:* a dose between the assessments turns out to drive d_z, in which
+case `med_between` returns as a covariate.
+
+---
+
+## 2026-10-06 — "The frequency bands" means `paper_bands_6_hg200`
+
+From this date, the six bands of `config.PAPER_BANDS_6_HG200_HZ` (delta 1-4,
+theta 4-8, alpha 8-12, beta 15-25, gamma 25-70, high_gamma 70-200 Hz) are the
+project's frequency bands. New band-level analyses default to them, starting
+with `pain_change`. The user made this call.
+
+**Why:** it is already the default of `run_bandpower_mixed` and the domain
+models (2026-09-17 extension of high gamma to 200 Hz), so one band set keeps
+every band-level figure comparable.
+
+**Consequence:** the view-axis value `canonical_bands` still names the older
+8-band `CANONICAL_BANDS_HZ`. Existing code is not swept; each script adopts the
+six bands when it is next touched.
+

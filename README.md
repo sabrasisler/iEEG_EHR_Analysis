@@ -47,9 +47,9 @@ metadata — not source, gitignored, ignore it.
 
 ```
 CLAUDE.md            operating rules — read first
-docs/                architecture, kickoff plan, view registry (normative)
+docs/                architecture, view registry (normative)
                      + data_sop.md (new-user SOP for the dataset on Sherlock)
-                     + qc_context, pain_analysis_context (background)
+                     + qc_context (background)
 src/ieeg_ehr/        THE CODE — one importable package
   config/            single source of paths, thresholds, band defs, pinned mask
   io/                provenance, table + NWB helpers, file registry builder

@@ -22,6 +22,16 @@ date, or figure that prompted it.
 
 ## This week
 
+### pain_change (DECISIONS 2026-10-06)
+
+- [ ] **Run the z-score build + band-level mixed model** on `ckeller1`
+      (`sbatch/build_fullres_zscore_array.sbatch`, then `sbatch/pain_change.sbatch`),
+      then the `--band-set fullres` pass.
+- [ ] **METHODS.md for every model-fitting analysis, rendered from code
+      constants** (formula, `vc_formula`, REML/optimizer/maxiter, correction,
+      floors). Template: `analysis/pain_change.py:write_methods`. Audit in
+      notebook 2026-10-06 16:45.
+
 ### Full-resolution PSD re-extraction (DECISIONS 2026-09-15)
 
 Native 0.5 Hz FFT grid, 1-250 Hz, 499 bins, pain epochs only, into
@@ -45,12 +55,12 @@ binning moves entirely into the view layer.
 - [x] **View reader + tests** - `views/fullres_reader.py` (n_freqs from the
       MANIFEST, never from config), `'fullres'` on AXIS 5, 35 tests green.
       Done 2026-09-15.
-- [ ] **Smoke test + measured storage check.** sub-019 (35 pairs / 49 epochs) and
+- [x] **Smoke test + measured storage check.** sub-019 (35 pairs / 49 epochs) and
       sub-256 (199 pairs / 137 epochs, worst case). Record bytes, wall time and
       `seff` MaxRSS; extrapolate to 83 and re-check `sh_quota` BEFORE the array.
       Oak was 64 % on 2026-09-15, up 14 TB in 11 days - the 300 GB estimate needs
       confirming against real headroom, not against the SOP's stale figure.
-- [ ] **Array run** - `sbatch/build_pain_epoch_fullres_array.sbatch`,
+- [x] **Array run** - `sbatch/build_pain_epoch_fullres_array.sbatch`,
       `--array=0-86%12`, sized from the smoke test's `seff` rather than the
       header's guess. Commit AND push first so the recorded hash matches.
 - [ ] **Reproduce one existing figure through the new path** (the P1.5 move):
@@ -58,11 +68,11 @@ binning moves entirely into the view layer.
       `canonical_bands` and diff against the 50-bin version. Expect a small,
       EXPLICABLE change (bands now integrate narrower notches); a large one is a
       bug.
-- [ ] **Materialize the epoch-mean full-res view** (~1.2 GB vs the per-window
+- [x] **Materialize the epoch-mean full-res view** (~1.2 GB vs the per-window
       cache's ~300 GB). The one genuine "materialize only when recompute is
       measured slow" case: a specparam sweep would otherwise re-read 300 GB per
       arm. This is also what FOOOF reads.
-- [ ] **specparam / FOOOF (BG.3)** - deliberately a SECOND job, after the FFT
+- [x] **specparam / FOOOF (BG.3)** - deliberately a SECOND job, after the FFT
       data is usable. Install on a dev node
       (`pip install --no-deps --only-binary=:all: specparam`), then
       `views/build_pain_epoch_fooof.py`. Two arms: `fixed` 1-45 Hz (below the

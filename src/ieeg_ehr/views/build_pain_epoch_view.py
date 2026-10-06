@@ -81,13 +81,15 @@ def build_subject_view(subject, session, view_config, epoch_minutes=None,
     drop_bins = (cache_reader.line_noise_bins(epoch_minutes)
                  if view_config.drop_line_noise_bins else np.array([], dtype=int))
 
+    baseline_filter = axes.baseline_epoch_filter(view_config.baseline)
     defs = defs.sort_values('epoch_id').reset_index(drop=True)
     defs['pain_bin'] = axes.assign_pain_bins(defs, view_config.pain_bins)
 
     stats = {
         'subject_id': f'sub-{subject}', 'session_id': f'ses-{session}',
         'n_epochs_total': int(len(defs)),
-        'n_baseline_epochs': int(defs.apply(axes.is_baseline_epoch, axis=1).sum()),
+        'n_baseline_epochs': (int(defs.apply(baseline_filter, axis=1).sum())
+                              if baseline_filter else int(len(defs))),
         'cache_bytes': int(cache_path.stat().st_size),
         'rows_read': 0, 'n_channel_epochs_dropped_coverage': 0,
         'n_nonfinite_input': 0, 'mask_excluded_frac': float('nan'),
@@ -110,7 +112,7 @@ def build_subject_view(subject, session, view_config, epoch_minutes=None,
     excl_fracs = []
     for epoch_row, block, kept, frac in cache_reader.iter_epochs(
             parquet_file, defs, n_bins, mask, channels_by_run, view_config,
-            row_group_map, epoch_filter=axes.is_baseline_epoch):
+            row_group_map, epoch_filter=baseline_filter):
         acc.update(axes.to_domain(block, view_config.domain),
                    rows=rows_by_run[epoch_row['run_id']])
         stats['rows_read'] += int(block.size)

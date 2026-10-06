@@ -134,6 +134,20 @@ def is_baseline_epoch(epoch_row):
     return pd.notna(score) and float(score) == 0.0
 
 
+def baseline_epoch_filter(baseline):
+    """The epoch filter that selects AXIS 2's baseline windows, or None for all.
+
+    `all_pain_epochs` takes every epoch: each channel x frequency is then
+    standardized against the subject's whole pain-epoch distribution, so a
+    window's z says where it sits among all of that session's epoch windows.
+    """
+    if baseline == 'zero_pain_epochs':
+        return is_baseline_epoch
+    if baseline == 'all_pain_epochs':
+        return None
+    raise ValueError(f'baseline {baseline!r} has no epoch filter')
+
+
 # ---------------------------------------------------------------------------
 # AXIS 3 -- normalization (PER WINDOW, before averaging)
 # ---------------------------------------------------------------------------

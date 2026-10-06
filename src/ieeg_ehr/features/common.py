@@ -499,8 +499,7 @@ def _source_cache_provenance(cache_paths):
 def make_run_dir(run_name, n_subjects, category=None):
     """category groups a plot type's runs under their own subdirectory of
     config.PLOTS_ROOT, e.g. 'delta_heatmap/absolute' or
-    'band_violin_grid/subject_relative' (see docs/pain_analysis_context.md for the
-    full naming convention) -- keeps different plot types/variants from
+    'band_violin_grid/subject_relative' -- keeps different plot types/variants from
     being siblings in one flat plots/ directory.
 
     run_name is a LABEL ONLY (never re-encodes plot type/scheme -- those are

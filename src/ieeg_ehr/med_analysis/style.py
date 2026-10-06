@@ -271,3 +271,37 @@ def save(fig, out_path, footnote=None):
     fig.savefig(out_path, dpi=DPI, facecolor='white', bbox_inches='tight')
     plt.close(fig)
     return out_path
+
+
+def p_stars(p):
+    """Conventional significance stars: * < .05, ** < .01, *** < .001.
+
+    'n.s.' rather than an empty label, so a bracket with nothing on it cannot
+    be read as a label that failed to render.
+    """
+    if p is None or not math.isfinite(p):
+        return None
+    for cut, stars in ((0.001, '***'), (0.01, '**'), (0.05, '*')):
+        if p < cut:
+            return stars
+    return 'n.s.'
+
+
+def sig_bracket(ax, x1, x2, text, fontsize=None, offset=6):
+    """A bracket spanning two groups, labelled above the data.
+
+    Shared by the medication poster and the diagnosis figures so the two
+    cannot drift apart. Call it LAST: it sizes itself against the final y
+    limits and then extends them to make room for itself.
+    """
+    lo, hi = ax.get_ylim()
+    span = hi - lo
+    y = hi + span * 0.02
+    tick = span * 0.025
+    ax.plot([x1, x1, x2, x2], [y, y + tick, y + tick, y],
+            color=TEXT_PRIMARY, linewidth=2.0, zorder=8, clip_on=False)
+    ax.annotate(text, ((x1 + x2) / 2, y + tick), textcoords='offset points',
+                xytext=(0, offset), ha='center',
+                va='bottom', fontsize=fontsize or LEGEND_SIZE,
+                color=TEXT_PRIMARY, annotation_clip=False)
+    ax.set_ylim(lo, hi + span * 0.16)

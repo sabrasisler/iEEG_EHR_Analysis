@@ -682,6 +682,20 @@ def analysis_run_dir(question, output_type, run_name, view_scheme=None,
     return path / (f'{run_name}_{stamp}' if run_name else stamp)
 
 
+#: Level-2 question `pain_change` (PLANNING.md, named questions).
+PAIN_CHANGE_QUESTION = 'pain_change'
+
+
+def pain_change_zscore_dir(view_label, config_hash):
+    """The z-scored epoch tables `pain_change` reads, kept inside its own question.
+
+    Keyed on label + config hash with no timestamp, unlike a run directory, so
+    every array task of one build writes into the same folder and a consumer can
+    rebuild the path from its view arguments."""
+    return (ANALYSIS_DIR / 'pain' / PAIN_CHANGE_QUESTION / 'zscore_epochs'
+            / f'{view_label}_{config_hash}')
+
+
 def sweep_run_dir(run_name, event='pain', timestamp=None):
     """A tiered nomination run. All grid combinatorics live as ROWS in this
     run's results table — never as sibling folders."""

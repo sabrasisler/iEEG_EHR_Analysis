@@ -1,9 +1,8 @@
 # Pain iEEG — Feature & Analysis Architecture
 
-One of three companion docs handed to Claude Code in the Sherlock repo
+One of two companion docs handed to Claude Code in the Sherlock repo
 `/home/groups/ckeller1/sisler/iEEG_EHR_Analysis`:
 - **this** — the data/layer model + directory layout + rules
-- `kickoff_plan.md` — the ordered task plan, repo org, IO, background jobs
 - `view_registry.md` — the enumerated view axes
 
 Project: shared neural signatures, individual variability, and opioid modulation

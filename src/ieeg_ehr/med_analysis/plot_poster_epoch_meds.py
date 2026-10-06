@@ -128,23 +128,6 @@ def _p_text(p):
     return rf'$p$ = {mantissa:.1f} $\times$ 10$^{{{exponent}}}$'
 
 
-def _sig_bracket(ax, x1, x2, text):
-    """A bracket spanning the two groups, labelled above the data."""
-    lo, hi = ax.get_ylim()
-    span = hi - lo
-    y = max(ax.get_lines()[0].get_ydata().max() if ax.get_lines() else lo, hi)
-    y = hi + span * 0.02
-    tick = span * 0.025
-    ax.plot([x1, x1, x2, x2], [y, y + tick, y + tick, y],
-            color=style.TEXT_PRIMARY, linewidth=2.0, zorder=8,
-            clip_on=False)
-    ax.annotate(text, ((x1 + x2) / 2, y + tick), textcoords='offset points',
-                xytext=(0, 6), ha='center', va='bottom',
-                fontsize=style.LEGEND_SIZE, color=style.TEXT_PRIMARY,
-                annotation_clip=False)
-    ax.set_ylim(lo, hi + span * 0.16)
-
-
 # --------------------------------------------------------------- panel A ---
 def panel_a_table(per_epoch_drug, per_epoch, drugs, class_of):
     """Per drug: subjects with it in the window before >=1 epoch.
@@ -297,7 +280,7 @@ def panel_c_table(per_subject_value, value_col):
 
 
 def draw_panel_c(ax, summaries, value_col, xlabel, window_minutes,
-                 min_subjects=5):
+                 min_subjects=5, prob_noun='dose'):
     """One curve per medication class, plus one for any analgesic.
 
     The class curves do NOT sum to the all-analgesics curve: an assessment
@@ -324,7 +307,8 @@ def draw_panel_c(ax, summaries, value_col, xlabel, window_minutes,
     ax.set_ylim(0, 105)
     ax.set_yticks(range(0, 101, 20))
     _axes(ax)
-    style.label_axes(ax, xlabel, f'P(dose within {window_minutes:g} min)  [%]')
+    style.label_axes(ax, xlabel,
+                     f'P({prob_noun} within {window_minutes:g} min)  [%]')
     # The curves rise left to right, so the upper left is the one region no
     # line passes through.
     ax.legend(frameon=False, fontsize=style.LEGEND_SIZE, loc='upper left')
@@ -357,7 +341,9 @@ def paired_stats(paired):
 
 def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
                 show_summary=True, show_violin=False, show_bracket=False,
-                point_size=60, line_width=1.2):
+                point_size=60, line_width=1.2, violin_color=None,
+                show_pairs=True, jitter=0.0, point_color=None,
+                group_labels=('Undosed', 'Dosed')):
     """Paired subject means, dosed vs undosed.
 
     `show_violin` draws the distribution behind the points; `show_summary`
@@ -373,19 +359,35 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
         parts = ax.violinplot(data, positions=xs, widths=0.62,
                               showmedians=False, showextrema=False)
         for body, color in zip(parts['bodies'], (UNDOSED_COLOR, DOSED_COLOR)):
-            body.set_facecolor(color)
-            body.set_edgecolor(color)
-            body.set_alpha(0.28)
-            body.set_linewidth(1.5)
+            if violin_color is not None:
+                # One flat fill, no outline: the violins of the consistency
+                # posters (plot_domain_lmer_consistency.VIOLIN_GREY).
+                body.set_facecolor(violin_color)
+                body.set_edgecolor('none')
+                body.set_alpha(1.0)
+            else:
+                body.set_facecolor(color)
+                body.set_edgecolor(color)
+                body.set_alpha(0.28)
+                body.set_linewidth(1.5)
             body.set_zorder(1)
 
-    for row in paired.itertuples():
-        ax.plot(xs, [row.undosed, row.dosed], color=style.AXIS_COLOR,
-                alpha=0.5, zorder=2, linewidth=line_width)
-    ax.scatter(np.full(len(paired), 0.0), paired['undosed'], s=point_size,
-               color=UNDOSED_COLOR, alpha=0.75, zorder=3, linewidth=0)
-    ax.scatter(np.full(len(paired), 1.0), paired['dosed'], s=point_size,
-               color=DOSED_COLOR, alpha=0.75, zorder=3, linewidth=0)
+    # `jitter` spreads each group's points sideways (uniform, +/- jitter, fixed
+    # seed) so a column of near-equal subject means reads as points. A pair
+    # line would then be drawn between the jittered positions, so the two are
+    # meant to be used apart: pairs, or jitter.
+    rng = np.random.default_rng(0)
+    n = len(paired)
+    x_un = 0.0 + (rng.uniform(-jitter, jitter, n) if jitter else np.zeros(n))
+    x_do = 1.0 + (rng.uniform(-jitter, jitter, n) if jitter else np.zeros(n))
+    if show_pairs:
+        for a, b, row in zip(x_un, x_do, paired.itertuples()):
+            ax.plot([a, b], [row.undosed, row.dosed], color=style.AXIS_COLOR,
+                    alpha=0.5, zorder=2, linewidth=line_width)
+    ax.scatter(x_un, paired['undosed'], s=point_size,
+               color=point_color or UNDOSED_COLOR, alpha=0.75, zorder=3, linewidth=0)
+    ax.scatter(x_do, paired['dosed'], s=point_size,
+               color=point_color or DOSED_COLOR, alpha=0.75, zorder=3, linewidth=0)
 
     # The group summary sits ON its group. Offset sideways it read as a stray
     # extra point rather than a summary of the column it belongs to.
@@ -403,7 +405,7 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
         ax.axhline(0, color=style.ZERO_LINE_COLOR, linestyle='--', zorder=1)
 
     ax.set_xticks(xs)
-    ax.set_xticklabels(['Undosed', 'Dosed'], fontsize=style.LABEL_SIZE)
+    ax.set_xticklabels(list(group_labels), fontsize=style.LABEL_SIZE)
     ax.set_xlim(-0.45, 1.45)
     _axes(ax)
 
@@ -414,7 +416,7 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
     # reader needs, and which test produced it belongs in the caption and the
     # provenance, both of which say Wilcoxon signed-rank.
     lines = [f'median diff {stats["median_difference"]:+.2f}',
-             f'higher when dosed: '
+             f'higher when {group_labels[1].lower()}: '
              f'{stats["n_higher_in_dosed"]}/{stats["n_subjects"]}']
     p = stats.get('wilcoxon_p')
     if p is not None and show_p and not show_bracket:
@@ -436,7 +438,7 @@ def draw_paired(ax, paired, stats, ylabel, zero_line=False, show_p=True,
 
     # Drawn last: the bracket sizes itself against the final y limits.
     if show_bracket and p is not None:
-        _sig_bracket(ax, xs[0], xs[1], _p_text(p))
+        style.sig_bracket(ax, xs[0], xs[1], _p_text(p))
 
 
 # ------------------------------------------------------ standalone wrappers ---
@@ -483,27 +485,36 @@ def plot_paired(paired, stats, out_path, ylabel, title, zero_line=False,
     return _save(fig, out_path, title)
 
 
-#: Type for the grouped figure. It is printed at 12.5 x 7 in, half the linear
+#: Type for the grouped figure. It is printed at 12.5 x 8 in, half the linear
 #: size the standalone poster panels were drawn at, so it gets its own scale:
 #: the POSTER sizes (30 / 25 / 21 pt) in a 3-in-tall panel leave no room for
 #: data. These are chosen for a panel read at poster distance at that size.
 GROUPED_SIZES = dict(TITLE_SIZE=13, LABEL_SIZE=11, TICK_SIZE=9.5,
                      LEGEND_SIZE=8.5, FOOTNOTE_SIZE=7, DPI=300)
-GROUPED_FIGSIZE = (12.5, 7.0)
+GROUPED_FIGSIZE = (12.5, 8.0)
+#: Panel E's violins in the grouped figure: flat grey, no outline.
+GROUPED_VIOLIN = '#E7E7E7'
 
 #: Short panel titles for the grouped figure: enough to say what each panel
 #: is without a caption, and short enough to sit above a 6-in-wide panel.
 GROUPED_TITLES = (
-    'Exposure before a pain epoch (2 h)',
-    'Medicated epochs per subject',
-    'Dose after a pain score (30 min)',
-    'Pain in dosed vs undosed epochs',
+    'Analgesic exposure 2hr before a pain score',
+    'Medicated pain scores per subject',
+    'Medication administration after a pain score (30 min)',
+    'Reported pain when medicated vs. unmedicated',
 )
+#: Panel E in the grouped figure: subject means jittered, no pair lines, one
+#: grey for both groups (the grey MDD poster's point colour), and the
+#: medicated / unmedicated wording of the titles. Panel C2 says "medication".
+GROUPED_E_JITTER = 0.08
+GROUPED_E_POINT = '#5f5e5a'
+GROUPED_E_LABELS = ('Unmedicated', 'Medicated')
+GROUPED_PROB_NOUN = 'medication'
 
 
 def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
                  score_window_minutes):
-    """A, B, C2 and E in one 2x2 at exactly 12.5 x 7 in.
+    """A, B, C2 and E in one 2x2 at exactly GROUPED_FIGSIZE (12.5 x 8 in).
 
     Saved WITHOUT `bbox_inches='tight'`, unlike everything else here: tight
     cropping recomputes the canvas from whatever the text extends to, so the
@@ -521,17 +532,22 @@ def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
         draw_panel_a(axes[0][0], a_table)
         draw_panel_b(axes[0][1], b_table)
         draw_panel_c(axes[1][0], c2_summaries, 'pain_deviation',
-                     SUBJECT_CENTRED_LABEL, score_window_minutes)
+                     SUBJECT_CENTRED_LABEL, score_window_minutes,
+                     prob_noun=GROUPED_PROB_NOUN)
         draw_paired(axes[1][1], e_paired, e_stats, SUBJECT_CENTRED_LABEL,
                     zero_line=True, show_summary=False, show_violin=True,
                     show_bracket=True,
                     # s is an area in pt^2: 60 was sized for a 9-in panel and
                     # read as a solid column of blobs in a 3-in one.
-                    point_size=14, line_width=0.7)
+                    point_size=14, line_width=0.7,
+                    violin_color=GROUPED_VIOLIN, show_pairs=False,
+                    point_color=GROUPED_E_POINT,
+                    group_labels=GROUPED_E_LABELS,
+                    jitter=GROUPED_E_JITTER)
         for ax, title in zip(axes.ravel(), GROUPED_TITLES):
             # pad clears the significance bracket, which is drawn above E's
             # axes and would otherwise run into E's title.
-            ax.set_title(title, fontsize=style.TITLE_SIZE,
+            ax.set_title(title, fontsize=style.TITLE_SIZE, fontweight='bold',
                          color=style.TEXT_PRIMARY, loc='center', pad=14)
         fig.tight_layout(h_pad=3.5)
         out_path.parent.mkdir(parents=True, exist_ok=True)

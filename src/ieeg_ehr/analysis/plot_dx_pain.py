@@ -295,6 +295,117 @@ def figure_violin(d, table, out_path, args, n_case, n_ctrl, metric='nrs_mean'):
     return out_path
 
 
+#: Poster wording per metric: (title, y-axis label). The unit lives on the
+#: axis, never in the title.
+POSTER_TEXT = {
+    'nrs_mean': ('Mean reported pain', 'Mean pain score (NRS)'),
+    'nrs_sd': ('Within-subject pain variability', 'SD of pain scores (NRS)'),
+    'n_reports': ('Charted pain ratings', 'Number of ratings'),
+    'frac_zero': ('Ratings of no pain', 'Fraction of ratings at NRS = 0'),
+}
+
+#: Both arms the same neutral grey: the contrast is carried by position and
+#: the bracket, not by a colour that would imply one arm is the "treatment".
+POSTER_VIOLIN_COLOR = '#c3c2b7'
+POSTER_POINT_COLOR = '#5f5e5a'
+#: `--poster-colour blue`: the cohort-description combined figure's look
+#: (`plot_cohort_description.COMBINED_COLOUR`), one hue told apart by alpha --
+#: a faint envelope and near-opaque dots. Still ONE hue for both arms, so the
+#: contrast is carried by position and the bracket, as with the grey.
+#: (body, body_alpha, edge, edge_width, dot, dot_alpha, median); median None
+#: draws no median bar. Blue's is the cohort figure's darker shade of the same
+#: hue (COMBINED_MEDIAN_COLOUR), so it reads as a summary of the dots.
+POSTER_PALETTES = {
+    'grey': (POSTER_VIOLIN_COLOR, 0.45, POSTER_VIOLIN_COLOR, 1.5,
+             POSTER_POINT_COLOR, 0.85, None),
+    'blue': ('#447eae', 0.25, '#447eae', 0.8, '#447eae', 0.85, '#1f3f5b'),
+}
+#: `--poster-size` (the exact-size poster cut): the title of the other poster
+#: figures -- 12 pt bold -- and their 300 dpi.
+POSTER_CUT_TITLE_SIZE = 12
+POSTER_CUT_DPI = 300
+
+
+def figure_poster(d, table, out_path, args, n_case, n_ctrl, metric='nrs_mean'):
+    """One metric in the medication-poster style, with a star bracket.
+
+    Matches `med_analysis.plot_poster_epoch_meds` panel E: the same style
+    module, axes and bracket, so the diagnosis panels can sit beside the
+    medication panels on one poster. Stars come from Mann-Whitney -- the
+    unpaired counterpart of the Wilcoxon signed-rank the poster uses, and the
+    test that does not assume these skewed metrics are symmetric. Uncorrected
+    across the four metrics; the caption, not the panel, has to say so.
+    """
+    from ieeg_ehr.med_analysis import style
+    from ieeg_ehr.med_analysis.style import plt
+
+    style.use_poster(False)            # screen weights, as in the grouped fig
+    title, ylabel = POSTER_TEXT[metric]
+    xs = np.array([0.0, 1.0])
+    values = [d.loc[d['dx_state'] == s, metric].dropna().to_numpy(dtype=float)
+              for s in (False, True)]
+
+    size = tuple(args.poster_size) if args.poster_size else (5.2, 4.6)
+    body_c, body_a, edge_c, edge_w, dot_c, dot_a, med_c = POSTER_PALETTES[
+        args.poster_colour]
+    fig, ax = plt.subplots(figsize=size)
+    parts = ax.violinplot(values, positions=xs, widths=0.62,
+                          showmedians=False, showextrema=False)
+    for body in parts['bodies']:
+        body.set_facecolor(body_c)
+        body.set_edgecolor(edge_c)
+        body.set_alpha(body_a)
+        body.set_linewidth(edge_w)
+        body.set_zorder(1)
+
+    rng = np.random.default_rng(0)     # jitter only, fixed so it is stable
+    for x, v in zip(xs, values):
+        ax.scatter(x + rng.uniform(-0.08, 0.08, size=len(v)), v, s=45,
+                   color=dot_c, alpha=dot_a,
+                   zorder=3, linewidth=0)
+        if med_c is not None and len(v):
+            # the cohort figure's bar: +/- 0.62 x the violin width about x
+            half = 0.62 * 0.62
+            ax.hlines(np.median(v), x - half, x + half, color=med_c, lw=2.2,
+                      zorder=4)
+
+    dx = args.dx.upper()
+    ax.set_xticks(xs)
+    ax.set_xticklabels([f'{dx}−\nn = {n_ctrl}', f'{dx}+\nn = {n_case}'],
+                       fontsize=style.LABEL_SIZE)
+    ax.set_xlim(-0.5, 1.5)
+    style.style_axes(ax, grid_axis=None, tick_color=style.TEXT_PRIMARY)
+    style.label_axes(ax, None, ylabel)
+    if args.poster_size:
+        ax.set_title(title, fontsize=POSTER_CUT_TITLE_SIZE, fontweight='bold',
+                     color=style.TEXT_PRIMARY, pad=10)
+    else:
+        ax.set_title(title, fontsize=style.TITLE_SIZE,
+                     color=style.TEXT_PRIMARY, pad=10)
+
+    # The bracket extends the y limits for its own headroom; keep the ticks
+    # to the data range so no tick label sits in that empty space.
+    lo, hi = ax.get_ylim()
+    ticks = [t for t in ax.get_yticks() if lo <= t <= hi]
+    row = table[table['metric'] == metric]
+    if len(row):
+        stars = style.p_stars(float(row.iloc[0]['mannwhitney_p']))
+        style.sig_bracket(ax, xs[0], xs[1], stars,
+                          fontsize=style.TITLE_SIZE if stars != 'n.s.'
+                          else style.LEGEND_SIZE,
+                          offset=0 if stars != 'n.s.' else 6)
+    ax.set_yticks(ticks)
+    fig.tight_layout()
+    if args.poster_size:
+        # EXACTLY --poster-size: style.save crops to the ink (bbox 'tight'),
+        # which would give some other size.
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, dpi=POSTER_CUT_DPI, facecolor='white')
+        plt.close(fig)
+        return out_path
+    return style.save(fig, out_path)
+
+
 #: Reference marks on the recency axis, in days before admission. These are
 #: conventions a reader already carries, not anything the data picks out.
 RECENCY_GUIDES = [(30, '1 mo'), (90, '3 mo'), (365, '1 y'),
@@ -501,12 +612,15 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP),
                     help='Where the subject list comes from, so this figure '
                          'describes the SAME cohort the models are fitted on.')
-    ap.add_argument('--figure', choices=('panels', 'violin', 'recency'),
+    ap.add_argument('--figure',
+                    choices=('panels', 'violin', 'poster', 'recency'),
                     default='panels',
                     help="'panels' = all four metrics in one strip-plot "
                          "figure; 'violin' = ONE STANDALONE FIGURE PER "
                          "--metric, each a violin with the subjects "
-                         "scattered on it; 'recency' = how stale each case's "
+                         "scattered on it; 'poster' = the same, one per "
+                         "--metric, in the medication-poster style (grey, "
+                         "star bracket); 'recency' = how stale each case's "
                          "most recent code is, and whether that tracks pain "
                          "(read it at --dx-window-days 0).")
     ap.add_argument('--metric', nargs='+', choices=[c for c, _, _ in METRICS],
@@ -516,6 +630,14 @@ def main():
     ap.add_argument('--question', default=QUESTION)
     ap.add_argument('--run-name', default=RUN_NAME)
     ap.add_argument('--run-dir', default=None)
+    ap.add_argument('--poster-colour', choices=list(POSTER_PALETTES),
+                    default='grey',
+                    help="--figure poster: 'grey' (default) or 'blue', the "
+                         'cohort-description combined figure\'s violins')
+    ap.add_argument('--poster-size', type=float, nargs=2, default=None,
+                    metavar=('W', 'H'),
+                    help='--figure poster: save at EXACTLY W x H in (default: '
+                         '5.2 x 4.6, cropped to the ink)')
     args = ap.parse_args()
 
     ref = reference_run.load(args.reference_run)
@@ -549,7 +671,8 @@ def main():
 
     params = {'condition': args.dx, 'window_days': args.dx_window_days,
               'source_set': args.dx_sources, 'figure': args.figure,
-              'metrics': list(args.metric) if args.figure == 'violin' else
+              'metrics': list(args.metric)
+                         if args.figure in ('violin', 'poster') else
                          [c for c, _, _ in METRICS],
               'denominator': 'every charted pain rating, not QC-surviving epochs'}
     io.write_table(table, run_dir / 'dx_pain_comparison.csv', params=params,
@@ -570,6 +693,11 @@ def main():
         outs = [figure_recency(d, labels,
                                run_dir / 'fig_dx_recency.png',
                                args, n_case, n_ctrl)]
+    elif args.figure == 'poster':
+        outs = [figure_poster(d, table,
+                              run_dir / f'fig_dx_pain_{m}_poster.png',
+                              args, n_case, n_ctrl, metric=m)
+                for m in args.metric]
     elif args.figure == 'violin':
         outs = [figure_violin(d, table,
                               run_dir / f'fig_dx_pain_{m}_violin.png',
