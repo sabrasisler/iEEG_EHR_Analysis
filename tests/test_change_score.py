@@ -334,3 +334,44 @@ def test_no_dose_and_full_specs_are_different_models():
     """Guards the wiring: a no-dose run must not silently fit the med model."""
     from ieeg_ehr.analysis.run_change_score_grid import model_spec
     assert model_spec('no_dose')[0] != model_spec('all')[0]
+
+
+# ----------------------------------------------------------------------------
+# INTERVAL BOUNDARIES. [t1, t2): a same-minute dose is the RESPONSE to that
+# assessment, so a dose at t1 starts this interval and a dose at t2 belongs to
+# the next one. Getting this backwards scored reactive doses as treatment and
+# made dosed pairs show pain rising (DECISIONS 2026-10-06).
+# ----------------------------------------------------------------------------
+
+def test_dose_stamped_at_t1_makes_the_pair_dosed():
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00'], [8, 4])
+    r = cs.build_pairs(defs, _admin(['2000-01-01 12:00']), 30, 240).iloc[0]
+    assert r['med_between'] == 1.0 and r['n_med'] == 1
+
+
+def test_dose_stamped_at_t2_belongs_to_the_next_pair_not_this_one():
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00', '2000-01-01 14:00'],
+                 [3, 8, 4])
+    p = cs.build_pairs(defs, _admin(['2000-01-01 13:00']), 30, 240)
+    first = p[p['e1'] == 0].iloc[0]
+    second = p[p['e1'] == 1].iloc[0]
+    assert first['med_between'] == 0.0, 'reaction to pain_2 scored as treatment'
+    assert second['med_between'] == 1.0
+
+
+def test_dose_at_t1_is_not_also_counted_as_prior():
+    """It is inside the interval now; counting it as carryover too would score
+    one dose twice."""
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00'], [8, 4])
+    r = cs.build_pairs(defs, _admin(['2000-01-01 12:00']), 30, 240).iloc[0]
+    assert np.isnan(r['h_since_prior'])
+
+
+def test_excluded_class_uses_the_same_boundaries():
+    defs = _defs(['2000-01-01 12:00', '2000-01-01 13:00'], [6, 3])
+    at_t2 = cs.build_pairs(defs, _admin([]), 30, 240,
+                           exclude_admin=_admin(['2000-01-01 13:00']))
+    assert len(at_t2) == 1 and at_t2.iloc[0]['n_excl_between'] == 0
+    with pytest.raises(ValueError, match='excluded-class'):
+        cs.build_pairs(defs, _admin([]), 30, 240,
+                       exclude_admin=_admin(['2000-01-01 12:00']))

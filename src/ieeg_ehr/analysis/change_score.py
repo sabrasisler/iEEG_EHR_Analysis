@@ -104,10 +104,22 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
             gap = (t[i + 1] - t[i]) / np.timedelta64(1, 'm')
             if not (min_gap_min <= gap <= max_gap_min):
                 continue
-            between = a[(a['taken_dt'] > t[i]) & (a['taken_dt'] <= t[i + 1])]
+            # THE INTERVAL IS [t1, t2): a dose stamped at t1 belongs to this
+            # pair, a dose stamped at t2 belongs to the NEXT one. Charting is
+            # minute-resolution and the nursing sequence is assess -> administer
+            # -> chart both, so a same-minute dose is the RESPONSE to that
+            # assessment (DECISIONS 2026-09-03, call 2). Under the original
+            # (t1, t2] rule a dose given because pain_2 was high was counted as
+            # the treatment BETWEEN the scores, which made dosed pairs show pain
+            # RISING (mean d_pain +0.50) -- the reaction scored as the cause.
+            # Measured 2026-10-06: 294 in-window doses sit exactly at t1 and 246
+            # exactly at t2, against 375 strictly inside, and 480 of 1647 pairs
+            # (29%) change label. Under [t1, t2) dosed pairs fall by 1.88 points.
+            # See DECISIONS 2026-10-06.
+            between = a[(a['taken_dt'] >= t[i]) & (a['taken_dt'] < t[i + 1])]
             n_excl = (0 if x is None else
-                      int(((x['taken_dt'] > t[i])
-                           & (x['taken_dt'] <= t[i + 1])).sum()))
+                      int(((x['taken_dt'] >= t[i])
+                           & (x['taken_dt'] < t[i + 1])).sum()))
             # CARRYOVER. A dose given before this pair is still pharmacologically
             # active during it, so "no dose between" does NOT mean unmedicated.
             # Measured on this cohort it is not a minor contamination: 58% of
@@ -120,9 +132,11 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
             # classes, not just the tested one. In a subset arm the nearest prior
             # dose is often from the other class, and a `h_since_prior` blind to
             # it would report a pair as long-unmedicated when it is not.
-            before = a.loc[a['taken_dt'] <= t[i], 'taken_dt']
+            # STRICTLY before t1: a dose at t1 is now inside the interval, so
+            # counting it as prior too would score one dose twice.
+            before = a.loc[a['taken_dt'] < t[i], 'taken_dt']
             if x is not None:
-                before = pd.concat([before, x.loc[x['taken_dt'] <= t[i], 'taken_dt']])
+                before = pd.concat([before, x.loc[x['taken_dt'] < t[i], 'taken_dt']])
             h_prior = (np.nan if before.empty
                        else (t[i] - before.max()) / np.timedelta64(1, 'h'))
             rows.append({

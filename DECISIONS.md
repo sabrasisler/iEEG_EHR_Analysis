@@ -955,3 +955,35 @@ avoids allocating 4x for data immediately discarded), and `log10` runs in place.
 **What would reverse it:** a pyarrow version that picks a sane encoding by
 default, or a measured read-speed problem that makes snappy's 2x decode worth
 23 GB.
+
+---
+
+## 2026-10-06 — Change-score interval is [t1, t2): a same-minute dose belongs to the assessment it follows
+
+**Call (by the user):** in `change_score.build_pairs`, a dose stamped at t1 makes
+the t1→t2 pair DOSED; a dose stamped at t2 does NOT, and belongs to the next pair
+(where it sits at that pair's t1). Carryover (`h_since_prior`) counts only doses
+strictly before t1. The co-exposure exclusion uses the same boundaries.
+
+**Why:** the original rule was `(t1, t2]`. Charting is minute-resolution and the
+nursing sequence is assess → administer → chart both (DECISIONS 2026-09-03, call
+2), so a dose sharing a timestamp with an assessment is the RESPONSE to that
+assessment. `(t1, t2]` therefore scored doses given because pain_2 was high as
+treatment between the scores. The symptom that exposed it: dosed pairs showed pain
+RISING (mean Δpain +0.50) while undosed pairs fell (−0.68).
+
+**Measured, 51-subject discovery cohort, 30–240 min pairs:** 294 in-window doses
+sit exactly at t1 and 246 exactly at t2, against 375 strictly inside — boundary
+ties are the majority, not a corner case. 480 of 1,647 pairs (29%) change label.
+Dosed pairs: 568 → 614, starting pain 3.99 → 5.26, mean Δpain +0.50 → **−1.88**
+(68% fall). Undosed: 1,079 → 1,033, starting pain 3.06 → 2.27, Δpain −0.68 →
++0.68. Only 47 doses fall within the 10 min before t2, so exact-minute ties drive
+this and no tolerance window is needed.
+
+**Consequence:** every change-score result from before this date used the old
+labels and is superseded — the medication arms, the no-dose and dose-only subsets,
+the carryover figures, and the matched-subject tables. The pooled `d_pain`
+positive control is least affected (its estimand does not depend on the label)
+but is refit alongside the rest.
+
+*Reverses if:* evidence that same-minute assessments are post-dose reassessments.
