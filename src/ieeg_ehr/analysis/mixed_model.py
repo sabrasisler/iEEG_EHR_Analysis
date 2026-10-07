@@ -348,6 +348,10 @@ VC_REDUCED = {k: v for k, v in VC_FULL.items() if k != 'subj_slope'}
 #: optimizer: 83 of 132 band cells failed to converge with it (2026-10-06).
 VC_NO_CHANNEL = {k: v for k, v in VC_FULL.items() if k != 'channel'}
 VC_NO_CHANNEL_REDUCED = {k: v for k, v in VC_NO_CHANNEL.items() if k != 'subj_slope'}
+#: The subject pain slope alone. The `all_pain_epochs` z is centred per channel
+#: WITHIN EACH SESSION, so a subject's mean z is ~0 as well and the subject
+#: intercept sat at its boundary in 60 of 84 non-converged cells (2026-10-06).
+VC_SLOPE_ONLY = {k: v for k, v in VC_FULL.items() if k == 'subj_slope'}
 # Optional 4th component for the pilot's "is ROI v2 too coarse" question.
 VC_CHANNEL_SLOPE = dict(VC_FULL, channel_slope='0 + C(channel_uid):NRS_within')
 

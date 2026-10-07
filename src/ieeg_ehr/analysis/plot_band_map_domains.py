@@ -110,13 +110,15 @@ def domain_rows(regions, scheme):
 
 def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_label,
                value='beta_nrs_within', p_col='p', reject='p_bh_reject',
-               band_col='band'):
+               band_col='band', converged='converged'):
     """Draw the region x band map, rows grouped by domain. Returns the colour cap.
 
     `cells` holds one row per (region, band) with `value`, `p_col` and `reject`
     columns; `groups` comes from `domain_rows`; `bands` maps band name -> (lo, hi)
-    in display order. The cap is max |value| over every row of `cells`, so rows
-    left out of `groups` still set the scale. `title` None draws none.
+    in display order. The cap is max |value| over every CONVERGED row of
+    `cells`, so rows left out of `groups` still set the scale. `title` None draws
+    none. A cell whose fit did not converge is drawn grey with no star or
+    outline: its estimate is the optimizer's last iteration, not a result.
     """
     order = [r for _, ms in groups for r in ms]
     names = list(bands)
@@ -124,12 +126,16 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
     def grid(col):
         return (cells.pivot_table(index='region', columns=band_col, values=col)
                 .reindex(index=order, columns=names))
+    ok = cells[converged].eq(True)
+    n_grey = int((~ok).sum())
+    cells = cells.assign(**{value: cells[value].where(ok), p_col: cells[p_col].where(ok),
+                            reject: cells[reject].where(ok)})
     beta = grid(value)
     sig = (cells.assign(rej=cells[reject].eq(True).astype(float))
            .pivot_table(index='region', columns=band_col, values='rej')
            .reindex(index=order, columns=names).fillna(0).astype(bool))
-    logger.info('%d of %d BH-significant cells drawn', int(sig.to_numpy().sum()),
-                int(cells[reject].eq(True).sum()))
+    logger.info('%d cells greyed out as not converged; %d BH-significant converged '
+                'cells drawn', n_grey, int(sig.to_numpy().sum()))
 
     cap = float(np.nanmax(np.abs(cells[value].to_numpy(dtype=float))))
     cm = plt.get_cmap('RdBu_r').copy()

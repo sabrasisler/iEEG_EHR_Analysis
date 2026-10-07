@@ -125,7 +125,13 @@ RANDOM_EFFECTS = {
              '(NRS_within || subject) + (1 | subject:channel)'),
     'no_channel': (mm.VC_NO_CHANNEL, mm.VC_NO_CHANNEL_REDUCED,
                    '(NRS_within || subject)'),
+    # No reduced model: dropping the only random effect leaves OLS, whose
+    # likelihood is not comparable to a REML fit, so the LRT is not computed.
+    'slope_only': (mm.VC_SLOPE_ONLY, None, '(0 + NRS_within | subject)'),
 }
+
+#: Run-folder suffix per non-default `--random-effects`.
+RANDOM_EFFECTS_CODES = {'no_channel': 'nochan', 'slope_only': 'slopeonly'}
 
 INPUT_UNITS = {'log_power': 'd log10(band power) per pain point',
                'zscore': 'd z per pain point'}
@@ -310,8 +316,10 @@ def fit_one_cell(df, meta, random_effects='full'):
     # the second fit is affordable, and the heterogeneity LRT is a question worth
     # answering per band: "subjects respond, but not in a consistent direction"
     # is a different claim from "no effect", and only the LRT separates them.
+    vc_reduced = RANDOM_EFFECTS[random_effects][1]
     try:
-        res_red, warn_red = mm.fit_cell(df, RANDOM_EFFECTS[random_effects][1])
+        res_red, warn_red = ((mm.fit_cell(df, vc_reduced)) if vc_reduced is not None
+                             else (None, []))
     except mm.CellFitError as exc:
         logger.warning('%s %s reduced model failed: %s', meta['region'], meta['band'],
                        exc)
@@ -1402,7 +1410,13 @@ def write_methods(run_dir, cells, args):
     else:
         med = dx = cells.iloc[0:0]
     sig = cells[cells['p_bh_reject'] == True]                    # noqa: E712
-    if args.random_effects == 'no_channel':
+    if args.random_effects == 'slope_only':
+        re_sentence = ('there is NO channel or subject random intercept: z is '
+                       'centred per channel within each session, so neither has '
+                       'anything to estimate and both stalled the optimizer. The '
+                       'random-slope LRT is not computed, since dropping the only '
+                       'random effect leaves OLS')
+    elif args.random_effects == 'no_channel':
         re_sentence = ('there is NO channel random intercept: z is centred per '
                        'channel, so that component has nothing to estimate and '
                        'stalled the optimizer')
@@ -1778,8 +1792,8 @@ def main():
             args.drug_set if args.med_model != 'none' else None)
         if args.input == 'zscore':
             args.view_scheme = f'zscore-{args.view_scheme}'
-        if args.random_effects == 'no_channel':
-            args.view_scheme = f'{args.view_scheme}-nochan'
+        if args.random_effects != 'full':
+            args.view_scheme = f'{args.view_scheme}-{RANDOM_EFFECTS_CODES[args.random_effects]}'
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
