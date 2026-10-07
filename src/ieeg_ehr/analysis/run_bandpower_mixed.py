@@ -113,6 +113,14 @@ RUN_NAME = 'paperbands6_mixedlm'
 
 FDR_Q = 0.05
 
+#: `--input`: which epoch-mean table the outcome comes from, and what a
+#: coefficient then means. `zscore` reads the `pain_change` z tables (each 2 s
+#: window z-scored per channel x frequency against all of the session's
+#: pain-epoch windows, averaged per epoch), and its bands average ARITHMETICALLY
+#: because z is a standardized difference, not a power.
+INPUT_UNITS = {'log_power': 'd log10(band power) per pain point',
+               'zscore': 'd z per pain point'}
+
 #: Subjects required IN EACH ARM before a diagnosis interaction is fitted for a
 #: cell. Deliberately the same number as `mm.MIN_SUBJECTS`, applied per stratum
 #: rather than in total: an interaction is a comparison of two groups, so the
@@ -252,7 +260,7 @@ def band_table(band_set, notch_half_width_hz=None, epoch_minutes=None):
     return kept, bands, notched
 
 
-def aggregate(values, kept_table, bands):
+def aggregate(values, kept_table, bands, is_difference=False):
     """(n_rows, n_bins) log10 power -> (n_rows, n_bands) log10 BAND power.
 
     Straight through `axes.aggregate_bands` with `is_difference=False,
@@ -262,8 +270,8 @@ def aggregate(values, kept_table, bands):
     numerically identical and the default stands.
     """
     return axes.aggregate_bands(np.asarray(values, dtype=np.float64), kept_table,
-                                bands=bands, is_difference=False, domain='log',
-                                weighting='uniform')
+                                bands=bands, is_difference=is_difference,
+                                domain='log', weighting='uniform')
 
 
 # ============================================================================
@@ -412,11 +420,20 @@ def stage_fit(args):
     ref.describe()
     epoch_minutes = ref.view_params.get('epoch_minutes')
 
-    view_dir = fullres_cells.resolve_view_dir(
-        args.view_dir, mask_label=args.mask_label or ref.view_params.get('mask_label'),
-        max_excluded_frac=ref.view_params.get('max_excluded_frac'),
-        epoch_minutes=epoch_minutes)
-    logger.info('epoch-mean full-res view: %s', view_dir)
+    mask_label = args.mask_label or ref.view_params.get('mask_label')
+    if args.input == 'zscore':
+        from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
+        from ieeg_ehr.views.view_config import ViewConfig
+        view_dir = Path(args.view_dir) if args.view_dir else zview.zscore_dir(
+            ViewConfig(baseline='all_pain_epochs', normalization='zscore_vs_baseline',
+                       freq='fullres', region='none', mask_level='bipolar',
+                       mask_label=mask_label, epoch_minutes=epoch_minutes))
+    else:
+        view_dir = fullres_cells.resolve_view_dir(
+            args.view_dir, mask_label=mask_label,
+            max_excluded_frac=ref.view_params.get('max_excluded_frac'),
+            epoch_minutes=epoch_minutes)
+    logger.info('epoch-mean full-res view (%s): %s', args.input, view_dir)
 
     # A scheme with COORDINATE REGIONS (roi_v2_ofc_ins) has its insula split into
     # aIns/pIns inside resolve_cohort; `split_report` carries what that did so
@@ -578,7 +595,8 @@ def stage_fit(args):
         if not len(index):
             logger.warning('%s: no rows after the ROI join, skipped', region)
             continue
-        band_values, names = aggregate(values, kept, bands)
+        band_values, names = aggregate(values, kept, bands,
+                                       is_difference=args.input == 'zscore')
         logger.info('%s: %d rows x %d bins -> %d band(s) in %.1fs (%d subject files)',
                     region, len(index), values.shape[1], len(names),
                     time.time() - t0, stats['n_files'])
@@ -781,7 +799,10 @@ def stage_fit(args):
                     'excluded_regions_reason': args.exclude_reason,
                     'cells_selected': sorted(args.cells) if args.cells else None,
                     'cell_selection': args.cell_selection,
-                    'aggregation': 'linear_then_log via axes.aggregate_bands',
+                    'input': args.input,
+                    'aggregation': ('arithmetic mean of z via axes.aggregate_bands'
+                                    if args.input == 'zscore' else
+                                    'linear_then_log via axes.aggregate_bands'),
                     'n_cells': len(records)},
             parents=[str(Path(args.reference_run) / 'provenance.json'), str(view_dir)],
             subjects=sorted(subjects),
@@ -853,6 +874,11 @@ def stage_perm(args):
 
 def stage_collect(args):
     run_dir = Path(args.run_dir)
+    # The outcome's unit comes from the run itself, so a collect launched
+    # without --input cannot label a z run in log10 power.
+    import json
+    args.input = (json.loads((run_dir / 'provenance.json').read_text())
+                  ['params'].get('input', 'log_power'))
     parts = [io.read_table(p, on_stale='ignore')
              for p in sorted((run_dir / 'cells').glob('region_*.parquet'))]
     if not parts:
@@ -1062,8 +1088,7 @@ def figures(run_dir, cells, args):
     ax.set_title(f'Band power vs pain, mixed-effects beta\n'
                  f'{int(sig.to_numpy().sum())} of {len(cells)} cells BH-significant '
                  f'at q={args.fdr_q}', fontsize=11)
-    fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03,
-                 label='d log10(band power) per pain point')
+    fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03, label=INPUT_UNITS[args.input])
     fig.tight_layout(rect=(0, 0.10, 1, 1))
     fig.text(0.01, 0.005,
              'Outlines mark BH-significant cells across all fitted cells at '
@@ -1330,6 +1355,27 @@ def med_figure(run_dir, cells, args):
     return out
 
 
+#: The outcome paragraph of METHODS.md, per `--input`.
+OUTCOME_TEXT = {
+    'log_power': (
+        "One row = ONE CHANNEL x ONE 5-minute pre-report epoch. The outcome is that\n"
+        "channel's log10 BAND power for that epoch: the native 0.5 Hz bins whose geometric\n"
+        "centre falls in the band, line-noise bins excluded, combined LINEAR-THEN-LOG via\n"
+        "`views.axes.aggregate_bands` -- log10(mean(10**x)), because raw log power does not\n"
+        "average arithmetically. A coefficient is d log10(band power) per pain point."),
+    'zscore': (
+        "One row = ONE CHANNEL x ONE 5-minute pre-report epoch. The outcome is that\n"
+        "channel's epoch-mean z in the band: each 2 s window z-scored per channel x native\n"
+        "0.5 Hz frequency against the mean and SD over every masked window of every pain\n"
+        "epoch in the session (AXIS 2 `all_pain_epochs`), averaged over the epoch, then\n"
+        "averaged ARITHMETICALLY over the band's native bins with line-noise bins\n"
+        "excluded (`views.axes.aggregate_bands`, is_difference=True). A coefficient is\n"
+        "d z per pain point, in units of the session's window-to-window SD. Because z is\n"
+        "centred per channel, the channel random intercept has little left to absorb."),
+}
+OUTCOME_VAR = {'log_power': 'log10_power', 'zscore': 'z'}
+
+
 def write_methods(run_dir, cells, args):
     bands = BAND_SETS[args.band_set]
     if 'model' in cells.columns:
@@ -1346,21 +1392,16 @@ def write_methods(run_dir, cells, args):
 
 ## What is fitted
 
-One row = ONE CHANNEL x ONE 5-minute pre-report epoch. The outcome is that
-channel's log10 BAND power for that epoch: the native 0.5 Hz bins whose geometric
-centre falls in the band, line-noise bins excluded, combined LINEAR-THEN-LOG via
-`views.axes.aggregate_bands` -- log10(mean(10**x)), because raw log power does not
-average arithmetically. A coefficient is d log10(band power) per pain point.
+{OUTCOME_TEXT[args.input]}
 
-    log10_power ~ NRS_within + NRS_submean
+    {OUTCOME_VAR[args.input]} ~ NRS_within + NRS_submean
                   + (NRS_within || subject) + (1 | subject:channel)
 
 `NRS_within` is the subject-mean-centred pain score and is the effect of
 interest. `NRS_submean` is a nuisance term that keeps the between-subject
 contrast out of the within-subject slope. The by-subject random slope lets
 patients differ in how strongly power tracks their pain; the channel random
-intercept absorbs each contact's own amplitude, which is why no normalization is
-applied. REML, statsmodels.
+intercept absorbs each contact's own {'level' if args.input == 'zscore' else 'amplitude, which is why no normalization is applied'}. REML, statsmodels.
 
 Band set `{args.band_set}`: {', '.join(f'{k} {v[0]}-{v[1]} Hz' for k, v in bands.items())}.
 
@@ -1673,7 +1714,14 @@ def main():
                     help='Level-4 folder. Default: derived from --band-set, so '
                          'the path cannot claim band edges the run did not use.')
     ap.add_argument('--run-name', default=RUN_NAME)
+    ap.add_argument('--input', choices=list(INPUT_UNITS), default='log_power',
+                    help="'zscore' fits the pain_change z tables instead of raw "
+                         'log10 band power')
     args = ap.parse_args()
+    if args.input == 'zscore' and (args.med_model != 'none' or args.dx_model != 'none'):
+        raise SystemExit('--input zscore supports the pain model only: the '
+                         'medication and diagnosis figures and METHODS are '
+                         'labelled in log10 power.')
 
     # The domain scheme dictates its own base ROI scheme -- the members are
     # ROIs OF that scheme, so resolving the cohort against anything else would
@@ -1701,6 +1749,8 @@ def main():
         args.view_scheme = view_scheme_for(
             args.band_set, args.domain_scheme or args.roi_scheme,
             args.drug_set if args.med_model != 'none' else None)
+        if args.input == 'zscore':
+            args.view_scheme = f'zscore-{args.view_scheme}'
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')

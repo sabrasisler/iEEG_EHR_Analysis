@@ -39,7 +39,6 @@ Each run lands in `analysis/pain/pain_change/bandpower/<run_name>_<timestamp>/`
 """
 
 import argparse
-import dataclasses
 import inspect
 import logging
 import os
@@ -68,25 +67,6 @@ RUN_NAME = 'painchange'
 
 FORMULA = 'd_z ~ d_pain + pain_1_within + gap_h'
 TERMS = (('d_pain', 'dpain'), ('pain_1_within', 'baseline'), ('gap_h', 'gap'))
-
-
-def zscore_dir_for(vc):
-    """The z-score table directory, rebuilt the way the builder names it.
-
-    The builder runs with the default ROI scheme and `scheme_code` includes the
-    ROI scheme, so the label is built from a copy with it reset.
-    """
-    vc = dataclasses.replace(vc, roi_scheme='default')
-    epoch_minutes = vc.resolved().epoch_minutes
-    params = zview.zscore_params(vc, fullres_reader.n_freqs(epoch_minutes))
-    out = config.pain_change_zscore_dir(f'{zview.VIEW_LABEL_PREFIX}-{vc.scheme_code}',
-                                        io.config_hash(params))
-    if not out.exists():
-        raise SystemExit(f'no z-score tables at {out}. Build them first:\n'
-                         '    sbatch --array=0-80 sbatch/build_fullres_zscore_array.sbatch')
-    io.check_view_fresh(out, view_config=params,
-                        cache_manifest=config.fullres_epoch_unit_dir(epoch_minutes))
-    return out
 
 
 def discovery_paths(zdir):
@@ -277,7 +257,7 @@ def main(argv=None):
     io.warn_if_dirty()
 
     vc = view_config.from_args(args)
-    zdir = zscore_dir_for(vc)
+    zdir = zview.zscore_dir(vc)
     paths = discovery_paths(zdir)
     subjects = {f'sub-{fullres_cells.subject_session_of(p)[0]}' for p in paths}
 

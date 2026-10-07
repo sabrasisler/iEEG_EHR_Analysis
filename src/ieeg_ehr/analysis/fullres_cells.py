@@ -94,7 +94,9 @@ def resolve_view_dir(explicit=None, *, mask_label=None, max_excluded_frac=None,
 
 
 def subject_paths(view_dir):
-    paths = sorted(Path(view_dir).glob('mean_sub-*_ses-*.parquet'))
+    # `*mean_` matches both the raw epoch-mean view (mean_) and the z-scored
+    # one (zmean_); a view directory holds only one kind.
+    paths = sorted(Path(view_dir).glob('*mean_sub-*_ses-*.parquet'))
     if not paths:
         raise SystemExit(
             f'no mean_sub-*.parquet in {view_dir}.\n'

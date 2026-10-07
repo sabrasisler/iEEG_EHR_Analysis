@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ieeg_ehr import io
-from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS
+from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS, INPUT_UNITS
 from ieeg_ehr.analysis.run_domain_model import DOMAIN_COLOURS
 from ieeg_ehr.config import roi_schemes
 from ieeg_ehr.features import common
@@ -60,6 +60,9 @@ POSTER_FS = dict(roi=10, domain=11, band=9.5, xlabel=10, cb_label=9,
 POSTER_SIZE = (8.0, 7.0)
 POSTER_MARGINS_IN = (2.55, 1.05, 0.50, 0.72)
 POSTER_TITLE = 'Pain–power slopes by region'
+#: Poster colourbar label per source-run `input`.
+POSTER_CB_LABEL = {'log_power': 'Δ log10 power per pain point',
+                   'zscore': 'Δ z per pain point'}
 POSTER_BRACKET_IN = (1.38, 1.48)
 BAND_SYMBOL = {'delta': 'δ', 'theta': 'θ', 'alpha': 'α', 'beta': 'β',
                'gamma': 'γ', 'high_gamma': 'hγ'}
@@ -276,12 +279,13 @@ def main():
         colours.update(zip(display + [UNASSIGNED], args.colours))
     n_sig_all = int(cells['p_bh_reject'].fillna(False).astype(bool).sum())
     if args.poster:
-        title, cb_label = POSTER_TITLE, 'Δ log10 power per pain point'
+        title = POSTER_TITLE
+        cb_label = POSTER_CB_LABEL[params.get('input', 'log_power')]
     else:
         title = (f'Band power vs pain, mixed-effects beta\n{n_sig_all} of '
                  f'{len(cells)} cells BH-significant at q={fdr_q}'
                  if args.title else None)
-        cb_label = 'd log10(band power) per pain point'
+        cb_label = INPUT_UNITS[params.get('input', 'log_power')]
 
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     out_dir = (run_dir / ('poster' if args.poster else SUBDIR)

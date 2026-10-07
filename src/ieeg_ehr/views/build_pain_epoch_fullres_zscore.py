@@ -35,6 +35,7 @@ NOT applied here. It stays a view-time decision for the consumer
 """
 
 import argparse
+import dataclasses
 import logging
 import sys
 import time
@@ -72,6 +73,25 @@ def zscore_params(vc, n_freqs):
         'dtype': str(config.CACHE_FLOAT_DTYPE),
         'accumulate_dtype': str(config.CACHE_ACCUMULATE_DTYPE),
     }
+
+
+def zscore_dir(vc):
+    """The z-score table directory these view args describe, checked for freshness.
+
+    The builder runs with the default ROI scheme and `scheme_code` includes the
+    ROI scheme, so the label is built from a copy with it reset.
+    """
+    vc = dataclasses.replace(vc, roi_scheme='default')
+    epoch_minutes = vc.resolved().epoch_minutes
+    params = zscore_params(vc, fullres_reader.n_freqs(epoch_minutes))
+    out = config.pain_change_zscore_dir(f'{VIEW_LABEL_PREFIX}-{vc.scheme_code}',
+                                        io.config_hash(params))
+    if not out.exists():
+        raise SystemExit(f'no z-score tables at {out}. Build them first:\n'
+                         '    sbatch --array=0-80 sbatch/build_fullres_zscore_array.sbatch')
+    io.check_view_fresh(out, view_config=params,
+                        cache_manifest=config.fullres_epoch_unit_dir(epoch_minutes))
+    return out
 
 
 def build_subject_session(subject, session, vc, overwrite=False):
