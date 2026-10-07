@@ -105,6 +105,128 @@ def domain_rows(regions, scheme):
     return groups
 
 
+def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_label,
+               value='beta_nrs_within', p_col='p', reject='p_bh_reject',
+               band_col='band'):
+    """Draw the region x band map, rows grouped by domain. Returns the colour cap.
+
+    `cells` holds one row per (region, band) with `value`, `p_col` and `reject`
+    columns; `groups` comes from `domain_rows`; `bands` maps band name -> (lo, hi)
+    in display order. The cap is max |value| over every row of `cells`, so rows
+    left out of `groups` still set the scale. `title` None draws none.
+    """
+    order = [r for _, ms in groups for r in ms]
+    names = list(bands)
+
+    def grid(col):
+        return (cells.pivot_table(index='region', columns=band_col, values=col)
+                .reindex(index=order, columns=names))
+    beta = grid(value)
+    sig = (cells.assign(rej=cells[reject].eq(True).astype(float))
+           .pivot_table(index='region', columns=band_col, values='rej')
+           .reindex(index=order, columns=names).fillna(0).astype(bool))
+    logger.info('%d of %d BH-significant cells drawn', int(sig.to_numpy().sum()),
+                int(cells[reject].eq(True).sum()))
+
+    cap = float(np.nanmax(np.abs(cells[value].to_numpy(dtype=float))))
+    cm = plt.get_cmap('RdBu_r').copy()
+    cm.set_bad('0.85')
+    if poster:
+        # A fixed page (POSTER_SIZE), margins in INCHES: left holds the domain
+        # label + bracket + ROI names, bottom the two-line band ticks + label,
+        # right the colorbar and its label.
+        W, H = POSTER_SIZE
+        L_in, R_in, T_in, B_in = POSTER_MARGINS_IN
+        fig = plt.figure(figsize=(W, H))
+        ax = fig.add_axes((L_in / W, B_in / H, 1 - (L_in + R_in) / W,
+                           1 - (T_in + B_in) / H))
+    else:
+        fig, ax = plt.subplots(figsize=(7.8, 0.42 * len(order) + 1.2))
+    im = ax.imshow(beta.to_numpy(dtype=float), aspect='auto', cmap=cm,
+                   vmin=-cap, vmax=cap, interpolation='nearest')
+    common.draw_mask_outline(ax, sig.to_numpy())
+    ax.set_xticks(range(len(names)))
+    ax.set_yticks(range(len(order)))
+    if poster:
+        fs = POSTER_FS
+        ax.set_xticklabels([f'{BAND_SYMBOL.get(b, b)}\n{bands[b][0]}–{bands[b][1]}'
+                            for b in names], fontsize=fs['band'])
+        ax.set_xlabel('Frequency Band (Hz)', fontsize=fs['xlabel'])
+        ax.set_yticklabels(order, fontsize=fs['roi'])
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        # stars: uncorrected p, white on the darkest cells as the domain map
+        pval = grid(p_col).to_numpy(dtype=float)
+        b_ = beta.to_numpy(dtype=float)
+        for i in range(len(order)):
+            for j in range(len(names)):
+                st = _stars(pval[i, j])
+                if st:
+                    ax.text(j, i, st, ha='center', va='center',
+                            fontsize=fs['star'], fontweight='bold',
+                            color='white' if abs(b_[i, j]) > 0.62 * cap
+                            else '0.1')
+    else:
+        ax.set_xticklabels([f'{b}\n{bands[b][0]}-{bands[b][1]} Hz' for b in names],
+                           fontsize=8)
+        ax.set_yticklabels(order, fontsize=8)
+
+    # domain brackets in axes-x / data-y coordinates, left of the tick labels
+    tr = matplotlib.transforms.blended_transform_factory(ax.transAxes, ax.transData)
+    y0 = 0
+    # bracket / domain-label x (axes fraction): the poster's 10 pt ROI names
+    # ("Lateral Temporal") reach the default bracket, so it moves left
+    if poster:
+        # inches left of the heatmap, converted to axes fraction
+        aw = ax.get_position().width * POSTER_SIZE[0]
+        bx, lx = -POSTER_BRACKET_IN[0] / aw, -POSTER_BRACKET_IN[1] / aw
+    else:
+        bx, lx = -0.215, -0.235
+    for k, (dom, ms) in enumerate(groups):
+        y1 = y0 + len(ms)
+        colour = colours.get(dom, '0.55')
+        ax.plot([bx, bx], [y0 - 0.4, y1 - 0.6], transform=tr,
+                color=colour, lw=3, clip_on=False, solid_capstyle='butt')
+        # horizontal, not rotated: one-row domains (M1) have no height to
+        # hold a vertical label
+        ax.text(lx, (y0 + y1 - 1) / 2, dom, transform=tr, ha='right',
+                va='center', fontsize=POSTER_FS['domain'] if poster else 9,
+                color=colour, fontweight='bold')
+        for lab in ax.get_yticklabels()[y0:y1]:
+            lab.set_color(colour if dom != UNASSIGNED else '0.25')
+        if k < len(groups) - 1:
+            ax.axhline(y1 - 0.5, color='white', lw=3)
+        y0 = y1
+
+    if poster:
+        # its own axes on the fixed page: 60% of the heatmap's height, centred
+        p = ax.get_position()
+        cax = fig.add_axes((p.x1 + 0.15 / POSTER_SIZE[0],
+                            p.y0 + 0.2 * p.height, 0.16 / POSTER_SIZE[0],
+                            0.6 * p.height))
+        cb = fig.colorbar(im, cax=cax)
+        cb.set_label(cb_label, fontsize=POSTER_FS['cb_label'])
+        cb.ax.tick_params(labelsize=POSTER_FS['cb_tick'])
+        if title:
+            # bold 12 pt, centred over the heatmap, as on the other poster cuts
+            fig.text((p.x0 + p.x1) / 2, 1 - 0.10 / POSTER_SIZE[1], title,
+                     ha='center', va='top', fontsize=12, fontweight='bold',
+                     color='0.1')
+    else:
+        if title:
+            ax.set_title(title, fontsize=11)
+        fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03, label=cb_label)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if poster:
+        # exactly POSTER_SIZE: no bbox_inches='tight', which would re-crop it
+        fig.savefig(out_path, dpi=300, facecolor='white')
+    else:
+        fig.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    return cap
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -129,7 +251,6 @@ def main():
     prov = json.loads((run_dir / 'provenance.json').read_text())
     params = prov['params']
     band_set = params['band_set']
-    bands = list(BAND_SETS[band_set])
     fdr_q = params.get('fdr_q', 0.05)
 
     cells = io.read_table(run_dir / 'band_cells.parquet', on_stale='warn')
@@ -145,66 +266,7 @@ def main():
     groups = domain_rows(regions, args.domain_scheme)   # list: Other keeps run order
     if args.no_other:
         groups = [g for g in groups if g[0] != UNASSIGNED]
-    order = [r for _, ms in groups for r in ms]
 
-    beta = (cells.pivot_table(index='region', columns='band', values='beta_nrs_within')
-            .reindex(index=order, columns=bands))
-    sig = (cells.assign(rej=cells['p_bh_reject'].fillna(False).astype(bool))
-           .pivot_table(index='region', columns='band', values='rej')
-           .reindex(index=order, columns=bands).fillna(0).astype(bool))
-    n_sig_all = int(cells['p_bh_reject'].fillna(False).astype(bool).sum())
-    logger.info('BH family: %d cells, %d rejected at q=%s; %d of them drawn',
-                len(cells), n_sig_all, fdr_q, int(sig.to_numpy().sum()))
-
-    # same symmetric cap as the original: max |beta| over the whole family
-    cap = float(np.nanmax(np.abs(cells['beta_nrs_within'].to_numpy(dtype=float))))
-    cm = plt.get_cmap('RdBu_r').copy()
-    cm.set_bad('0.85')
-    if args.poster:
-        # A fixed page (POSTER_SIZE), margins in INCHES: left holds the domain
-        # label + bracket + ROI names, bottom the two-line band ticks + label,
-        # right the colorbar and its label.
-        W, H = POSTER_SIZE
-        L_in, R_in, T_in, B_in = POSTER_MARGINS_IN
-        fig = plt.figure(figsize=(W, H))
-        ax = fig.add_axes((L_in / W, B_in / H, 1 - (L_in + R_in) / W,
-                           1 - (T_in + B_in) / H))
-    else:
-        fig, ax = plt.subplots(figsize=(7.8, 0.42 * len(order) + 1.2))
-    im = ax.imshow(beta.to_numpy(dtype=float), aspect='auto', cmap=cm,
-                   vmin=-cap, vmax=cap, interpolation='nearest')
-    common.draw_mask_outline(ax, sig.to_numpy())
-    ax.set_xticks(range(len(bands)))
-    ax.set_yticks(range(len(order)))
-    if args.poster:
-        fs = POSTER_FS
-        ax.set_xticklabels([f'{BAND_SYMBOL.get(b, b)}\n{BAND_SETS[band_set][b][0]}–'
-                            f'{BAND_SETS[band_set][b][1]}' for b in bands],
-                           fontsize=fs['band'])
-        ax.set_xlabel('Frequency Band (Hz)', fontsize=fs['xlabel'])
-        ax.set_yticklabels(order, fontsize=fs['roi'])
-        for s in ax.spines.values():
-            s.set_visible(False)
-        # stars: uncorrected p, white on the darkest cells as the domain map
-        pval = (cells.pivot_table(index='region', columns='band', values='p')
-                .reindex(index=order, columns=bands).to_numpy(dtype=float))
-        b_ = beta.to_numpy(dtype=float)
-        for i in range(len(order)):
-            for j in range(len(bands)):
-                st = _stars(pval[i, j])
-                if st:
-                    ax.text(j, i, st, ha='center', va='center',
-                            fontsize=fs['star'], fontweight='bold',
-                            color='white' if abs(b_[i, j]) > 0.62 * cap
-                            else '0.1')
-    else:
-        ax.set_xticklabels([f'{b}\n{BAND_SETS[band_set][b][0]}-'
-                            f'{BAND_SETS[band_set][b][1]} Hz' for b in bands],
-                           fontsize=8)
-        ax.set_yticklabels(order, fontsize=8)
-
-    # domain brackets in axes-x / data-y coordinates, left of the tick labels
-    tr = matplotlib.transforms.blended_transform_factory(ax.transAxes, ax.transData)
     colours = dict(DOMAIN_COLOURS)
     if args.colours:
         display = roi_schemes.domain_scheme(args.domain_scheme)['display']
@@ -212,64 +274,21 @@ def main():
             raise SystemExit(f'--colours needs {len(display)} values ({display}), '
                              f'or {len(display) + 1} with Other last')
         colours.update(zip(display + [UNASSIGNED], args.colours))
-    y0 = 0
-    # bracket / domain-label x (axes fraction): the poster's 10 pt ROI names
-    # ("Lateral Temporal") reach the default bracket, so it moves left
+    n_sig_all = int(cells['p_bh_reject'].fillna(False).astype(bool).sum())
     if args.poster:
-        # inches left of the heatmap, converted to axes fraction
-        aw = ax.get_position().width * POSTER_SIZE[0]
-        bx, lx = -POSTER_BRACKET_IN[0] / aw, -POSTER_BRACKET_IN[1] / aw
+        title, cb_label = POSTER_TITLE, 'Δ log10 power per pain point'
     else:
-        bx, lx = -0.215, -0.235
-    for k, (dom, ms) in enumerate(groups):
-        y1 = y0 + len(ms)
-        colour = colours.get(dom, '0.55')
-        ax.plot([bx, bx], [y0 - 0.4, y1 - 0.6], transform=tr,
-                color=colour, lw=3, clip_on=False, solid_capstyle='butt')
-        # horizontal, not rotated: one-row domains (M1) have no height to
-        # hold a vertical label
-        ax.text(lx, (y0 + y1 - 1) / 2, dom, transform=tr, ha='right',
-                va='center', fontsize=POSTER_FS['domain'] if args.poster else 9,
-                color=colour, fontweight='bold')
-        for lab in ax.get_yticklabels()[y0:y1]:
-            lab.set_color(colour if dom != UNASSIGNED else '0.25')
-        if k < len(groups) - 1:
-            ax.axhline(y1 - 0.5, color='white', lw=3)
-        y0 = y1
-
-    if args.title:
-        ax.set_title(f'Band power vs pain, mixed-effects beta\n{n_sig_all} of '
-                     f'{len(cells)} cells BH-significant at q={fdr_q}', fontsize=11)
-    if args.poster:
-        # its own axes on the fixed page: 60% of the heatmap's height, centred
-        p = ax.get_position()
-        cax = fig.add_axes((p.x1 + 0.15 / POSTER_SIZE[0],
-                            p.y0 + 0.2 * p.height, 0.16 / POSTER_SIZE[0],
-                            0.6 * p.height))
-        cb = fig.colorbar(im, cax=cax)
-        # bold 12 pt, centred over the heatmap, as on the other poster cuts
-        fig.text((p.x0 + p.x1) / 2, 1 - 0.10 / POSTER_SIZE[1], POSTER_TITLE,
-                 ha='center', va='top', fontsize=12, fontweight='bold',
-                 color='0.1')
-    else:
-        cb = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03,
-                          label='d log10(band power) per pain point')
-    if args.poster:
-        cb.set_label('Δ log10 power per pain point', fontsize=POSTER_FS['cb_label'])
-        cb.ax.tick_params(labelsize=POSTER_FS['cb_tick'])
+        title = (f'Band power vs pain, mixed-effects beta\n{n_sig_all} of '
+                 f'{len(cells)} cells BH-significant at q={fdr_q}'
+                 if args.title else None)
+        cb_label = 'd log10(band power) per pain point'
 
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     out_dir = (run_dir / ('poster' if args.poster else SUBDIR)
                / f'{args.label}_{stamp}')
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if args.poster:
-        # exactly POSTER_SIZE: no bbox_inches='tight', which would re-crop it
-        fig.savefig(out_dir / 'fig_band_map_domains.png', dpi=300,
-                    facecolor='white')
-    else:
-        fig.savefig(out_dir / 'fig_band_map_domains.png', dpi=200,
-                    bbox_inches='tight')
-    plt.close(fig)
+    cap = render_map(cells, groups, BAND_SETS[band_set],
+                     out_dir / 'fig_band_map_domains.png', poster=args.poster,
+                     colours=colours, title=title, cb_label=cb_label)
 
     io.write_run_provenance(
         out_dir, script=SCRIPT,
