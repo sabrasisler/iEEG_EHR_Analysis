@@ -423,3 +423,7 @@ working tree had uncommitted changes, so that commit does NOT describe what ran.
 - 2026-10-06 16:40 | pain_change mixed model, canonical_bands, roi_v3_ins, 1 subjects, 48 cells | $DERIV/analysis/pain/pain_change/mixed_model/zscoreallep-relpain-roiv3ins-canonical_bands/smoke_20261006-164050 | 1717bcf5335d+dirty | [ ]
 - 2026-10-06 17:00 | full-res per-window z-scored epoch means (all_pain_epochs), 1 subject-session(s) | $DERIV/analysis/pain/pain_change/zscore_epochs/fullresz-zscoreallep-relpain_a06f488c2cc2 | 7a610e7fb3d2 | [ ]
 - 2026-10-06 17:00 | full-res per-window z-scored epoch means (all_pain_epochs), 1 subject-session(s) | $DERIV/analysis/pain/pain_change/zscore_epochs/fullresz-zscoreallep-relpain_a06f488c2cc2 | 7a610e7fb3d2+dirty | [ ]
+- 2026-10-06 17:44 | full-res per-window z-scored epoch means (all_pain_epochs), 1 subject-session(s) | $DERIV/analysis/pain/pain_change/zscore_epochs/fullresz-zscoreallep-relpain_a06f488c2cc2 | 7ec88f0622a6 | [ ]
+- 2026-10-06 17:44 | full-res per-window z-scored epoch means (all_pain_epochs), 1 subject-session(s) | $DERIV/analysis/pain/pain_change/zscore_epochs/fullresz-zscoreallep-relpain_a06f488c2cc2 | 7ec88f0622a6+dirty | [ ]
+- 2026-10-06 18:02 | pain_change mixed model, paper_bands_6_hg200, roi_v3_ins, 55 subjects, 132 cells | $DERIV/analysis/pain/pain_change/bandpower/painchange_20261006-180219 | 7ec88f0622a6+dirty | [ ]
+- 2026-10-06 18:02 | pain_change d_pain heatmap | $DERIV/analysis/pain/pain_change/bandpower/painchange_20261006-180219/figures | 7ec88f0622a6+dirty | [ ]

@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH -p ckeller1
-#SBATCH --time=04:00:00
-#SBATCH --cpus-per-task=8
+#SBATCH --time=02:00:00
+#SBATCH --cpus-per-task=24
 #SBATCH --mem=32GB
+# One worker per core: cells are independent fits, so 24 joblib workers fill the ckeller1 node.
 #SBATCH -J pain_change
 #SBATCH -o logs/pain_change_%j.out
 # After build_fullres_zscore_array.sbatch finishes:
