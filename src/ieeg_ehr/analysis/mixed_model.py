@@ -342,6 +342,12 @@ VC_FULL = {
 # ALL FIXED EFFECTS identical. That identity is what makes a REML comparison
 # valid, and `lrt` asserts it rather than trusting it.
 VC_REDUCED = {k: v for k, v in VC_FULL.items() if k != 'subj_slope'}
+#: VC_FULL without the channel intercept. For an outcome already centred per
+#: channel (the `all_pain_epochs` z, whose session mean is 0 for every channel)
+#: that component has nothing left to estimate, and asking for it stalls the
+#: optimizer: 83 of 132 band cells failed to converge with it (2026-10-06).
+VC_NO_CHANNEL = {k: v for k, v in VC_FULL.items() if k != 'channel'}
+VC_NO_CHANNEL_REDUCED = {k: v for k, v in VC_NO_CHANNEL.items() if k != 'subj_slope'}
 # Optional 4th component for the pilot's "is ROI v2 too coarse" question.
 VC_CHANNEL_SLOPE = dict(VC_FULL, channel_slope='0 + C(channel_uid):NRS_within')
 

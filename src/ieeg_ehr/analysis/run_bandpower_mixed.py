@@ -118,6 +118,15 @@ FDR_Q = 0.05
 #: window z-scored per channel x frequency against all of the session's
 #: pain-epoch windows, averaged per epoch), and its bands average ARITHMETICALLY
 #: because z is a standardized difference, not a power.
+#: `--random-effects`: (full model VC, LRT-reduced VC, lme4-style text).
+#: `no_channel` drops `(1 | subject:channel)`, for outcomes centred per channel.
+RANDOM_EFFECTS = {
+    'full': (mm.VC_FULL, mm.VC_REDUCED,
+             '(NRS_within || subject) + (1 | subject:channel)'),
+    'no_channel': (mm.VC_NO_CHANNEL, mm.VC_NO_CHANNEL_REDUCED,
+                   '(NRS_within || subject)'),
+}
+
 INPUT_UNITS = {'log_power': 'd log10(band power) per pain point',
                'zscore': 'd z per pain point'}
 
@@ -278,7 +287,7 @@ def aggregate(values, kept_table, bands, is_difference=False):
 # STAGE: fit
 # ============================================================================
 
-def fit_one_cell(df, meta):
+def fit_one_cell(df, meta, random_effects='full'):
     """(record, per-subject unpooled slopes) for one region x band cell."""
     ok, reason = mm.cell_is_fittable(df)
     if not ok:
@@ -289,7 +298,7 @@ def fit_one_cell(df, meta):
 
     t0 = time.time()
     try:
-        res, warn = mm.fit_cell(df, mm.VC_FULL)
+        res, warn = mm.fit_cell(df, RANDOM_EFFECTS[random_effects][0])
     except mm.CellFitError as exc:
         rec = mm.failed_record(meta['region'], meta['band_index'], meta['band_lo_hz'],
                                meta['band_hi_hz'], f'full: {exc}', df=df,
@@ -302,7 +311,7 @@ def fit_one_cell(df, meta):
     # answering per band: "subjects respond, but not in a consistent direction"
     # is a different claim from "no effect", and only the LRT separates them.
     try:
-        res_red, warn_red = mm.fit_cell(df, mm.VC_REDUCED)
+        res_red, warn_red = mm.fit_cell(df, RANDOM_EFFECTS[random_effects][1])
     except mm.CellFitError as exc:
         logger.warning('%s %s reduced model failed: %s', meta['region'], meta['band'],
                        exc)
@@ -649,7 +658,7 @@ def stage_fit(args):
             # the run holds exactly the fits whose BH family is being asked about.
             slopes, blups = None, None
             if not (args.dx_only or args.med_only):
-                rec, slopes, blups = fit_one_cell(df, meta)
+                rec, slopes, blups = fit_one_cell(df, meta, args.random_effects)
                 rec['model'] = 'pain'
                 records.append(rec)
 
@@ -800,6 +809,8 @@ def stage_fit(args):
                     'cells_selected': sorted(args.cells) if args.cells else None,
                     'cell_selection': args.cell_selection,
                     'input': args.input,
+                    'random_effects': args.random_effects,
+                    'vc': RANDOM_EFFECTS[args.random_effects][0],
                     'aggregation': ('arithmetic mean of z via axes.aggregate_bands'
                                     if args.input == 'zscore' else
                                     'linear_then_log via axes.aggregate_bands'),
@@ -844,7 +855,10 @@ def stage_perm(args):
         return
 
     df = io.read_table(frame_path, on_stale='ignore')
-    res, _ = mm.fit_cell(df, mm.VC_FULL)
+    import json
+    random_effects = (json.loads((run_dir / 'provenance.json').read_text())
+                      ['params'].get('random_effects', 'full'))
+    res, _ = mm.fit_cell(df, RANDOM_EFFECTS[random_effects][0])
     logger.info('cell %d: observed beta %+.6f z %+.3f p %.4g over %d rows',
                 args.cell_index, res.fe_params['NRS_within'],
                 res.tvalues['NRS_within'], res.pvalues['NRS_within'], len(df))
@@ -854,7 +868,8 @@ def stage_perm(args):
     # under a permutation of the predictor, and the starting point is identical
     # for every shuffle so it cannot bias the null.
     out = mm.permutation_null(df, args.n_perm, seed=args.seed,
-                              start_params=res.params_object, n_jobs=args.n_jobs)
+                              start_params=res.params_object, n_jobs=args.n_jobs,
+                              vc=RANDOM_EFFECTS[random_effects][0])
     logger.info('%d shuffles in %.0fs (%.2fs each, %d jobs), %d failed',
                 args.n_perm, time.time() - t0,
                 (time.time() - t0) / max(args.n_perm, 1), args.n_jobs,
@@ -877,8 +892,9 @@ def stage_collect(args):
     # The outcome's unit comes from the run itself, so a collect launched
     # without --input cannot label a z run in log10 power.
     import json
-    args.input = (json.loads((run_dir / 'provenance.json').read_text())
-                  ['params'].get('input', 'log_power'))
+    run_params = json.loads((run_dir / 'provenance.json').read_text())['params']
+    args.input = run_params.get('input', 'log_power')
+    args.random_effects = run_params.get('random_effects', 'full')
     parts = [io.read_table(p, on_stale='ignore')
              for p in sorted((run_dir / 'cells').glob('region_*.parquet'))]
     if not parts:
@@ -1386,6 +1402,14 @@ def write_methods(run_dir, cells, args):
     else:
         med = dx = cells.iloc[0:0]
     sig = cells[cells['p_bh_reject'] == True]                    # noqa: E712
+    if args.random_effects == 'no_channel':
+        re_sentence = ('there is NO channel random intercept: z is centred per '
+                       'channel, so that component has nothing to estimate and '
+                       'stalled the optimizer')
+    else:
+        re_sentence = ("the channel random intercept absorbs each contact's own "
+                       + ('level' if args.input == 'zscore' else
+                          'amplitude, which is why no normalization is applied'))
     lines = [f"""# Band-power mixed-effects models
 
 {DISCLAIMER}
@@ -1395,13 +1419,12 @@ def write_methods(run_dir, cells, args):
 {OUTCOME_TEXT[args.input]}
 
     {OUTCOME_VAR[args.input]} ~ NRS_within + NRS_submean
-                  + (NRS_within || subject) + (1 | subject:channel)
+                  + {RANDOM_EFFECTS[args.random_effects][2]}
 
 `NRS_within` is the subject-mean-centred pain score and is the effect of
 interest. `NRS_submean` is a nuisance term that keeps the between-subject
 contrast out of the within-subject slope. The by-subject random slope lets
-patients differ in how strongly power tracks their pain; the channel random
-intercept absorbs each contact's own {'level' if args.input == 'zscore' else 'amplitude, which is why no normalization is applied'}. REML, statsmodels.
+patients differ in how strongly power tracks their pain; {re_sentence}. REML, statsmodels.
 
 Band set `{args.band_set}`: {', '.join(f'{k} {v[0]}-{v[1]} Hz' for k, v in bands.items())}.
 
@@ -1714,14 +1737,18 @@ def main():
                     help='Level-4 folder. Default: derived from --band-set, so '
                          'the path cannot claim band edges the run did not use.')
     ap.add_argument('--run-name', default=RUN_NAME)
+    ap.add_argument('--random-effects', choices=list(RANDOM_EFFECTS), default='full',
+                    help="'no_channel' drops (1 | subject:channel); use it for an "
+                         'outcome already centred per channel, such as --input zscore')
     ap.add_argument('--input', choices=list(INPUT_UNITS), default='log_power',
                     help="'zscore' fits the pain_change z tables instead of raw "
                          'log10 band power')
     args = ap.parse_args()
-    if args.input == 'zscore' and (args.med_model != 'none' or args.dx_model != 'none'):
-        raise SystemExit('--input zscore supports the pain model only: the '
-                         'medication and diagnosis figures and METHODS are '
-                         'labelled in log10 power.')
+    if ((args.input == 'zscore' or args.random_effects != 'full')
+            and (args.med_model != 'none' or args.dx_model != 'none')):
+        raise SystemExit('--input zscore and --random-effects no_channel support '
+                         'the pain model only: the medication and diagnosis fits '
+                         'and their METHODS assume raw log10 power and VC_FULL.')
 
     # The domain scheme dictates its own base ROI scheme -- the members are
     # ROIs OF that scheme, so resolving the cohort against anything else would
@@ -1751,6 +1778,8 @@ def main():
             args.drug_set if args.med_model != 'none' else None)
         if args.input == 'zscore':
             args.view_scheme = f'zscore-{args.view_scheme}'
+        if args.random_effects == 'no_channel':
+            args.view_scheme = f'{args.view_scheme}-nochan'
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
