@@ -75,7 +75,7 @@ def zscore_params(vc, n_freqs):
 
 
 def build_subject_session(subject, session, vc, overwrite=False):
-    """Returns (path, stats) or None."""
+    """(path, stats) when built, (path, None) when it already exists, None on no cache."""
     t0 = time.time()
     epoch_minutes = vc.resolved().epoch_minutes
 
@@ -86,7 +86,7 @@ def build_subject_session(subject, session, vc, overwrite=False):
     out_path = out_dir / f'zmean_sub-{subject}_ses-{session}.parquet'
     if out_path.exists() and not overwrite:
         logger.info('sub-%s ses-%s: exists, skipping', subject, session)
-        return None
+        return out_path, None
 
     try:
         pf, cache_path = fullres_reader.open_cache(subject, session, epoch_minutes)
@@ -193,19 +193,24 @@ def main(argv=None):
         ap.error(f'--normalization {vc.normalization!r} refused: this view IS the '
                  'z-scored epoch mean. Use build_pain_epoch_fullres_mean for raw.')
 
-    n_ok, out_dir = 0, None
+    n_built, n_existing, out_dir = 0, 0, None
     for s in args.subjects:
         subject = s.replace('sub-', '')
         for session in ([args.session] if args.session != 'all'
                         else meanview._sessions_for(subject)):
             r = build_subject_session(subject, session, vc, overwrite=args.overwrite)
-            if r is not None:
-                n_ok += 1
-                out_dir = r[0].parent
-    if n_ok:
+            if r is None:
+                continue
+            out_dir = r[0].parent
+            if r[1] is None:
+                n_existing += 1
+            else:
+                n_built += 1
+    if n_built:
         io.log_analysis(f'full-res per-window z-scored epoch means ({vc.baseline}), '
-                        f'{n_ok} subject-session(s)', out_dir)
-    return 0 if n_ok else 1
+                        f'{n_built} subject-session(s)', out_dir)
+    # An existing table is a success: a rerun of a finished array must not fail.
+    return 0 if n_built or n_existing else 1
 
 
 if __name__ == '__main__':
