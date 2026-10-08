@@ -18,6 +18,7 @@ plus a combined 2x2 for the panels that carry the story:
   --  figABC2E_grouped.png           A, B, C2 and E in one 2x2, no subplot
                                      titles, with a gap between the rows for
                                      text
+  --  figABCD_grouped.png            the same with raw scores: A, B, C and D
 
 TWO WINDOWS, deliberately. Exposure (A, B, D, E) asks what a patient was under
 when the score was given, and uses 2 h. The dose-probability panels (C, C2) ask
@@ -512,9 +513,12 @@ GROUPED_E_LABELS = ('Unmedicated', 'Medicated')
 GROUPED_PROB_NOUN = 'medication'
 
 
-def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
-                 score_window_minutes):
-    """A, B, C2 and E in one 2x2 at exactly GROUPED_FIGSIZE (12.5 x 8 in).
+def plot_grouped(a_table, b_table, c_summaries, paired, stats, out_path,
+                 score_window_minutes, value_col):
+    """A, B and a bottom row in one 2x2 at exactly GROUPED_FIGSIZE (12.5 x 8 in).
+
+    `value_col='pain_deviation'` draws C2 and E (subject-centred),
+    `'pain_score'` draws C and D (raw scores).
 
     Saved WITHOUT `bbox_inches='tight'`, unlike everything else here: tight
     cropping recomputes the canvas from whatever the text extends to, so the
@@ -523,6 +527,9 @@ def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
 
     The row gap is deliberately wide: it is where the poster's own text goes.
     """
+    centred = value_col == 'pain_deviation'
+    c_label = SUBJECT_CENTRED_LABEL if centred else 'Pain score'
+    paired_label = SUBJECT_CENTRED_LABEL if centred else 'Mean pain score'
     saved = {k: getattr(style, k) for k in GROUPED_SIZES}
     style.use_poster(False)            # screen line weights suit this size
     for k, v in GROUPED_SIZES.items():
@@ -531,11 +538,10 @@ def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
         fig, axes = plt.subplots(2, 2, figsize=GROUPED_FIGSIZE)
         draw_panel_a(axes[0][0], a_table)
         draw_panel_b(axes[0][1], b_table)
-        draw_panel_c(axes[1][0], c2_summaries, 'pain_deviation',
-                     SUBJECT_CENTRED_LABEL, score_window_minutes,
-                     prob_noun=GROUPED_PROB_NOUN)
-        draw_paired(axes[1][1], e_paired, e_stats, SUBJECT_CENTRED_LABEL,
-                    zero_line=True, show_summary=False, show_violin=True,
+        draw_panel_c(axes[1][0], c_summaries, value_col, c_label,
+                     score_window_minutes, prob_noun=GROUPED_PROB_NOUN)
+        draw_paired(axes[1][1], paired, stats, paired_label,
+                    zero_line=centred, show_summary=False, show_violin=True,
                     show_bracket=True,
                     # s is an area in pt^2: 60 was sized for a 9-in panel and
                     # read as a solid column of blobs in a 3-in one.
@@ -544,6 +550,12 @@ def plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats, out_path,
                     point_color=GROUPED_E_POINT,
                     group_labels=GROUPED_E_LABELS,
                     jitter=GROUPED_E_JITTER)
+        if not centred:
+            # Raw subject means reach the lower right, where the stats text
+            # sits, so the axis opens a blank band below 0 for it.
+            axes[1][1].set_ylim(bottom=-3)
+            axes[1][1].set_yticks(range(0, 11, 2))
+            axes[1][1].spines['left'].set_bounds(0, 10)
         for ax, title in zip(axes.ravel(), GROUPED_TITLES):
             # pad clears the significance bracket, which is drawn above E's
             # axes and would otherwise run into E's title.
@@ -670,7 +682,11 @@ def main():
                 show_bracket=True)
 
     plot_grouped(a_table, b_table, c2_summaries, e_paired, e_stats,
-                 run_dir / 'figABC2E_grouped.png', args.score_window_minutes)
+                 run_dir / 'figABC2E_grouped.png', args.score_window_minutes,
+                 'pain_deviation')
+    plot_grouped(a_table, b_table, c_summaries, d_paired, d_stats,
+                 run_dir / 'figABCD_grouped.png', args.score_window_minutes,
+                 'pain_score')
 
     stats = {
         'split': args.split,
