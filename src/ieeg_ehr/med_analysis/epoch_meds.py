@@ -18,9 +18,10 @@ neural and EHR clocks meet without an approximation in between.
 WHAT "DOSED" MEANS. An epoch is dosed if at least one analgesic was given in
 the `window_hours` BEFORE the assessment the epoch is anchored to — measured
 to `pain_time`, not to the epoch's 5-minute start, because the question is
-about exposure the patient was under when the score was given. A dose stamped
-in the same minute as the assessment counts (gap 0); this is the same
-minute-resolution charting argument as `pain_link`.
+about exposure the patient was under when the score was given. The window is
+(t - h, t): a dose stamped in the same minute as the assessment is the response
+to that score, so it does not count (DECISIONS 2026-10-06, the same window as
+`med_state.epoch_med_state`).
 
 NOT CAUSAL. A dose before an epoch does not make the epoch's pain score a
 response to it, and a higher score in dosed epochs does not mean the drug
@@ -159,7 +160,10 @@ def exposure_before_epochs(epochs, analgesics, window_hours=WINDOW_HOURS,
     pairs = epochs[['epoch_id', 'subject', 'session', 'pain_time']].merge(
         adm, on=['subject', 'session'], how='inner')
     gap = pairs['pain_time'] - pairs['taken_dt']
-    pairs = pairs[(gap >= pd.Timedelta(0)) & (gap <= window)].copy()
+    # (t - h, t), the same window as `med_state.epoch_med_state`: a dose
+    # charted in the score's minute responds to that score and follows the
+    # epoch. DECISIONS 2026-10-06.
+    pairs = pairs[(gap > pd.Timedelta(0)) & (gap < window)].copy()
     pairs['gap_minutes'] = gap[pairs.index].dt.total_seconds() / 60.0
 
     key = ['epoch_id', 'subject', 'session']

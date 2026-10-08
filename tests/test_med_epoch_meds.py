@@ -54,6 +54,14 @@ def test_dose_after_the_anchor_does_not_count():
     assert not bool(per['dosed'].iloc[0])
 
 
+def test_same_minute_dose_does_not_count():
+    """The dose responds to the score, so it follows the epoch (2026-10-06)."""
+    per, _ = epoch_meds.exposure_before_epochs(
+        epochs([{'t': T0, 'score': 7}]),
+        admin([{'t': T0}]), window_hours=2)
+    assert not bool(per['dosed'].iloc[0])
+
+
 def test_one_dose_may_precede_several_overlapping_epochs():
     """Exposure, not attribution: epochs overlap, so this is NOT double count."""
     per, _ = epoch_meds.exposure_before_epochs(
