@@ -107,6 +107,23 @@ RANDOM_EFFECTS = {
     'chan_id': '1',
 }
 
+#: The CHANGE-SCORE medication variant (`pain_change_domain` frames). Rows are
+#: pair x channel and the outcome is the pair change in epoch-mean z. `med` is
+#: `med_between`, a dose in [t1, t2). `pain_1_within` and `gap_h` are per domain
+#: because `pain_change` fits them per cell. No `chan_id` term: a channel's
+#: level cancels in the difference (`mixed_model.VC_CHANGE`).
+CHANGE_MED_FORMULA = ('d_z ~ 0 + domain:med + domain:med:d_pain '
+                      '+ domain:pain_1_within + domain:gap_h + med_submean '
+                      '+ (1 + d_pain || ROI) '
+                      '+ (1 + d_pain + med_within || subject) '
+                      '+ (1 + d_pain || subj_roi)')
+
+CHANGE_RANDOM_EFFECTS = {
+    'ROI': '1 + d_pain, CROSSED with subject',
+    'subject': '1 + d_pain + med_within',
+    'subj_roi': '1 + d_pain, subject x ROI',
+}
+
 
 def r_environment():
     """Env for the R subprocess, with the group library on the path.
@@ -149,6 +166,15 @@ def fit_band(frame_path, band, run_dir, work_dir, args):
     """One lme4 fit. Returns the R subprocess's return code."""
     df = io.read_table(frame_path, on_stale='warn')
 
+    has_change = 'd_z' in df.columns
+    if has_change:
+        df = mm.add_med_components(df, col='med_between')
+        keep = ['subject', 'channel_uid', 'parcel', 'domain', 'd_z', 'd_pain',
+                'pain_1_within', 'gap_h', 'med_between', 'med_within',
+                'med_submean']
+        return run_r(df, keep, band, run_dir, work_dir, args,
+                     ['--expect-change', '1'])
+
     keep = ['subject', 'channel_uid', 'log10_power', 'NRS_within',
             'NRS_submean', 'parcel', 'domain']
 
@@ -189,6 +215,14 @@ def fit_band(frame_path, band, run_dir, work_dir, args):
         raise SystemExit(f'{frame_path} lacks {missing}. It was probably built '
                          'by a `--unit parcel` run; this model needs `--unit roi`.')
 
+    return run_r(df, keep, band, run_dir, work_dir, args,
+                 ['--expect-dx', '1' if has_dx else '0',
+                  '--expect-med', '1' if has_med else '0',
+                  '--expect-change', '0'])
+
+
+def run_r(df, keep, band, run_dir, work_dir, args, expect):
+    """Write `df[keep]` as the R input CSV and fit it. Returns R's return code."""
     csv = work_dir / f'{band}.csv'
     df[keep].to_csv(csv, index=False)
     logger.info('[%s] %d rows -> %s (%.0f MB)', band, len(df), csv,
@@ -196,9 +230,7 @@ def fit_band(frame_path, band, run_dir, work_dir, args):
 
     cmd = ['Rscript', str(R_SCRIPT), '--in', str(csv),
            '--out', str(run_dir / 'bands'), '--band', band,
-           '--df', args.df_method, '--optimizer', args.optimizer,
-           '--expect-dx', '1' if has_dx else '0',
-           '--expect-med', '1' if has_med else '0']
+           '--df', args.df_method, '--optimizer', args.optimizer] + expect
     if args.drop_domain:
         cmd += ['--drop-domain', ','.join(args.drop_domain)]
 
@@ -337,12 +369,19 @@ def main(argv=None):
     # error that cannot be caught later, because the file looks self-consistent.
     has_dx = 'dx_state' in probe.columns
     has_med = 'med_state' in probe.columns
+    has_change = 'd_z' in probe.columns
     n_case = int((probe.groupby('subject')['dx_state'].first() > 0.5).sum()) \
         if has_dx else None
 
     params = {
-        'formula': (DX_FORMULA if has_dx
+        'formula': (CHANGE_MED_FORMULA if has_change
+                    else DX_FORMULA if has_dx
                     else MED_FORMULA if has_med else FORMULA),
+        'change_model': bool(has_change),
+        'change_n_pair_rows_dosed': (int((probe['med_between'] == 1).sum())
+                                     if has_change else None),
+        'change_n_pair_rows_undosed': (int((probe['med_between'] == 0).sum())
+                                       if has_change else None),
         'dx_model': bool(has_dx),
         'dx_n_case': n_case,
         'dx_n_control': (len(subjects) - n_case) if has_dx else None,
@@ -351,7 +390,8 @@ def main(argv=None):
                                 if has_med else None),
         'med_n_epoch_rows_off': (int((probe['med_state'] <= 0.5).sum())
                                  if has_med else None),
-        'random_effects': RANDOM_EFFECTS,
+        'random_effects': (CHANGE_RANDOM_EFFECTS if has_change
+                           else RANDOM_EFFECTS),
         'engine': 'R lme4::lmer via lmerTest, REML=TRUE',
         'df_method_requested': args.df_method,
         'optimizer': args.optimizer,
@@ -359,7 +399,10 @@ def main(argv=None):
         'frames_dir': str(frames_dir),
         'bands_fitted': [b for b in bands if b not in failed],
         'bands_failed': failed,
-        'marginal_slopes': ("emtrends(~ dx | domain, var='NRS_within'); "
+        'marginal_slopes': ("emtrends(~ med | domain, var='d_pain'); "
+                            "pairs() gives off - on (undosed minus dosed "
+                            "pairs) WITHIN a domain" if has_change else
+                            "emtrends(~ dx | domain, var='NRS_within'); "
                             "pairs() gives case-minus-control WITHIN a domain"
                             if has_dx else
                             "emtrends(~ med | domain, var='NRS_within'); "
@@ -371,7 +414,8 @@ def main(argv=None):
                     'cell-means coding: it asks whether all domain slopes are '
                     'ZERO, not whether the domains DIFFER.'),
         'differs_from_statsmodels_run': (
-            'adds (1 + NRS_within || ROI) CROSSED, which statsmodels cannot '
+            'no statsmodels counterpart: pain_change_domain frames' if has_change
+            else 'adds (1 + NRS_within || ROI) CROSSED, which statsmodels cannot '
             'fit -- it evaluates every vc_formula within ONE grouping variable '
             'and would nest the term silently; adds (1 + NRS_within || '
             'subj_roi); makes NRS_submean domain-specific. Same frame, same '
@@ -393,7 +437,9 @@ def main(argv=None):
     io.write_run_provenance(run_dir, script=SCRIPT, params=params,
                             parents=parents, subjects=subjects,
                             extra={'status': DISCLAIMER})
-    io.log_analysis('domain model refitted in lme4 with crossed ROI random '
+    io.log_analysis('pain_change domain model in lme4, d_z with med_between, '
+                    'discovery cohort' if has_change else
+                    'domain model refitted in lme4 with crossed ROI random '
                     'effects, discovery cohort', run_dir)
 
     logger.info('wrote %s', run_dir)

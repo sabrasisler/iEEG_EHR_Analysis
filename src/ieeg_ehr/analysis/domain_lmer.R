@@ -157,7 +157,39 @@ if (nzchar(expect_med)) {
   }
 }
 
-if (has_dx) {
+# THE CHANGE-SCORE MEDICATION MODEL (pain_change_domain frames).
+#
+#   d_z ~ 0 + domain:med + domain:med:d_pain + domain:pain_1_within
+#         + domain:gap_h + med_submean
+#
+# Rows are assessment pair x channel and `d_z` is the pair change in epoch-mean
+# z. `med` is `med_between`, a dose in [t1, t2). The slope is on `d_pain`, and
+# there is no `chan_id` term because a channel's level cancels in the
+# difference.
+has_change <- "d_z" %in% names(d)
+
+expect_change <- arg_of("--expect-change", "")
+if (nzchar(expect_change)) {
+  want_change <- expect_change == "1"
+  if (want_change != has_change) {
+    stop(sprintf(
+      paste("--expect-change=%s but d_z is %s in the input frame.",
+            "Refusing to choose a model by guessing."),
+      expect_change, if (has_change) "PRESENT" else "ABSENT"))
+  }
+}
+slope_var <- if (has_change) "d_pain" else "NRS_within"
+
+if (has_change) {
+  d[, med := factor(ifelse(med_between > 0.5, "on", "off"), levels = c("off", "on"))]
+  cat(sprintf("[%s] med pair rows: %s\n", band,
+              paste(names(table(d$med)), table(d$med), sep = "=", collapse = " ")))
+  fml <- d_z ~ 0 + domain:med + domain:med:d_pain +
+    domain:pain_1_within + domain:gap_h + med_submean +
+    (1 + d_pain || ROI) +
+    (1 + d_pain + med_within || subject) +
+    (1 + d_pain || subj_roi)
+} else if (has_dx) {
   d[, dx := factor(ifelse(dx_state > 0.5, "case", "control"))]
   cat(sprintf("[%s] dx strata: %s\n", band,
               paste(names(table(d$dx)), table(d$dx), sep = "=", collapse = " ")))
@@ -204,17 +236,17 @@ emm_options(lmer.df = df_mode, lmerTest.limit = 2e6, pbkrtest.limit = 2e6)
 #: With a dx stratum the marginal grid is `dx | domain`, so `pairs()` below
 #: gives case-minus-control WITHIN each domain -- the circuit-level question --
 #: rather than pooling strata or contrasting domains across them.
-spec <- if (has_dx) ~ dx | domain else if (has_med) ~ med | domain else ~ domain
+spec <- if (has_dx) ~ dx | domain else if (has_med || has_change) ~ med | domain else ~ domain
 
 df_used <- df_mode
 tr <- tryCatch(
-  emtrends(m, spec, var = "NRS_within"),
+  emtrends(m, spec, var = slope_var),
   error = function(e) {
     cat(sprintf("[%s] %s df failed (%s); falling back to asymptotic\n",
                 band, df_mode, conditionMessage(e)))
     df_used <<- "asymptotic"
     emm_options(lmer.df = "asymptotic")
-    emtrends(m, spec, var = "NRS_within")
+    emtrends(m, spec, var = slope_var)
   }
 )
 
@@ -240,8 +272,9 @@ outs <- list(list(slopes, "slopes"), list(pw, "pairs"), list(vc, "varcorr"))
 # domain. NRS_submean and med_submean sit at their grid means, and neither
 # interacts with `med`, so they cancel out of the contrast. Uses the df mode
 # the slopes settled on, so a Satterthwaite fallback applies here too.
-if (has_med) {
-  em <- emmeans(m, ~ med | domain, at = list(NRS_within = 0))
+if (has_med || has_change) {
+  at0 <- setNames(list(0), slope_var)
+  em <- emmeans(m, ~ med | domain, at = at0)
   medeff <- as.data.frame(summary(pairs(em, reverse = TRUE), infer = TRUE))
   outs[[length(outs) + 1L]] <- list(medeff, "medeff")
 }

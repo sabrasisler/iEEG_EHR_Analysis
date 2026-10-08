@@ -229,8 +229,8 @@ MED_DECOMPOSED_IX_TERMS = MED_DECOMPOSED_TERMS + (
     ('NRS_within:med_submean', 'medb_ix'),)
 
 
-def add_med_components(df):
-    """Split `med_state` into within- and between-patient parts, on a copy.
+def add_med_components(df, col='med_state'):
+    """Split `col` into within- and between-patient parts, on a copy.
 
     Row-weighted, matching `add_nrs_components`: the mean is over the rows
     actually entering this cell's model, so a patient who lost channels to
@@ -239,8 +239,8 @@ def add_med_components(df):
     which is the only property the decomposition has to have.
     """
     df = df.copy()
-    df['med_submean'] = df.groupby('subject')['med_state'].transform('mean')
-    df['med_within'] = df['med_state'] - df['med_submean']
+    df['med_submean'] = df.groupby('subject')[col].transform('mean')
+    df['med_within'] = df[col] - df['med_submean']
     return df
 
 
