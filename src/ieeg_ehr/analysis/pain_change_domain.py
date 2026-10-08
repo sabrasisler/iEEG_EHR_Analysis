@@ -3,7 +3,8 @@
     python -m ieeg_ehr.analysis.pain_change_domain \\
         --mask-level bipolar --mask-label std10_rv-gross-std3_satmargin15_sw_logz4
 
-Builds one frame per band of `--band-set`, rows = assessment pair x channel,
+`--cohort pain-study` (default) restricts to the level-model domain runs'
+51 subjects. Builds one frame per band of `--band-set`, rows = assessment pair x channel,
 for `run_domain_lmer` to fit as
 
     d_z ~ 0 + domain:med + domain:med:d_pain + domain:pain_1_within
@@ -35,6 +36,7 @@ from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS
 from ieeg_ehr.analysis.run_domain_model import roi_domain_maps
 from ieeg_ehr.analysis.run_mixed_model_pilot import roi_maps
 from ieeg_ehr.config import roi_schemes
+from ieeg_ehr.med_analysis.epoch_meds import pain_study_subjects
 from ieeg_ehr.views import view_config
 from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
 
@@ -52,6 +54,9 @@ PAIR_COLUMNS = ['pair_id', 'd_pain', 'pain_1', 'gap_h', 'med_between']
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--cohort', choices=['pain-study', 'discovery'], default='pain-study',
+                    help='pain-study (the level-model domain runs\' 51 subjects) is '
+                         'intersected with, never instead of, the discovery gate')
     ap.add_argument('--domain-scheme', default='pain_domains_v3')
     ap.add_argument('--insula-threshold', type=float, default=INSULA_THRESHOLD)
     ap.add_argument('--drug-set', default='analgesics',
@@ -72,6 +77,9 @@ def main(argv=None):
     vc = view_config.from_args(args)
     zdir = zview.zscore_dir(vc)
     paths = discovery_paths(zdir)
+    if args.cohort == 'pain-study':
+        study = set(pain_study_subjects())
+        paths = [p for p in paths if fullres_cells.subject_session_of(p)[0] in study]
     subjects = {f'sub-{fullres_cells.subject_session_of(p)[0]}' for p in paths}
 
     split_report = {}
@@ -115,7 +123,7 @@ def main(argv=None):
     run_dir = config.analysis_run_dir(
         question=config.PAIN_CHANGE_QUESTION, output_type=OUTPUT_TYPE,
         run_name=args.run_name, view_scheme=scheme)
-    params = {'domain_scheme': args.domain_scheme, 'base_roi_scheme': base,
+    params = {'cohort': args.cohort, 'domain_scheme': args.domain_scheme, 'base_roi_scheme': base,
               'insula_threshold': args.insula_threshold, 'drug_set': args.drug_set,
               'med': 'med_between: any dose of the drug set in [t1, t2)',
               'band_set': args.band_set, 'bands': bands,
