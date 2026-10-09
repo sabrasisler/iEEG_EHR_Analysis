@@ -112,6 +112,16 @@ in Phase 3, and for `BG.6` (EHR/confound tables joined to epoch definitions) —
 tidy administration table is the join key for a medication-state covariate. It is
 NOT itself either of those.
 
+### Level-1 event `electrode_localization` — where the electrodes are
+
+A THIRD level-1 event, opened 2026-10-09. The unit is a bipolar pair and its
+atlas label from `channel_meta`; nothing in it reads power, pain scores or the
+view chain.
+
+| Question | Folder | What it asks |
+|---|---|---|
+| DK coverage | `dk_coverage` | How many subjects and how many bipolar pairs carry each Desikan-Killiany anode label, hemispheres merged, with every label string kept (white matter, ventricles, `Unknown` included). The cohort is the reference run's `subjects[]`. Opened 2026-10-09. Purely descriptive. Code: `analysis/plot_dk_label_coverage.py`. |
+
 | P2.6 | **FREEZE** — dated freeze doc: ranked directional hypotheses, frozen feature set + view config, model spec, correction plan + n_tests, predicted directions. Ends exploration. |
 
 P2.6 is the hinge where accumulated notebook narrative becomes `DECISIONS.md`

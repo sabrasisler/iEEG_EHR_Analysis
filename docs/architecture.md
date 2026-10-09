@@ -213,7 +213,7 @@ not bulk-convert old CSVs.
 
 ## PART 5 — analysis/ organization (5 levels)
 
-1. `<event>/` — pain | mood | opioid | seizure | meds.
+1. `<event>/` — pain | mood | opioid | seizure | meds | electrode_localization.
 2. `<question>/` — MUST match a named question in the exploration log / freeze doc.
    Do NOT open one without a named question — else `sweeps/` or `scratch/`.
    Discovery vs confirmation is NOT a level; it's a cohort ref in config.
