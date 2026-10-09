@@ -135,19 +135,20 @@ def contact_coords(raw_path):
 
 
 def virtual_electrodes(pairs):
-    """Anode-cathode MNI midpoint per pair, from ONE raw NWB per subject-session.
+    """Anode-cathode MNI midpoint per pair, from the raw NWB of a run that has it.
 
-    Contact positions do not change between the runs of one session, so the
-    first run channel_meta lists stands for all of them. A pair whose contact is
-    missing from that run's table raises a KeyError rather than being skipped.
+    The contact set can change between the runs of one session (sub-167's `RI`
+    shaft is in one of its two runs), so each pair's contacts are read from the
+    run channel_meta recorded it in. A contact missing from that run's table
+    raises a KeyError rather than being skipped.
     """
     registry = pd.read_csv(config.FILE_REGISTRY_CSV,
                            usecols=['sub_id', 'ses_id', 'run_id', 'raw_file_path'])
     raw_path = {(r.sub_id, r.ses_id, r.run_id): r.raw_file_path
                 for r in registry.itertuples(index=False)}
     midpoints, sources = [], []
-    for (sid, session), rows in pairs.groupby(['subject_id', 'session'], sort=False):
-        run_id = sorted(rows['run_id'])[0]
+    for (sid, session, run_id), rows in pairs.groupby(
+            ['subject_id', 'session', 'run_id'], sort=False):
         path = raw_path[(sid, f'ses-{session}', run_id)]
         coords = contact_coords(Path(path))
         sources.append(path)
