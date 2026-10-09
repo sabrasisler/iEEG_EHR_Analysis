@@ -64,6 +64,7 @@ HEMISPHERE_PREFIXES = ('ctx-lh-', 'ctx-rh-', 'Left-', 'Right-')
 BLANK_LABEL = '(blank)'
 UNLABELED = 'Unlabeled'
 NO_COORDINATE = 'No MNI coordinate'
+NOT_PLOTTED = (UNLABELED, NO_COORDINATE)
 
 HCPEX_DIR = config.DERIVATIVES_BASE / 'atlases' / 'HCPex_v1.1'
 MNI_COLUMNS = ['MNI_coord_1', 'MNI_coord_2', 'MNI_coord_3']
@@ -240,8 +241,18 @@ def label_counts(pairs):
 
 
 def plot_counts(counts, n_subjects, n_pairs, title, footnote, out_path):
+    """Two bar panels, one bar per atlas label.
+
+    Pairs with NO label (`Unlabeled`, `No MNI coordinate`) stay in the CSV but
+    leave the bars for a subtitle: under HCPex they are ~half of all pairs, and
+    one bar that long flattens every real label to a sliver.
+    """
+    absent = counts['label'].isin(NOT_PLOTTED)
+    subtitle = '; '.join(f'{r.label}: {r.n_electrodes} pairs, {r.n_subjects} subjects'
+                         for r in counts[absent].itertuples())
+    counts = counts[~absent]
     y = np.arange(len(counts))
-    fig, axes = plt.subplots(1, 2, sharey=True,
+    fig, axes = plt.subplots(1, 2, sharey=True, layout='constrained',
                              figsize=(10, 0.19 * len(counts) + 1.6))
     panels = [('n_subjects', f'Subjects (of {n_subjects})'),
               ('n_electrodes', f'Bipolar pairs (of {n_pairs})')]
@@ -262,10 +273,10 @@ def plot_counts(counts, n_subjects, n_pairs, title, footnote, out_path):
                             color=style.TEXT_PRIMARY)
     axes[0].set_ylim(len(counts) - 0.5, -0.5)
     fig.suptitle(f'{title}: {len(counts)} labels, {n_subjects} subjects, '
-                 f'{n_pairs} bipolar pairs',
+                 f'{n_pairs} bipolar pairs'
+                 + (f'\nNot shown, {subtitle}' if subtitle else ''),
                  fontsize=style.TITLE_SIZE, color=style.TEXT_PRIMARY,
                  x=0.01, ha='left')
-    fig.tight_layout()
     style.save(fig, out_path, footnote=footnote)
     logger.info('Wrote %s', out_path)
 
