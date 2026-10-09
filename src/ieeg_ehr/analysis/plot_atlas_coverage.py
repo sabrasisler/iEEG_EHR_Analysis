@@ -252,8 +252,11 @@ def plot_counts(counts, n_subjects, n_pairs, title, footnote, out_path):
                          for r in counts[absent].itertuples())
     counts = counts[~absent]
     y = np.arange(len(counts))
+    height = 0.19 * len(counts) + 1.6
     fig, axes = plt.subplots(1, 2, sharey=True, layout='constrained',
-                             figsize=(10, 0.19 * len(counts) + 1.6))
+                             figsize=(10, height))
+    # Constrained layout ignores fig.text, so reserve 0.25 in for the footnote.
+    fig.get_layout_engine().set(rect=(0, 0.25 / height, 1, 1 - 0.25 / height))
     panels = [('n_subjects', f'Subjects (of {n_subjects})'),
               ('n_electrodes', f'Bipolar pairs (of {n_pairs})')]
     for ax, (column, xlabel) in zip(axes, panels):
