@@ -120,7 +120,8 @@ view chain.
 
 | Question | Folder | What it asks |
 |---|---|---|
-| DK coverage | `dk_coverage` | How many subjects and how many bipolar pairs carry each Desikan-Killiany anode label, hemispheres merged, with every label string kept (white matter, ventricles, `Unknown` included). The cohort is the reference run's `subjects[]`. Opened 2026-10-09. Purely descriptive. Code: `analysis/plot_dk_label_coverage.py`. |
+| DK coverage | `dk_coverage` | How many subjects and how many bipolar pairs carry each Desikan-Killiany anode label, hemispheres merged, with every label string kept (white matter, ventricles, `Unknown` included). The cohort is the reference run's `subjects[]`. Opened 2026-10-09. Purely descriptive. Code: `analysis/plot_atlas_coverage.py --atlas dk`. |
+| HCPex coverage | `hcpex_coverage` | The same counts with each pair labeled by HCPex v1.1 (426 parcels, cortex + subcortex) at its virtual electrode, the anode-cathode MNI midpoint computed from the raw NWB contact coordinates. Answers what DK cannot: finer cortical parcels and subcortical nuclei, and a label that belongs to the pair rather than to its anode. Opened 2026-10-09. Purely descriptive. Atlas at `derivatives/sisler/atlases/HCPex_v1.1/`. Code: `analysis/plot_atlas_coverage.py --atlas hcpex`. |
 
 | P2.6 | **FREEZE** — dated freeze doc: ranked directional hypotheses, frozen feature set + view config, model spec, correction plan + n_tests, predicted directions. Ends exploration. |
 
