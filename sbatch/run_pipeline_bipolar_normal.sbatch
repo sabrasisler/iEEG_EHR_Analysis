@@ -1,57 +1,46 @@
 #!/bin/bash
+# Continuous bipolar PSD on the native 0.5 Hz grid, one NWB per run, into
+# preprocessed/bipolar_psd/ (DECISIONS 2026-10-12). One array task per line of
+# TASK_FILE, which `run_pipeline_bipolar plan` writes.
+#
+# Usage (from the repo root -- the log path is relative):
+#   C=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/cohorts
+#   TASK_FILE=$C/bipolar_psd_fullres_tasks_discovery.txt \
+#       sbatch --array=0-<n_tasks - 1>%<cap> sbatch/run_pipeline_bipolar_normal.sbatch
+#
+# VARIANCE=1 also rebuilds the bipolar variance QC metric for every subject in a
+# task. Plan with --whole-subjects for that, or the task refuses to start.
+#
+# Re-submitting the same TASK_FILE is safe: finished runs are skipped.
+#
+# RESOURCES -- one CPU, because the work is one serial spectrogram per channel
+# and the parallelism is the array. Memory is one 300-window block, independent
+# of run length. Replace these with the pilot's measured values.
+#
 #SBATCH -p normal
-#SBATCH --time=24:00:00
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64GB
-#SBATCH --array=0-25%6
-#SBATCH -J bipolar_reref_psd
-#SBATCH -o logs/bipolar_reref_psd_%A_%a.out
+#SBATCH --time=02:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=6GB
+#SBATCH -J bipolar_psd
+#SBATCH -o logs/bipolar_psd_%A_%a.out
 
-# Batches BATCH_SIZE subjects per array task (fewer, longer jobs -- cuts Slurm
-# scheduling/env-load overhead per subject vs. one-array-task-per-subject).
-# /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/cohorts/subjects_bipolar_normal.txt has 104 subjects (every sub-*/
-# folder under $RAW_DIR that actually contains >=1 raw .nwb file -- 3 folders,
-# 204/243/246, exist but are empty and were excluded). At BATCH_SIZE=4 that's
-# ceil(104/4)-1 = 25, hence --array=0-25%6. Recompute this bound whenever the
-# subject list or BATCH_SIZE changes:
-#   python3 -c "import math; print(math.ceil(N_SUBJECTS/BATCH_SIZE)-1)"
-# --time bumped to 24h (was 12h) since each task now processes multiple
-# subjects sequentially; watch seff/sacct on the first few tasks and adjust.
-
-# --cpus-per-task=8 + --n-workers 8: the Welch PSD step parallelizes across
-# channels (ProcessPoolExecutor, see bipolar_reref.compute_welch_log_bins).
-# MEASURED on real data (sub-085, 83 runs, 8 workers): MaxRSS ~48GB (vs
-# ~16-17GB single-threaded on the same subject) -- the process pool has real
-# fixed overhead (each worker loads the full scipy/numpy/BLAS stack). --mem
-# bumped 48GB->64GB for a safety margin above that measured peak, since 48GB
-# was uncomfortably close to the observed usage. Keep OMP/OPENBLAS/
-# MKL_NUM_THREADS=1 per process to avoid oversubscribing -- outer-level
-# parallelism is the process pool, not BLAS-level threading. Watch
-# seff/sacct on the first real array tasks and adjust further if needed.
-
+set -euo pipefail
 module load python/3.12
 source $GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate
 
+# The parallelism is the array. BLAS threading would oversubscribe the one core.
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-BATCH_SIZE=${BATCH_SIZE:-4}
-N_WORKERS=${N_WORKERS:-8}
-SUBJECTS_FILE=${SUBJECTS_FILE:-/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/cohorts/subjects_bipolar_normal.txt}
-SKIP_VARIANCE=${SKIP_VARIANCE:-0}   # set to 1 to skip the (already-computed, unaffected by PSD
-                                    # parameter changes) bipolar variance metric CSV step
-mapfile -t ALL_SUBJECTS < "$SUBJECTS_FILE"
-START=$((SLURM_ARRAY_TASK_ID * BATCH_SIZE))
-BATCH=("${ALL_SUBJECTS[@]:START:BATCH_SIZE}")
-SUBJECTS_CSV=$(IFS=,; echo "${BATCH[*]}")
+# So git provenance is recordable on the node: the login node's git is 1.8.3.1
+# and cannot read a worktree gitfile.
+export PATH="$HOME/bin:$PATH"
+# So the SUBMITTING checkout runs, not whatever state the editable install
+# points at.
+export PYTHONPATH="${SLURM_SUBMIT_DIR}/src:${PYTHONPATH:-}"
 
-SKIP_FLAG=""
-if [ "$SKIP_VARIANCE" = "1" ]; then
-    SKIP_FLAG="--skip-variance-metrics"
-fi
+: "${TASK_FILE:?set TASK_FILE to a task list written by run_pipeline_bipolar plan}"
+VARIANCE_FLAG=""
+[ "${VARIANCE:-0}" = "1" ] && VARIANCE_FLAG="--variance-metrics"
 
-echo "Array task $SLURM_ARRAY_TASK_ID -> subjects $SUBJECTS_CSV (n_workers=$N_WORKERS, skip_variance=$SKIP_VARIANCE)"
-python -m ieeg_ehr.preprocessing.run_pipeline_bipolar --subjects "$SUBJECTS_CSV" \
-    --level-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/qc/bipolar \
-    --psd-out-root /oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler/preprocessed/bipolar_fft \
-    --n-workers "$N_WORKERS" $SKIP_FLAG
+python -m ieeg_ehr.preprocessing.run_pipeline_bipolar run \
+    --task-file "$TASK_FILE" --task-index "$SLURM_ARRAY_TASK_ID" $VARIANCE_FLAG

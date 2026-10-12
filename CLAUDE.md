@@ -254,8 +254,10 @@ that produces output. The rules:
   **CSV**: they are small, terminal, and read by eye, so Parquet buys nothing and
   costs a pyarrow round-trip to open one. The **cache, views, `features/` and
   `preprocessed/` stay Parquet** — large, column-sliced, and dtype-critical
-  (`config.CACHE_FLOAT_DTYPE`, the P0.6 precision audit). The QC tree stays CSV as
-  before. joblib (NOT raw pickle) for fitted models / FOOOF objects; JSON for
+  (`config.CACHE_FLOAT_DTYPE`, the P0.6 precision audit). The one exception is a
+  CONTINUOUS feature family under `preprocessed/`, stored as per-run NWB with a
+  sidecar, because a whole run is NWB's continuous time axis (`bipolar_psd`,
+  DECISIONS 2026-10-12). The QC tree stays CSV as before. joblib (NOT raw pickle) for fitted models / FOOOF objects; JSON for
   manifests and sidecars. Never pickle tabular data.
   `io.write_table` picks the format from the path extension and emits the sidecar
   either way, so nothing else about the contract changes.

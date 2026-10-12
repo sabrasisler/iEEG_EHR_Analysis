@@ -341,14 +341,6 @@ def bipolar_mask_label(bipolar_variance_label, raw_voltage_label=None):
 BIPOLAR_PSD_DERIV_ROOT = Path(os.environ['GROUP_SCRATCH']) / 'sisler' / 'bipolar_fft'
 
 
-def bipolar_fft_params_path(psd_out_root, subject):
-    # Subject-level sidecar living IN the bipolar_fft tree itself (not under
-    # qc/), so it survives independently of whether QC has been run: re-ref
-    # type + FFT/PSD params + git provenance for whatever preprocessing pass
-    # most recently produced this subject's PSD. Overwritten on each re-run.
-    return Path(psd_out_root) / f'sub-{subject}' / f'sub-{subject}_bipolar_fft_params.json'
-
-
 def bipolar_psd_nwb_path(subject, session, run):
     return (BIPOLAR_PSD_DERIV_ROOT / f'sub-{subject}' / f'ses-{session}'
             / f'sub-{subject}_ses-{session}_run-{run}_bipolar_psd.nwb')

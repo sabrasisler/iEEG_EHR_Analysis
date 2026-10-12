@@ -1072,3 +1072,54 @@ every band-level figure comparable.
 8-band `CANONICAL_BANDS_HZ`. Existing code is not swept; each script adopts the
 six bands when it is next touched.
 
+
+---
+
+## 2026-10-12 — Continuous native-grid PSD in per-run NWB replaces the 50-log-bin family
+
+`run_pipeline_bipolar.py` now writes the whole-session spectrum on the native FFT
+grid (0.5 Hz, 1–250 Hz, 499 frequencies), float32 log10 power, one NWB per run,
+to `preprocessed/bipolar_psd/`. It replaces the 50-log-bin extraction, which the
+user retired. The 50 log bins become a view of the native grid. The user made
+this call, and chose the discovery cohort first, minus sub-071 and sub-209
+(distorted MNI coordinates), with the other subjects after.
+
+**Why:** the 50-bin reduction is wrong at both ends (DECISIONS 2026-09-15), and
+the epoch-only full-resolution unit has no non-epoch windows, so AXIS 2's
+`whole_session` baseline and any medication analysis over all recorded hours had
+no native-grid source.
+
+**Why NWB here, when 2026-09-15 chose Parquet for the epoch unit.** That entry's
+argument against NWB was that its single continuous time axis cannot hold a stack
+of discontiguous epochs. A whole run is that continuous axis. Size is not a
+factor: the same entry measured HDF5 (shuffle + gzip-4) and Parquet at 0.69x
+each. This is an exception to "`preprocessed/` stays Parquet" for continuous
+families, which `bipolar_fft` already was.
+
+**Layout.** `processing/ecephys/psd_fullres`, (n_windows, n_pairs, n_freqs),
+HDF5 chunks of 300 windows × 1 pair × all frequencies, gzip-4 + shuffle. Row i
+covers [i, i + 2) s from the run's `session_start_time` (the run start in V1).
+Unmasked, un-notched, unbinned. A `.provenance.json` sidecar beside each file,
+and `manifest.json` at the tree root holds `freqs_hz`.
+
+**The same FFT, read in blocks.** Per channel on the float32 bipolar trace,
+exactly the retired pipeline's call, over 301 s raw reads of 300 windows. The
+gate, `preprocessing/bipolar_psd_fullres_audit.py`, must reproduce the retired
+50-bin NWBs at 0 ulp before the array runs.
+
+**The 50-bin tree moved to `$GROUP_SCRATCH`** (`sbatch/move_bipolar_fft_to_scratch.sbatch`),
+the Oak original deleted after a file-count and size check. The user accepted
+that scratch holds the only copy and that the purge removes it around
+2027-01-10. `config.BIPOLAR_PSD_DERIV_ROOT` points there until then.
+
+**Storage.** ~5.6 TB for the 63 discovery subjects, ~8 TB for all 97, scaled
+from the 585 GB / 835 GB of 50-bin files at 499/50 bins and the measured
+compression. Oak stood at 70.7 of 80 TB on 2026-10-12. The user chose lossless
+storage of the full 1–250 Hz, with Oak free space checked again before the
+remaining subjects.
+
+**The bipolar variance QC metric stays,** behind `--variance-metrics`, computed
+from the same block reads. Off for discovery, which already has it.
+
+*Reverses if:* Oak cannot hold the remaining subjects losslessly, or a change of
+`PSD_WINDOW_SEC`, which changes the grid.

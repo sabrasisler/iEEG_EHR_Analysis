@@ -1,7 +1,7 @@
 """
-Shared computational core for bipolar re-referencing + Welch PSD: pair
-derivation, re-referencing, per-2s variance, and per-outer-window Welch PSD
-band-averaged into log-spaced frequency bins.
+Shared computational core for bipolar re-referencing + PSD: pair derivation,
+re-referencing, per-2s variance, and the 50-log-bin reduction that the retired
+50-bin family stored and that the bit-exact audits still replay.
 
 Pure functions operating on already-loaded in-memory arrays -- no NWB I/O here
 (that lives in run_pipeline_bipolar.py). The bipolar time series itself is
@@ -253,90 +253,3 @@ def _welch_one_channel(channel_col, sfreq, nperseg, noverlap, bin_edges,
         with np.errstate(divide='ignore'):
             out[w, :] = np.log10(linear_bins)
     return out, times
-
-
-def compute_welch_log_bins(bipolar_v, sfreq, window_sec, overlap_frac,
-                            bin_edges, guard_hz, line_freqs=(60.0, 120.0, 180.0, 240.0),
-                            n_workers=1, window_fn=DEFAULT_PSD_WINDOW_FN,
-                            detrend=DEFAULT_PSD_DETREND):
-    """
-    Single-level windowing (per lab discussion -- no outer/coarser window
-    anymore): each 2s window (default) is its own PSD estimate, stepped by
-    50% overlap (1s hop by default). NOTE: with only one segment per window,
-    this is a periodogram, not a multi-segment Welch average -- accepted
-    tradeoff for finer time resolution (noisier per-window estimate, no
-    averaging benefit a longer outer window would have given).
-
-    n_workers > 1 parallelizes across CHANNELS (embarrassingly parallel --
-    each channel's full time series is independent) via ProcessPoolExecutor,
-    not threads (scipy/Python-level looping doesn't release the GIL enough
-    for threads to scale). n_workers>1 must produce IDENTICAL results to
-    n_workers=1, since it's the same per-channel computation just distributed.
-
-    Returns:
-      log_power: (n_windows, n_pairs, n_bins) float32
-      window_start / window_end: (n_windows,) -- window_start = spectrogram's
-        window CENTER minus half the window duration (spectrogram reports
-        segment centers; converted here to window_start/window_end for
-        consistency with the variance metric's schema)
-      broadband_log_power: (n_windows, n_pairs) -- mean log-power across
-        non-line-flagged bins (computed here since the array's already in memory)
-      contains_line_noise: (n_bins,) bool
-    """
-    n_samples, n_pairs = bipolar_v.shape
-    nperseg = max(1, int(round(window_sec * sfreq)))
-    noverlap = int(nperseg * overlap_frac)
-
-    contains_line_noise = line_noise_mask(bin_edges, line_freqs, guard_hz)
-
-    if n_samples < nperseg:
-        # Run shorter than one window -- nothing to compute (mirrors the
-        # zero-outer-window guard the fused script already has for this case).
-        n_bins = len(bin_edges) - 1
-        return {
-            'log_power': np.zeros((0, n_pairs, n_bins), dtype=np.float32),
-            'window_start': np.array([]), 'window_end': np.array([]),
-            'broadband_log_power': np.zeros((0, n_pairs), dtype=np.float32),
-            'contains_line_noise': contains_line_noise,
-        }
-
-    per_channel = [None] * n_pairs
-    times_ref = None
-    if n_workers <= 1:
-        for ch in range(n_pairs):
-            per_channel[ch], times_ref = _welch_one_channel(
-                bipolar_v[:, ch], sfreq, nperseg, noverlap, bin_edges,
-                window=window_fn, detrend=detrend)
-    else:
-        import concurrent.futures
-        with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
-            futures = {
-                pool.submit(_welch_one_channel, bipolar_v[:, ch], sfreq, nperseg, noverlap,
-                            bin_edges, window_fn, detrend): ch
-                for ch in range(n_pairs)
-            }
-            for future in concurrent.futures.as_completed(futures):
-                ch = futures[future]
-                per_channel[ch], times_ref = future.result()
-
-    log_power = np.stack(per_channel, axis=1)   # (n_windows, n_pairs, n_bins)
-
-    # spectrogram's `times` are window CENTERS -> convert to start/end for
-    # schema consistency with the variance metric (window_start/window_end).
-    half_window = window_sec / 2.0
-    window_start = times_ref - half_window
-    window_end = times_ref + half_window
-
-    non_flagged = ~contains_line_noise
-    if non_flagged.any():
-        broadband_log_power = log_power[:, :, non_flagged].mean(axis=2)
-    else:
-        broadband_log_power = log_power.mean(axis=2)
-
-    return {
-        'log_power': log_power,
-        'window_start': window_start,
-        'window_end': window_end,
-        'broadband_log_power': broadband_log_power,
-        'contains_line_noise': contains_line_noise,
-    }

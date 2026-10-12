@@ -2,7 +2,8 @@
 Bipolar re-reference + Welch PSD parameters, and the canonical frequency bands.
 
 The PSD is the first stored FEATURE FAMILY (architecture.md PART 1): continuous,
-per-window, expensive, written once per run to preprocessed/bipolar_fft/.
+per-window, expensive, written once per run to preprocessed/bipolar_psd/ on the
+native 0.5 Hz grid (DECISIONS 2026-10-12).
 """
 
 # PSD params are given in SECONDS (resolved per-run against each run's own
@@ -80,13 +81,15 @@ PSD_FULLRES_N_FREQS = int(round((PSD_FULLRES_FREQ_MAX_HZ - PSD_FULLRES_FREQ_MIN_
 # harmonic, not a different notch.)
 PSD_NOTCH_HALF_WIDTH_HZ = 2.0
 
-# HDF5 chunking: default is uncapped (whole run's time axis in one chunk per
-# channel). PSD rows are spaced by the hop (~1s by default) — ~60x denser than
-# the old 60s scheme, but a channel's entire run is still only single-digit MB
-# even for long recordings (2hr run: ~1.4MB/channel; 24hr: ~17MB/channel),
-# comfortably one chunk. This differs from raw-voltage chunking (dense samples),
-# which DOES need small time-chunks. Only set a cap for unusually long recordings.
-PSD_HDF5_CHUNK_MAX_HOURS = None   # e.g. 4.0
+# ============================================================================
+# CONTINUOUS FULL-RESOLUTION PSD  —  preprocessed/bipolar_psd/  (2026-10-12)
+# ============================================================================
+# The same native grid as PSD_FULLRES_* above, over whole runs, one NWB per run.
+# HDF5 chunk = 300 windows x 1 pair x all frequencies, ~600 KB. 300 windows is
+# one 5-min epoch at the 1 s hop, so an epoch read touches one or two chunks per
+# pair, and a whole-channel read touches no other pair. The extractor computes
+# one chunk row per raw read, so HDF5 compresses each chunk exactly once.
+PSD_FULLRES_HDF5_CHUNK_WINDOWS = 300
 
 # ============================================================================
 # APERIODIC (1/f) SLOPE  — BG.2, docs/view_registry.md "non-axis computations"
