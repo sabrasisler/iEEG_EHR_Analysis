@@ -447,3 +447,4 @@ working tree had uncommitted changes, so that commit does NOT describe what ran.
 - 2026-10-09 16:52 | hcpex label coverage, hemispheres merged, 198 labels, 7068 pairs, n=51 | $DERIV/analysis/electrode_localization/hcpex_coverage/label_counts/contpain_ref_20261009-165158 | 64924370581f+dirty | [ ]
 - 2026-10-09 16:54 | hcpex label coverage, hemispheres merged, 198 labels, 7068 pairs, n=51 | $DERIV/analysis/electrode_localization/hcpex_coverage/label_counts/contpain_ref_20261009-165451 | 8f465aef156b+dirty | [ ]
 - 2026-10-12 12:53 | cabnp label coverage, hemispheres merged, 15 labels, 7068 pairs, n=51 | $DERIV/analysis/electrode_localization/cabnp_coverage/label_counts/contpain_ref_20261012-125346 | f69c05985f9d+dirty | [ ]
+- 2026-10-12 13:14 | dk_midpoint label coverage, hemispheres merged, 53 labels, 7068 pairs, n=51 | $DERIV/analysis/electrode_localization/dk_midpoint_coverage/label_counts/contpain_ref_20261012-131411 | 9bc88ad1a14f+dirty | [ ]

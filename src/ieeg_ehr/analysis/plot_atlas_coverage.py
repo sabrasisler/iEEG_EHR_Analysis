@@ -466,13 +466,20 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--epoch-minutes', type=float, default=None)
     ap.add_argument('--run-name', default='contpain_ref')
+    ap.add_argument('--exclude-subjects', nargs='+', default=[],
+                    help='Drop these subjects from the reference cohort, e.g. ones '
+                         'whose MNI coordinates fall outside the brain.')
     args = ap.parse_args()
 
     io.warn_if_dirty()
 
     ref = reference_run.load(args.reference_run)
-    subjects = sorted(ref.subjects)
-    logger.info('cohort from %s: %d subject(s)', ref.run_dir.name, len(subjects))
+    unknown = sorted(set(args.exclude_subjects) - set(ref.subjects))
+    if unknown:
+        raise SystemExit(f'--exclude-subjects not in the reference cohort: {unknown}')
+    subjects = sorted(set(ref.subjects) - set(args.exclude_subjects))
+    logger.info('cohort from %s: %d subject(s), %d excluded: %s', ref.run_dir.name,
+                len(subjects), len(args.exclude_subjects), args.exclude_subjects)
 
     pairs, meta_paths = load_pairs(subjects, args.epoch_minutes)
     pairs, label_sources = LABELERS[args.atlas](pairs)
@@ -489,7 +496,8 @@ def main():
                + [io.parent_ref(p, digest=False) for p in label_sources])
     params = {'atlas': args.atlas,
               'reference_run': str(ref.run_dir),
-              'epoch_minutes': args.epoch_minutes}
+              'epoch_minutes': args.epoch_minutes,
+              'excluded_subjects': sorted(args.exclude_subjects)}
     if args.atlas == 'dk':
         params['label_column'] = 'dk_anode'
     else:
