@@ -54,6 +54,7 @@ import argparse
 import json
 import logging
 import os
+import resource
 import sys
 import time
 import traceback
@@ -347,17 +348,22 @@ def extract_run(subject, session, run, raw_path, variance_csv=None):
                                np.concatenate(var_starts), np.concatenate(var_metric)),
                 variance_csv)
 
+        # The process's own peak so far, without the page cache that Slurm's
+        # MaxRSS counts. ru_maxrss is in KB on Linux.
+        peak_rss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6
         io.write_sidecar(
             out_path, kind='artifact', script=SCRIPT, params=unit_params(),
             parents=[raw.raw_path], subjects=[f'sub-{subject}'],
             extra={'n_windows': int(raw.n_windows), 'n_pairs': len(raw.pairs),
                    'sfreq_hz': raw.sfreq, 'series': raw.series_name,
                    'n_nonfinite_values': n_nonfinite,
-                   'elapsed_sec': round(time.time() - t0, 1)})
+                   'elapsed_sec': round(time.time() - t0, 1),
+                   'process_peak_rss_gb': round(peak_rss_gb, 2)})
         logger.info('sub-%s ses-%s run-%s: %d windows x %d pairs x %d freqs @ %g Hz -> '
-                    '%.2f GB in %.0f s%s', subject, session, run, raw.n_windows,
-                    len(raw.pairs), n_freq, raw.sfreq, out_path.stat().st_size / 1e9,
-                    time.time() - t0, f'  [{n_nonfinite} non-finite]' if n_nonfinite else '')
+                    '%.2f GB in %.0f s, peak RSS %.2f GB%s', subject, session, run,
+                    raw.n_windows, len(raw.pairs), n_freq, raw.sfreq,
+                    out_path.stat().st_size / 1e9, time.time() - t0, peak_rss_gb,
+                    f'  [{n_nonfinite} non-finite]' if n_nonfinite else '')
         return bipolar_reref.pairs_signature(raw.pairs)
 
 
