@@ -11,7 +11,7 @@ see the raw atlas coverage before any ROI scheme decides what to keep.
 
 One electrode = one BIPOLAR PAIR. channel_meta repeats each pair once per run,
 so pairs are de-duplicated on (subject, session, channel) before counting.
-Hemispheres are merged in both atlases.
+Hemispheres are merged in every atlas.
 
 `--atlas dk`
     The pair's ANODE Desikan-Killiany label (`dk_anode`), which is how the
@@ -20,6 +20,15 @@ Hemispheres are merged in both atlases.
     `Left-`/`Right-`, and a few cortical ones `ctx-lh-`/`ctx-rh-`. Stripping
     those four prefixes merges hemispheres. No other spelling is merged:
     `Unknown` and `undefined` stay two labels, as they are two strings.
+
+`--atlas dk_midpoint`
+    Desikan-Killiany again, but looked up at the VIRTUAL ELECTRODE (see
+    `hcpex` below) in FreeSurfer 7.4.1's `cvs_avg35_inMNI152` aparc+aseg: the
+    same DK cortical parcels plus the aseg subcortical and white-matter labels,
+    as a 1 mm MNI152 volume. Hemispheres merge by the same prefix strip as `dk`.
+    FreeSurfer 7 names the thalamus `Thalamus` where the NWB anode labels say
+    `Thalamus-Proper`. A midpoint on the grid with value 0 is outside the brain
+    mask and counts as `No parcel`.
 
 `--atlas hcpex`
     HCPex v1.1 (Huang et al. 2022, doi 10.1007/s00429-021-02421-6), 1 mm, MNI
@@ -94,17 +103,22 @@ HCPEX_N_CORTICAL = 360
 HCPEX_TO_GLASSER = {'Hipp': 'H'}
 CABNP_DIR = config.DERIVATIVES_BASE / 'atlases' / 'CAB-NP_v1.1'
 CABNP_STEM = 'CortexSubcortex_ColeAnticevic_NetPartition_wSubcorGSR_parcels_LR'
+FS_MNI_DIR = config.DERIVATIVES_BASE / 'atlases' / 'FreeSurfer7.4.1_cvs_avg35_inMNI152'
 MNI_COLUMNS = ['MNI_coord_1', 'MNI_coord_2', 'MNI_coord_3']
 #: Largest allowed gap (mm) between the computed and the stored pair midpoint.
 MIDPOINT_TOLERANCE_MM = 1e-3
 
 TITLES = {
     'dk': 'Desikan-Killiany anode labels, hemispheres merged: {n} labels',
+    'dk_midpoint': ('Desikan-Killiany labels at the pair midpoint, hemispheres merged: '
+                    '{n} labels'),
     'hcpex': 'HCPex v1.1 labels at the pair midpoint, hemispheres merged: {n} labels',
     'cabnp': 'CAB-NP v1.1 networks at the pair midpoint: {n} networks',
 }
 FOOTNOTES = {
     'dk': 'one electrode = one bipolar pair, by anode label',
+    'dk_midpoint': ('one electrode = one bipolar pair, at the anode-cathode MNI '
+                    'midpoint, in FreeSurfer cvs_avg35_inMNI152 aparc+aseg'),
     'hcpex': 'one electrode = one bipolar pair, at the anode-cathode MNI midpoint',
     'cabnp': ('one electrode = one bipolar pair, at the anode-cathode MNI midpoint; '
               'cortex via HCPex Glasser areas, subcortex via CAB-NP 2 mm voxels'),
@@ -261,7 +275,7 @@ def label_hcpex(pairs):
     logger.info('%d pair(s) without an MNI coordinate, %d outside the atlas grid, '
                 '%d in no parcel', (~has_xyz).sum(), (has_xyz & ~inside).sum(),
                 (inside & (values == 0)).sum())
-    return pairs, sources
+    return pairs, sources + [HCPEX_DIR / 'HCPex.nii.gz']
 
 
 # ============================================================================
@@ -321,10 +335,52 @@ def label_cabnp(pairs):
                 'subcortex but no CAB-NP voxel covers, %d the reverse',
                 is_ctx.sum(), is_sub.sum(), (hcpex_sub & ~is_sub).sum(),
                 (is_sub & ~hcpex_sub).sum())
-    return pairs, sources + [CABNP_DIR / f'{CABNP_STEM}.dlabel.nii']
+    return pairs, sources + [HCPEX_DIR / 'HCPex.nii.gz',
+                             CABNP_DIR / f'{CABNP_STEM}.dlabel.nii',
+                             CABNP_DIR / f'{CABNP_STEM}_LabelKey.txt']
 
 
-LABELERS = {'dk': label_dk, 'hcpex': label_hcpex, 'cabnp': label_cabnp}
+# ============================================================================
+# DK at the midpoint
+# ============================================================================
+
+def freesurfer_names():
+    """{aparc+aseg value: name} from FreeSurferColorLUT.txt."""
+    names = {}
+    for line in (FS_MNI_DIR / 'FreeSurferColorLUT.txt').read_text().splitlines():
+        parts = line.split()
+        if parts and parts[0].isdigit():
+            names[int(parts[0])] = parts[1]
+    return names
+
+
+def label_dk_midpoint(pairs):
+    pairs, sources = virtual_electrodes(pairs)
+    check_midpoints(pairs)
+    img = nib.load(FS_MNI_DIR / 'aparc+aseg.mgz')
+    values, has_xyz, inside = voxel_values(
+        np.rint(np.asarray(img.dataobj)).astype(int), img.affine,
+        pairs[['vx', 'vy', 'vz']].to_numpy())
+
+    names = freesurfer_names()
+    label = np.array([collapse_hemisphere(names[v]) for v in values], dtype=object)
+    label[values == 0] = NO_PARCEL
+    label[has_xyz & ~inside] = OUTSIDE_GRID
+    label[~has_xyz] = NO_COORDINATE
+    pairs['aparc_aseg_value'] = values
+    pairs['label'] = label
+
+    anode = (pairs['dk_anode'].fillna('').map(collapse_hemisphere)
+             .str.replace('Thalamus-Proper', 'Thalamus'))
+    logger.info('midpoint label matches the anode label for %d of %d pair(s)',
+                (anode == pairs['label']).sum(), len(pairs))
+    return pairs, sources + [FS_MNI_DIR / 'aparc+aseg.mgz']
+
+
+LABELERS = {'dk': label_dk, 'dk_midpoint': label_dk_midpoint,
+            'hcpex': label_hcpex, 'cabnp': label_cabnp}
+#: Atlases whose no-label rows stay in the bars (see plot_counts).
+SHOW_NO_LABEL = ('dk_midpoint', 'cabnp')
 
 
 # ============================================================================
@@ -435,16 +491,13 @@ def main():
               'reference_run': str(ref.run_dir),
               'epoch_minutes': args.epoch_minutes}
     if args.atlas == 'dk':
-        params.update(label_column='dk_anode',
-                      hemisphere_prefixes_stripped=list(HEMISPHERE_PREFIXES))
+        params['label_column'] = 'dk_anode'
     else:
-        params.update(atlas_dir=str(HCPEX_DIR),
-                      midpoint_tolerance_mm=MIDPOINT_TOLERANCE_MM)
-        parents += [io.parent_ref(HCPEX_DIR / 'HCPex.nii.gz')]
+        params['midpoint_tolerance_mm'] = MIDPOINT_TOLERANCE_MM
+    if args.atlas in ('dk', 'dk_midpoint'):
+        params['hemisphere_prefixes_stripped'] = list(HEMISPHERE_PREFIXES)
     if args.atlas == 'cabnp':
-        params.update(cabnp_dir=str(CABNP_DIR),
-                      hcpex_to_glasser=HCPEX_TO_GLASSER)
-        parents += [io.parent_ref(CABNP_DIR / f'{CABNP_STEM}_LabelKey.txt')]
+        params['hcpex_to_glasser'] = HCPEX_TO_GLASSER
 
     io.write_table(pairs, run_dir / 'pair_labels.csv', script=SCRIPT,
                    params=params, parents=parents, subjects=subjects)
@@ -457,7 +510,7 @@ def main():
                                    'n_subjects': int(n_subjects)})
     plot_counts(counts, n_subjects, n_pairs, TITLES[args.atlas],
                 FOOTNOTES[args.atlas], run_dir / 'label_counts.png',
-                show_no_label=args.atlas == 'cabnp')
+                show_no_label=args.atlas in SHOW_NO_LABEL)
 
     io.log_analysis(f'{args.atlas} label coverage, hemispheres merged, '
                     f'{len(counts)} labels, {n_pairs} pairs, n={n_subjects}', run_dir)

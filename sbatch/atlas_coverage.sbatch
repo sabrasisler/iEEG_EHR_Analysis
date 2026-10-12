@@ -12,6 +12,8 @@
 # analysis/electrode_localization/<atlas>_coverage/label_counts/.
 #
 #   ATLAS=dk    labels each pair by its anode's Desikan-Killiany label
+#   ATLAS=dk_midpoint labels each pair's anode-cathode MNI midpoint in
+#               FreeSurfer's cvs_avg35_inMNI152 aparc+aseg (DK + aseg)
 #   ATLAS=hcpex labels each pair's anode-cathode MNI midpoint in HCPex v1.1
 #               (reads contact coordinates from the raw NWB of each run that adds pairs)
 #   ATLAS=cabnp the same midpoint, labeled with a CAB-NP v1.1 network: cortex
