@@ -14,8 +14,11 @@
 #   ATLAS=dk    labels each pair by its anode's Desikan-Killiany label
 #   ATLAS=hcpex labels each pair's anode-cathode MNI midpoint in HCPex v1.1
 #               (reads contact coordinates from the raw NWB of each run that adds pairs)
+#   ATLAS=cabnp the same midpoint, labeled with a CAB-NP v1.1 network: cortex
+#               through HCPex's Glasser areas, subcortex through CAB-NP's voxels
 #
 #   ATLAS=hcpex sbatch sbatch/atlas_coverage.sbatch
+#   ATLAS=cabnp sbatch sbatch/atlas_coverage.sbatch
 #   ATLAS=hcpex EXTRA="--reference-run <run dir>" sbatch sbatch/atlas_coverage.sbatch
 
 set -euo pipefail
