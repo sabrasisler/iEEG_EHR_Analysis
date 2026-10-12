@@ -16,6 +16,7 @@ Layout under DERIVATIVES_BASE (architecture.md PART 4):
     outdated/       superseded derivatives kept for reference
 """
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -334,7 +335,10 @@ def bipolar_mask_label(bipolar_variance_label, raw_voltage_label=None):
 # Deliberately separate from qc/ (BIDS-like derivatives convention; keeps large
 # NWB outputs out of the CSV-oriented QC tree).
 
-BIPOLAR_PSD_DERIV_ROOT = PREPROCESSED_ROOT / 'bipolar_fft'
+# The 50-log-bin family. Moved off Oak to $GROUP_SCRATCH on 2026-10-12, where
+# the purge removes it around 2027-01-10 (DECISIONS 2026-10-12). Superseded by
+# BIPOLAR_PSD_FULLRES_ROOT, of which the 50 log bins are a view.
+BIPOLAR_PSD_DERIV_ROOT = Path(os.environ['GROUP_SCRATCH']) / 'sisler' / 'bipolar_fft'
 
 
 def bipolar_fft_params_path(psd_out_root, subject):
@@ -350,6 +354,17 @@ def bipolar_psd_nwb_path(subject, session, run):
             / f'sub-{subject}_ses-{session}_run-{run}_bipolar_psd.nwb')
 
 
+# The continuous native-grid family: 0.5 Hz, 1-250 Hz, one NWB per run
+# (DECISIONS 2026-10-12). The `_fullres` suffix keeps it from sharing a filename
+# with the two older `*_bipolar_psd.nwb` files (data_sop.md §14.1).
+BIPOLAR_PSD_FULLRES_ROOT = PREPROCESSED_ROOT / 'bipolar_psd'
+
+
+def bipolar_psd_fullres_nwb_path(subject, session, run):
+    return (BIPOLAR_PSD_FULLRES_ROOT / f'sub-{subject}' / f'ses-{session}'
+            / f'sub-{subject}_ses-{session}_run-{run}_bipolar_psd_fullres.nwb')
+
+
 def bipolar_trace_cache_dir():
     """Scratch cache of full bipolar-referenced traces for a sample of runs, so
     QC threshold/mask experiments don't re-read raw NWB every time.
@@ -358,7 +373,6 @@ def bipolar_trace_cache_dir():
     not a derivative worth keeping (90-day inactivity purge applies). Raises if
     $SCRATCH isn't set rather than silently falling back to something durable.
     """
-    import os
     return Path(os.environ['SCRATCH']) / 'bipolar_trace_cache'
 
 
