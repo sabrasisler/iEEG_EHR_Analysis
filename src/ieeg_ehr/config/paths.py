@@ -702,6 +702,27 @@ def pain_change_zscore_dir(view_label, config_hash):
             / f'{view_label}_{config_hash}')
 
 
+#: Level-3 output type of the pain_change sliding-window prediction.
+PAIN_CHANGE_PREDICTION_OUTPUT = 'prediction'
+PAIN_CHANGE_TRAJECTORY_ROOT = FEATURES_ROOT / 'pain' / 'pain_change_trajectory'
+
+
+def pain_change_trajectory_dir(label, config_hash):
+    """Sliding-window ROI x band d_z per pain_change pair, one file pair per subject.
+
+    A stored feature, not an analysis output: it costs a pass over the continuous
+    `bipolar_psd` NWBs, and every weights file the prediction scores reuses it.
+    Keyed on label + config hash, like a materialized view, so every array task
+    of one extraction writes into the same folder."""
+    return PAIN_CHANGE_TRAJECTORY_ROOT / f'{label}_{config_hash}'
+
+
+def pain_change_prediction_weights_path(name):
+    """One weights file of the pain_change prediction, scored by name."""
+    return (ANALYSIS_DIR / 'pain' / PAIN_CHANGE_QUESTION
+            / PAIN_CHANGE_PREDICTION_OUTPUT / 'weights' / f'{name}.csv')
+
+
 def sweep_run_dir(run_name, event='pain', timestamp=None):
     """A tiered nomination run. All grid combinatorics live as ROWS in this
     run's results table — never as sibling folders."""

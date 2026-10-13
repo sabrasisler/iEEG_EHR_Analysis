@@ -94,6 +94,60 @@ def zscore_dir(vc):
     return out
 
 
+@dataclasses.dataclass
+class Session:
+    """One subject-session's epoch cache, mask and channel layout, opened once."""
+    subject: str
+    session: str
+    vc: object
+    pf: object
+    cache_path: object
+    defs: pd.DataFrame
+    row_groups: dict
+    mask: object
+    channels_by_run: dict
+    session_channels: list
+    rows_by_run: dict
+
+    def epochs(self, epoch_filter=None):
+        return fullres_reader.iter_epochs(
+            self.pf, self.defs, self.row_groups, mask=self.mask,
+            channels_by_run=self.channels_by_run, view_config=self.vc,
+            epoch_filter=epoch_filter, epoch_minutes=self.vc.resolved().epoch_minutes)
+
+
+def open_session(subject, session, vc):
+    """The Session for one subject-session. Raises FileNotFoundError with no cache."""
+    epoch_minutes = vc.resolved().epoch_minutes
+    pf, cache_path = fullres_reader.open_cache(subject, session, epoch_minutes)
+    defs = fullres_reader.load_defs(subject, session, epoch_minutes)
+    defs = defs.sort_values('epoch_id').reset_index(drop=True)
+    present = meanview._epochs_present(pf)
+    rgs = fullres_reader.verify_layout(pf, defs, fullres_reader.n_freqs(epoch_minutes),
+                                       epochs_present=present)
+    channels_by_run = meanview._channels_by_run(subject, session, epoch_minutes)
+    session_channels = sorted({c for chans in channels_by_run.values() for c in chans})
+    channel_index = {c: i for i, c in enumerate(session_channels)}
+    rows_by_run = {run: np.array([channel_index[c] for c in chans], dtype=int)
+                   for run, chans in channels_by_run.items()}
+    return Session(subject, session, vc, pf, cache_path, defs, rgs,
+                   fullres_reader.load_mask(subject, session, vc), channels_by_run,
+                   session_channels, rows_by_run)
+
+
+def session_baseline(sess, min_windows):
+    """Pass 1: (mean, sd, accumulator) per session channel x frequency, over AXIS 2's windows."""
+    acc = axes.BaselineAccumulator(len(sess.session_channels),
+                                   fullres_reader.n_freqs(sess.vc.resolved().epoch_minutes))
+    for ep, block, _kept, _frac in sess.epochs(axes.baseline_epoch_filter(sess.vc.baseline)):
+        acc.update(block, rows=sess.rows_by_run[ep['run_id']])
+    if acc.n_epochs == 0:
+        raise ValueError(f'sub-{sess.subject} ses-{sess.session}: no {sess.vc.baseline} '
+                         'epochs, so there is no baseline to z-score against')
+    base_mean, base_sd = acc.finalize(min_windows=min_windows)
+    return base_mean, base_sd, acc
+
+
 def build_subject_session(subject, session, vc, overwrite=False):
     """(path, stats) when built, (path, None) when it already exists, None on no cache."""
     t0 = time.time()
@@ -109,36 +163,15 @@ def build_subject_session(subject, session, vc, overwrite=False):
         return out_path, None
 
     try:
-        pf, cache_path = fullres_reader.open_cache(subject, session, epoch_minutes)
+        sess = open_session(subject, session, vc)
     except FileNotFoundError as e:
         logger.warning('sub-%s ses-%s: %s -- skipping', subject, session, e)
         return None
-
-    defs = fullres_reader.load_defs(subject, session, epoch_minutes)
-    defs = defs.sort_values('epoch_id').reset_index(drop=True)
-    present = meanview._epochs_present(pf)
-    rgs = fullres_reader.verify_layout(pf, defs, len(freqs), epochs_present=present)
-
-    mask = fullres_reader.load_mask(subject, session, vc)
-    channels_by_run = meanview._channels_by_run(subject, session, epoch_minutes)
-    session_channels = sorted({c for chans in channels_by_run.values() for c in chans})
-    channel_index = {c: i for i, c in enumerate(session_channels)}
-    rows_by_run = {run: np.array([channel_index[c] for c in chans], dtype=int)
-                   for run, chans in channels_by_run.items()}
-
-    def epochs(epoch_filter=None):
-        return fullres_reader.iter_epochs(
-            pf, defs, rgs, mask=mask, channels_by_run=channels_by_run,
-            view_config=vc, epoch_filter=epoch_filter, epoch_minutes=epoch_minutes)
+    cache_path, channels_by_run = sess.cache_path, sess.channels_by_run
+    session_channels, rows_by_run = sess.session_channels, sess.rows_by_run
 
     # ---------------- pass 1: baseline ----------------
-    acc = axes.BaselineAccumulator(len(session_channels), len(freqs))
-    for ep, block, _kept, _frac in epochs(axes.baseline_epoch_filter(vc.baseline)):
-        acc.update(block, rows=rows_by_run[ep['run_id']])
-    if acc.n_epochs == 0:
-        raise ValueError(f'sub-{subject} ses-{session}: no {vc.baseline} epochs, '
-                         'so there is no baseline to z-score against')
-    base_mean, base_sd = acc.finalize(min_windows=params['baseline_min_windows'])
+    base_mean, base_sd, acc = session_baseline(sess, params['baseline_min_windows'])
     n_base_windows = acc.count.min(axis=1)
 
     # ---------------- pass 2: z per window, mean per epoch ----------------
@@ -147,7 +180,7 @@ def build_subject_session(subject, session, vc, overwrite=False):
              'n_channels_no_baseline': int((~np.isfinite(base_sd).any(axis=1)).sum()),
              'n_all_nan_channel_epochs': 0, 'n_nonfinite_input': 0}
     frames = []
-    for ep, block, _kept, frac in epochs():
+    for ep, block, _kept, frac in sess.epochs():
         rows = rows_by_run[ep['run_id']]
         # The cache holds a few isolated non-finite values (one window at one
         # frequency). The baseline already skips them; masking them here keeps
