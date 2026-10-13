@@ -118,8 +118,8 @@ iEEG_NWB/
       ehr/           sub-019_ses-01_pain-scores.csv      (§6)
                      sub-019_ses-01_med-admin.csv
                      sub-019_ses-01_diagnoses.csv
-      preprocessed/  sub-019_ses-01_run-..._bipolar_psd.nwb       ⚠ LEGACY, see §14.1
-                     sub-019_ses-01_run-..._bipolar_fullTFR.nwb   ⚠ LEGACY
+      preprocessed/  sub-019_ses-01_run-..._bipolar_fullTFR.nwb   ⚠ LEGACY
+                     (the legacy *_bipolar_psd.nwb moved out, see §14.1)
 ```
 
 - A **session** (`ses-NN`) is one EMU admission — typically 5–9 days. Most
@@ -872,6 +872,10 @@ iEEG_NWB/sub-019/ses-01/preprocessed/sub-019_ses-01_run-CA0652B0_bipolar_psd.nwb
    → 575 KB, Feb 2026. LEGACY. Contains a per-minute `band_power` series.
      This is what the registry's preprocessed_file_path points at, and what its
      n_channels / n_timepoints / sampling_rate columns describe.
+     MOVED 2026-10-13: all 5,766 went to
+     $GROUP_SCRATCH/sisler/legacy_iEEG_NWB_preprocessed/ (same sub/ses/preprocessed
+     layout), where the purge removes them. The registry paths are now dangling,
+     and a rebuild by build_file_registry.py would set has_preprocessed=False.
 
 derivatives/sisler/preprocessed/bipolar_fft/sub-019/ses-01/sub-019_ses-01_run-CA0652B0_bipolar_psd.nwb
    → 99 MB, Jul 2026. CURRENT: 2 s / 50 % overlap / 50 log bins (§4.6).

@@ -6,6 +6,11 @@ conversion code. Raw output and the audit scripts:
 `$OAK/data/iEEG_EHR/derivatives/sisler/analysis/scratch/v2_nwb_audit_2026-09-09/`
 (`REPORT.md` + JSON).
 
+**Updated 2026-10-12** with a run-set survey of all 92 shared subjects, a
+full-sample comparison of `sub-019`, corrupt files in both trees, and a
+UTC-offset survey of every NWB (§1.1, §2.1, §2.2, §3.1, §3.2). Script and job logs:
+`$OAK/data/iEEG_EHR/derivatives/sisler/analysis/scratch/v1_v2_compare_2026-10-12/`.
+
 **What this is:** a second, re-converted copy of the raw iEEG NWBs at
 `/oak/stanford/groups/ckeller1/data/iEEG_EHR_V2/`, adjacent to the original
 `iEEG_EHR/`. Same recordings, same voltages, different file-level conventions.
@@ -46,6 +51,52 @@ Also missing from V2, and needed before anything real runs off it:
 
 So: V2 is a preview of the format, not yet a dataset to analyze.
 
+### 1.1 Run sets as of 2026-10-12
+
+V2 now holds **143 subjects**. 92 overlap V1, and 51 exist only in V2. Across
+the 92 shared subjects (filename-level comparison of `ses-*/ieeg/*.nwb`):
+
+| | Runs |
+|---|---|
+| V1 | 7,113 |
+| V2 | 7,623 |
+| Shared filenames | 7,105 |
+| V2-only | **518** |
+| V1-only | **8** |
+
+77 of the 92 subjects have identical run sets. The 15 that differ:
+
+| Subject | V1 | V2 | Shared | Note |
+|---|---|---|---|---|
+| `sub-019` | 35 | 38 | 35 | 3 V2-only runs after V1's last run (§3.1) |
+| `sub-061` | 95 | 103 | 95 | `ses-01` only |
+| `sub-110` | 80 | 82 | 80 | `ses-01` only |
+| `sub-111` | 115 | 116 | 115 | `ses-01` only |
+| `sub-116` | 69 | 70 | 69 | `ses-01` only |
+| `sub-120` | 42 | **197** | 42 | V2 adds `ses-02` (85) and `ses-03` (70) |
+| `sub-124` | 33 | **233** | 33 | V2 `ses-01` has 115, plus `ses-02` (118) |
+| `sub-126` | 130 | 131 | 130 | `ses-01` only |
+| `sub-131` | 64 | 65 | 64 | `ses-01` only |
+| `sub-171` | 98 | 99 | 98 | `ses-01` only |
+| `sub-172` | 208 | 202 | 202 | 6 V1 runs not yet uploaded to V2 |
+| `sub-174` | 64 | 148 | 64 | V2 `ses-01` has 74, plus `ses-02` (74) |
+| `sub-189` | 44 | 45 | 44 | `ses-01` only |
+| `sub-246` | 0 | 60 | 0 | V1 folder exists but is empty |
+| `sub-250` | 73 | 71 | 71 | 2 V1 runs not yet uploaded to V2 |
+
+So V2 is a superset of V1, apart from upload lag. A derivative built from V1
+may lack runs that V2 has, and in three subjects whole sessions. V1 holds
+`ses-01` only for every subject in this table. The 8 runs absent from V2 are
+all `completed` conversions with upload `pending` in `ieeg_file_catalog.csv`,
+and `participant_tracking.csv` counts 202/208 and 71/73 uploaded. Only
+`sub-019`'s extra runs were placed in time (§3.1). Whether the other `ses-01`
+extras fill V1 gaps or extend the session is unchecked.
+
+The status tables have caught up for at least `sub-019`:
+`participant_tracking.csv` reports 38 converted and 38 uploaded, matching disk,
+and every `ieeg_file_catalog.csv` row reads `completed`. `completed` does not
+mean readable (§2.2).
+
 ## 2. The data is identical — this was checked, not assumed
 
 24 shared runs across `sub-190` and `sub-195`, five 30,000-sample slices per run
@@ -64,6 +115,53 @@ in §5.
 **Consequence:** any derivative rebuilt from V2 should reproduce the V1
 derivative exactly, which makes V2 a usable correctness check on the pipeline
 rather than a confound.
+
+### 2.1 Full-sample check on `sub-019`
+
+The slice check above read 5 × 30 s per run. On 2026-10-12 `sub-019` got a
+comparison of **every sample**, channel by channel, bit-exact via the raw
+bytes. The full job was stopped after 6 of 35 shared runs, so the data result
+is partial:
+
+- `CA0652B0`, `B2`, `B3`, `B5`: sEEG, misc, EKG all **bit-exact** over the
+  whole run.
+- `CA0652B4`: sEEG and misc bit-exact. EKG has a corrupt chunk **in V1** (§2.2).
+- `CA0652B1`: EKG and misc bit-exact. sEEG has a corrupt chunk **in V2** (§2.2).
+
+**Electrodes: V1's table is a subset of V2's.** V2 writes one canonical
+electrode table per session, which can hold more rows than V1's. On
+`CA0652B5` the V1 table has 72 rows and V2's has 114. All 72 V1 `location`
+labels appear in V2 with no duplicates, every shared column agrees on every
+matched row, and the 42 extra rows are scalp labels (`FP1`, `F7`, `T3`, `C3`,
+...). So the electrode **indices** in each series differ between versions,
+which is why series shape and `electrodes` indices match in only 6 of 35
+runs. Match channels by label, never by row index. Matched that way, every
+V1 channel in `CA0652B5` (2 EKG, 30 misc, 40 sEEG) is bit-exact against
+its V2 channel. Only this one run's table was checked for the subset property.
+
+Header fields that do match in all 35 shared runs: dtype, rate, conversion,
+offset, resolution, unit, compression, `has_timestamps`, and the electrodes
+column list.
+
+### 2.2 Corrupt and truncated files, both versions
+
+Found 2026-10-12 by the `sub-019` comparison and the timezone survey (§3.2),
+which opened all 19,844 NWBs in both trees. The decode check decompresses every
+stored chunk directly with zlib, retries a failure once, and also checks the
+stored chunk count against the shape, since an unallocated chunk reads back as
+fill value **without raising**.
+
+| Version | File | Problem | Action |
+|---|---|---|---|
+| V2 | `sub-019` `CA0652B1` | 1 sEEG chunk (channel 39, samples 1,800,000–1,919,999) fails: `Error -3 ... unknown compression method`. V1 copy decodes clean. | **Deleted 2026-10-12** for re-conversion |
+| V1 | `sub-019` `CA0652B4` | 1 EKG chunk (rows 1,940,000–1,949,999, all channels of the series) fails the same way. V2 copy decodes clean. | none (V1 is not modified) |
+| V1 | `sub-256` `IA61944G` | **Truncated**: 2.55 GB on disk, header says 8.15 GB. mtime is the Unix epoch. h5py refuses to open it. V2 copy opens. | none |
+| V2 | `sub-077` `CA52408R`, `CA52409F` | No `session_start_time`. 23 MB and 1.35 GB. The catalog marks both conversions `failed`, yet the files sit in `raw/`. | pending |
+
+The catalog marked `CA0652B1` `completed` and uploaded, so neither conversion
+nor upload verifies that a file decodes. A failed conversion can also leave a
+partial file in `raw/`. Only `sub-019` got the chunk-level decode check. The
+other subjects passed only the open-and-read-header test of the survey.
 
 ## 3. Timestamps — the change that will silently corrupt results
 
@@ -133,6 +231,84 @@ Session bounds are also now available without touching the NWBs:
 `status/participant_tracking.csv` carries `session_first_timepoint` (matches V2
 `session_start_time` exactly) and `session_last_timepoint` (matches
 `last_run_start + last_run_duration` exactly).
+
+### 3.1 Additions from `sub-019` (2026-10-12)
+
+`session_last_timepoint` lives only in `status/participant_tracking.csv`. No
+NWB stores a session end. Derive it from the last run's header as
+`session_start_time + starting_time + n_samples / rate`. V1's EHR CSVs carry
+the analogous `session_end` column.
+
+- **Correction to the line above:** `session_last_timepoint` is **truncated to
+  whole seconds**. `sub-019`'s last run ends at `12:01:07.6`, and the CSV says
+  `12:01:07`. An exact-equality check fails. Compare at 1 s tolerance.
+- **NWB times are tz-aware, the CSVs are not.** `session_start_time` and
+  `timestamps_reference_time` carry a UTC offset in both versions (§3.2). The
+  catalog, `participant_tracking.csv`, the V1 registry and the EHR CSVs hold
+  naive wall-clock times. pandas raises on a Series comparison across the two,
+  but `pd.Timestamp(naive) == pd.Timestamp(aware)` returns **False** without
+  raising. Strip the offset (`.replace(tzinfo=None)`) before comparing.
+- **Shared runs:** decoded start and end identical in 35/35 across all series,
+  V1 `starting_time == 0.0` in 35/35, a single V2 `session_start_time`, and no
+  two V2 runs overlap in time.
+- **Catalog agrees with the headers:** `anonymized_start_time` equals the
+  decoded run start and `recording_duration_sec` equals `n_samples / rate` for
+  all 38 V2 runs (max error 0.0 s). The V1 registry `start_datetime` also
+  matches V1 headers for every run.
+- **The V2-only runs extend the session.** `CA0652CA`, `CA0652CB` and
+  `CA0652CD` start 23 min after V1's last run ends, run back to back, and add
+  about 22 h. None overlap a V1 run.
+- **The EHR session bounds are V1's.** `pain-scores.csv` `session_start` equals
+  the first run start in both versions, but `session_end` equals V1's last run
+  end (truncated to seconds), not V2's. When V2 adds runs after V1's end, the
+  EHR `session_end` undercounts the recording. For `sub-019` all 50 pain scores
+  fall inside V1's span, so nothing new becomes alignable.
+
+### 3.2 Where the UTC offset comes from, and how common each value is
+
+Survey of `session_start_time` and `timestamps_reference_time` in every NWB
+on 2026-10-12 (19,841 of 19,844 opened, §2.2):
+
+| Version | Offset | Files | Subjects |
+|---|---|---|---|
+| V1 | `-08:00` | 7,901 | 104 |
+| V2 | `-08:00` | 11,531 | 143 |
+| V2 | **`-07:00`** | **409** | **3** |
+
+The two fields always carry the same offset. The `-07:00` files are exactly
+the V2 sessions whose anonymized dates fall inside US daylight time:
+
+| Subject | Session start (wall clock) | Offset |
+|---|---|---|
+| `sub-048` | `ses-01` 2000-01-01 / `ses-02` 2000-10-09 | -08:00 / **-07:00** |
+| `sub-080` | 2000-01-01 / 2002-09-29 | -08:00 / **-07:00** |
+| `sub-120` | 2000-01-01 / 2000-05-06 / 2007-10-15 | -08:00 / **-07:00** / **-07:00** |
+
+So the offset is the **US Pacific offset for the anonymized date**, PST in
+winter and PDT in summer. The likeliest mechanism is that the converter
+localizes the naive anonymized wall-clock time to Pacific time, either
+explicitly or through pynwb's `tzlocal()` default for naive datetimes on a
+Pacific-time machine. The conversion code is not on Sherlock, so this is
+inferred from the pattern, not read from the source. Every first session is
+anchored to 2000-01-01, which is why nearly everything reads `-08:00`. Later
+admissions keep their real spacing from the first, so some land in summer.
+
+What it means:
+
+- **The wall clock is the shared frame.** EHR CSVs are naive, and for `sub-019`
+  the EHR `session_start` equals the NWB wall clock to the second. The offset
+  is a label on an anonymized date, not information about the true recording
+  time zone.
+- **The offset is constant within a session** (one `session_start_time` per
+  V2 session), and no anonymized V2 session spans a DST transition. Relative
+  times within a session are safe either way.
+- **Converting to UTC is where it bites.** Across sessions of one subject a
+  UTC conversion mixes −8 h and −7 h shifts, a 1 h error in inter-session
+  spacing. Against the naive EHR, a UTC conversion shifts the iEEG by 7–8 h.
+  The repo drops the offset with `tz_localize(None)`, which keeps the wall
+  clock (`build_pain_epoch_power.py`, `build_file_registry.py`).
+  `qc/pad_exclusions.py` converts to UTC epoch seconds, which is safe only
+  because it compares times within one subject-session-channel.
 
 ## 4. Chunking — and the loading strategy worth testing
 
@@ -356,6 +532,17 @@ which described the legacy per-minute `band_power` series rather than the iEEG
 - [ ] `ElectricalSeries_sEEG` is not hardcoded (`io/nwb.py` still does this —
       `data_sop.md` §14.3; `sub-270` is fine but the ECoG-only subjects will
       break again on re-conversion)
-- [ ] EHR still resolves to V1 (§1)
+- [ ] EHR still resolves to V1 (§1), and nothing treats the EHR
+      `session_end` as the recording end when V2 has later runs (§3.1)
+- [ ] Time comparisons against the status or EHR CSVs strip the NWB tz offset
+      with `tz_localize(None)` / `.replace(tzinfo=None)`, never by converting
+      to UTC (§3.1, §3.2)
+- [ ] Every V2 file decodes end to end before use: `completed` in the catalog
+      does not guarantee it, and failed conversions can leave files in `raw/`
+      (§2.2)
+- [ ] Channels pair across versions by electrode `location` label, never by
+      electrode row index (§2.1)
+- [ ] Code that pairs V1 and V2 runs handles V2-only runs and sessions, and
+      runs still pending upload (§1.1)
 - [ ] Output paths still come from `config/paths.py` and land on Oak — V2 changes
       nothing about the artifact contract (`docs/io_conventions.md`)
