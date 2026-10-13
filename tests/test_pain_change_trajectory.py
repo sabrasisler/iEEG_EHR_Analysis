@@ -63,3 +63,31 @@ def test_uncovered_minutes_count_as_excluded(tmp_path):
     s, cnt, v = blocks.window(pd.Timestamp('2000-01-01 10:05:00'), 10)
     _, frac = traj.window_means(s, cnt, v, max_excluded_frac=0.5)
     np.testing.assert_allclose(frac[:, 0], [0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+
+
+def _nwb(path, start, data, names):
+    with h5py.File(path, 'w') as f:
+        f['session_start_time'] = start
+        f[traj.DATA_PATH] = data
+        f[traj.STARTING_TIME_PATH] = 0.0
+        f[traj.STARTING_TIME_PATH].attrs['rate'] = 1.0
+        f[traj.ELECTRODE_LOCATION_PATH] = names
+
+
+def test_runs_sharing_boundary_seconds_count_each_second_once(tmp_path, monkeypatch):
+    """The earlier run keeps the shared seconds, so no minute holds more than 60 windows."""
+    monkeypatch.setattr(config, 'bipolar_psd_fullres_nwb_path',
+                        lambda s, ses, run: tmp_path / f'sub-{s}_ses-{ses}_run-{run}_x.nwb')
+    _nwb(tmp_path / 'sub-000_ses-01_run-AAA_x.nwb', '2000-01-01T10:00:00-08:00',
+         np.zeros((604, 1, 2), dtype=np.float32), ['A'])
+    _nwb(tmp_path / 'sub-000_ses-01_run-BBB_x.nwb', '2000-01-01T10:10:00-08:00',
+         np.ones((600, 1, 2), dtype=np.float32), ['A'])
+    runs = traj.session_runs('000', '01')
+    assert [r.first_row for r in runs] == [0, 4]
+    sess = SimpleNamespace(session_channels=['A'], channels_by_run={}, mask=None)
+    blocks = traj.MinuteBlocks(runs, sess, np.zeros((1, 2)), np.ones((1, 2)), ['A'],
+                               np.arange(2))
+    s, cnt, v = blocks.window(pd.Timestamp('2000-01-01 10:09:00'), 3)
+    np.testing.assert_array_equal(v[:, 0], [60, 60, 60])
+    # 10:10 holds four windows of run AAA (z = 0) and 56 of run BBB (z = 1).
+    np.testing.assert_array_equal(s[1, 0], [56.0, 56.0])

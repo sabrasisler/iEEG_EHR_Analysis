@@ -108,6 +108,7 @@ class Run:
     start: pd.Timestamp
     n_windows: int
     channels: list
+    first_row: int = 0
 
 
 def session_runs(subject, session):
@@ -128,7 +129,16 @@ def session_runs(subject, session):
                             list(f[ELECTRODE_LOCATION_PATH].asstr()[:])))
     if not runs:
         raise FileNotFoundError(f'no bipolar_psd runs in {pattern.parent}')
-    return sorted(runs, key=lambda r: r.start)
+    runs = sorted(runs, key=lambda r: r.start)
+    # Consecutive runs can share their boundary seconds. The earlier run keeps
+    # them, as an epoch is assigned to the earlier run, and the later run's
+    # duplicate rows are skipped.
+    for prev, run in zip(runs, runs[1:]):
+        last = prev.start + pd.Timedelta(seconds=prev.n_windows - 1)
+        run.first_row = max(0, int((last - run.start).total_seconds()) + 1)
+        if run.first_row >= run.n_windows:
+            raise ValueError(f'run-{run.run_id} lies inside run-{prev.run_id}')
+    return runs
 
 
 class MinuteBlocks:
@@ -168,7 +178,7 @@ class MinuteBlocks:
         v = np.zeros((n, c), dtype=np.int32)
         m1 = m0 + pd.Timedelta(minutes=n)
         for run in self.runs:
-            i0 = max(0, int(np.ceil((m0 - run.start).total_seconds())))
+            i0 = max(run.first_row, int(np.ceil((m0 - run.start).total_seconds())))
             i1 = min(run.n_windows, int(np.ceil((m1 - run.start).total_seconds())))
             if i0 >= i1:
                 continue
