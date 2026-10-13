@@ -38,6 +38,24 @@ date, or figure that prompted it.
       2026-10-06 painchange run provenance still names the old path).
       (→ pain-change prediction planning 2026-10-13)
 
+### Continuous 0.5 Hz PSD, `preprocessed/bipolar_psd/` (DECISIONS 2026-10-12)
+
+- [ ] **Pass the gate, then run the discovery array.** Pilot + gate first
+      (`preprocessing/bipolar_psd_fullres_audit`, 0 ulp), resources from the
+      pilot's `seff`, then `run_pipeline_bipolar plan` over
+      `cohorts/subjects_bipolar_psd_fullres_discovery.txt` (63, minus 071/209).
+- [ ] **Re-check Oak free space, then run the remaining subjects** (~2.4 TB
+      more on the 50-bin scaling). New subjects without the variance metric get
+      `VARIANCE=1` and a `--whole-subjects` plan.
+- [ ] **Repoint the 50-bin readers before the scratch purge (~2027-01-10).**
+      `views/channel_meta.py`, `qc/feature_level/{detect_power_outlier,build_feature_mask}.py`,
+      `features/build_pain_epoch_power.py`, `qc/psd_timing.py`,
+      `qc/processing_status.py` and `features/backfill_epoch_defs_timing.py`
+      read `config.bipolar_psd_nwb_path` on `$GROUP_SCRATCH`. Each moves to
+      `bipolar_psd_fullres_nwb_path` or retires.
+- [ ] **A reader for the continuous tree**, so AXIS 2 `whole_session` has a
+      native-grid source.
+
 ### Full-resolution PSD re-extraction (DECISIONS 2026-09-15)
 
 Native 0.5 Hz FFT grid, 1-250 Hz, 499 bins, pain epochs only, into

@@ -13,14 +13,23 @@
 #
 # Re-submitting the same TASK_FILE is safe: finished runs are skipped.
 #
-# RESOURCES -- one CPU, because the work is one serial spectrogram per channel
-# and the parallelism is the array. Memory is one 300-window block, independent
-# of run length. Replace these with the pilot's measured values.
+# RESOURCES -- MEASURED on the 2026-10-12 pilot (job 47574242 + a re-run of
+# sub-208 for getrusage).
+#   --cpus-per-task=1  one serial spectrogram per channel. The parallelism is
+#       the array.
+#   --mem=3GB  process peak 1.27 GB on the worst discovery run (sub-208, 231
+#       pairs @ 1000 Hz). Memory is one 300-window block, so it scales with
+#       channels x sfreq and not with run length. 3 GB covers 231 pairs @ 2000 Hz
+#       (~2.3 GB). Slurm's MaxRSS reads ~8 GB because it counts page cache from
+#       the raw reads and NWB writes, which the kernel reclaims.
+#   --time=01:30:00  ~25 MB/s of raw NWB per task (sub-208: 5.0 GB in 199-209 s),
+#       so a 45 GB `plan --budget-gb 45` task is ~30 min. A timeout only costs a
+#       resubmit, since finished runs are skipped.
 #
 #SBATCH -p normal
-#SBATCH --time=02:00:00
+#SBATCH --time=01:30:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=6GB
+#SBATCH --mem=3GB
 #SBATCH -J bipolar_psd
 #SBATCH -o logs/bipolar_psd_%A_%a.out
 

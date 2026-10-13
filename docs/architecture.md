@@ -19,11 +19,16 @@ then opioid modulation (Aim 3).
 Established upstream, do not redesign:
 
 - **Continuous PSD (stored FEATURE FAMILY)**: `run_pipeline_bipolar.py` reads each
-  raw NWB run once, bipolar re-references (trace never persisted, ~40TB avoided),
-  Welch PSD in **2s windows, 50% overlap (1s hop), 50 log-spaced bins 1-250 Hz**,
-  stored as **log-power** in DecompositionSeries NWB at
-  `derivatives/sisler/preprocessed/bipolar_fft/sub-XXX/ses-XXX/`. Line-noise bins
-  flagged. Per-subject sidecar has FFT params + git provenance.
+  raw NWB run in 300-window blocks, bipolar re-references (trace never persisted,
+  ~40TB avoided), and computes a per-window periodogram in **2s Hann windows, 50%
+  overlap (1s hop), on the native 0.5 Hz grid, 1-250 Hz (499 frequencies)**,
+  stored as float32 **log10 power** in a DecompositionSeries NWB per run at
+  `derivatives/sisler/preprocessed/bipolar_psd/sub-XXX/ses-XXX/`, with a
+  `.provenance.json` sidecar per run. Unmasked, un-notched, unbinned: the 50 log
+  bins are a view. DECISIONS 2026-10-12.
+  - *Until 2026-10-12* the same script stored **50 log-spaced bins** in
+    `preprocessed/bipolar_fft/`. That tree moved to `$GROUP_SCRATCH` and the purge
+    removes it around 2027-01-10. `config.BIPOLAR_PSD_DERIV_ROOT` points at it.
 - **Canonical bands NOT precomputed** — `bipolar_bands.py` aggregates the 50 log-bins
   into bands on demand (delta 1-4, theta 4-8, alpha 8-12, beta 15-25, gamma 25-70,
   high_gamma 70-170 Hz), linear-then-log to avoid Jensen bias.
@@ -165,7 +170,8 @@ base (via the config module), never to a repo-relative path.
 ```
 derivatives/sisler/                          # ROOT = /oak/.../iEEG_EHR/derivatives/sisler/ (ON OAK, NOT THE REPO)
   preprocessed/                              # STORED FEATURE FAMILIES (continuous, per-window)
-    bipolar_fft/       sub-XXX/ses-YYY/       # PSD (exists, log-power NWB)
+    bipolar_psd/       sub-XXX/ses-YYY/       # PSD, native 0.5 Hz grid, log-power NWB per run (2026-10-12)
+                                              # (the 50-log-bin bipolar_fft/ moved to $GROUP_SCRATCH, purged ~2027-01-10)
     bipolar_pac/                              # PAC (future, own extraction off signal)
     bipolar_connectivity/                     # coherence/PLV (future)
   qc/                                        # MOVED OUT of analysis/ — QC is a data property

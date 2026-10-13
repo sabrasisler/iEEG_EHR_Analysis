@@ -189,7 +189,8 @@ distinction worth copying:
 derivatives/sisler/
   README.md
   preprocessed/        CONTINUOUS per-window features over whole runs — expensive
-    bipolar_fft/         the current bipolar Welch PSD (§5). 97 subjects
+    bipolar_psd/         the bipolar PSD, native 0.5 Hz grid, NWB per run (§4.6)
+                         (the 50-bin bipolar_fft/ moved to $GROUP_SCRATCH 2026-10-12)
     bipolar_pac/         (future)
     bipolar_connectivity/(future)
   qc/                  DATA-QUALITY FACTS — properties of the data, inherited by all users
@@ -245,10 +246,10 @@ the most common early mistake:
 
 | | Raw | Derived PSD |
 |---|---|---|
-| Path | `iEEG_NWB/sub-*/ses-*/ieeg/*.nwb` | `derivatives/sisler/preprocessed/bipolar_fft/sub-*/ses-*/*_bipolar_psd.nwb` |
+| Path | `iEEG_NWB/sub-*/ses-*/ieeg/*.nwb` | `derivatives/sisler/preprocessed/bipolar_psd/sub-*/ses-*/*_bipolar_psd_fullres.nwb` |
 | Contains | continuous voltage, `/acquisition` | spectral power, `/processing/ecephys` |
 | Rows are | individual contacts | **bipolar pairs** |
-| Size | ~1.5 GB per run | ~99 MB per run |
+| Size | ~1.5 GB per run | ~1 GB per run (§8) |
 | Use when | you need the time-domain signal | you need power (almost always) |
 
 ### 4.1 Raw files: the acquisition series
@@ -453,47 +454,47 @@ with h5py.File(path, 'r') as f:
 
 ### 4.6 The derived PSD file — what you probably want instead
 
-`derivatives/sisler/preprocessed/bipolar_fft/sub-XXX/ses-YY/*_bipolar_psd.nwb`,
-plus a JSON sidecar with the parameters and git provenance. Produced by
-`run_pipeline_bipolar.py`: read raw once → bipolar re-reference → Welch PSD. The
-bipolar time-domain trace is **never persisted** (that would have been ~40 TB).
+`derivatives/sisler/preprocessed/bipolar_psd/sub-XXX/ses-YY/*_bipolar_psd_fullres.nwb`,
+one per run, each with a `.provenance.json` sidecar beside it, and the tree's
+`manifest.json` at `preprocessed/bipolar_psd/`. Produced by
+`run_pipeline_bipolar.py`: read raw in 300-window blocks → bipolar re-reference →
+per-window periodogram. The bipolar time-domain trace is **never persisted**
+(that would have been ~40 TB). DECISIONS 2026-10-12.
 
-Two objects under `/processing/ecephys`:
+One object under `/processing/ecephys`:
 
 | Object | Type | Shape (sub-019 run) | Contents |
 |---|---|---|---|
-| `psd_log_bins` | `DecompositionSeries` | `(17999, 35, 50)` float32 | **the main product**: (window, bipolar pair, frequency bin), `unit='log10(V^2/Hz)'` |
-| `broadband_log_power` | `TimeSeries` | `(17999, 35)` float32 | mean log-power across non-line-noise bins, per window/pair |
+| `psd_fullres` | `DecompositionSeries` | `(17999, 35, 499)` float32 | (window, bipolar pair, frequency), `unit='log10(V^2/Hz)'` |
 
-Parameters: **2 s Hann windows, 50 % overlap (1 s hop), 50 log-spaced bins from
-1–250 Hz, stored as log10 power.** `rate = 1.0` Hz because the hop is 1 s. 17,999
-windows ≈ 5 hours.
+Parameters: **2 s Hann windows, 50 % overlap (1 s hop), the native 0.5 Hz FFT
+grid from 1.0 to 250.0 Hz (499 frequencies), stored as log10 power.** The grid is
+the same at 500, 1000 and 2000 Hz sampling. `rate = 1.0` Hz because the hop is
+1 s. Row `i` covers `[i, i + 2)` s from the run's `session_start_time`. 17,999
+windows ≈ 5 hours. HDF5 chunks are 300 windows × 1 pair × 499 frequencies, so an
+epoch slice or a single pair reads cheaply.
 
 ```python
-from pynwb import NWBHDF5IO
-with NWBHDF5IO(psd_path, 'r') as io:
-    nwb = io.read()
-    psd = nwb.processing['ecephys']['psd_log_bins']
-
-    bands = psd.bands.to_dataframe()   # bin_00 … bin_49
-    # columns: band_name, band_limits (lo, hi Hz), contains_line_noise,
-    #          band_mean, band_stdev
-    good = ~bands['contains_line_noise'].values      # drop 60 Hz harmonics
-
-    pairs = nwb.electrodes.to_dataframe()            # 35 rows, location 'LA1-LA2'
-    x = psd.data[0:100, :, :]                        # first 100 windows — lazy until here
+import json, h5py
+freqs = json.load(open(f'{root}/manifest.json'))['extra']['freqs_hz']   # the axis
+with h5py.File(psd_path, 'r') as f:
+    psd = f['processing/ecephys/psd_fullres/data']       # lazy
+    pairs = f['general/extracellular_ephys/electrodes/location'].asstr()[:]   # 'LA1-LA2'
+    x = psd[0:300, :, :]                                 # first 5 minutes
 ```
 
-**`contains_line_noise` is why the log bins are stored rather than bands.** Bins
-straddling 60 Hz and its harmonics are flagged so downstream code can exclude
-them; aggregating to bands too early throws that away. For sub-019, 6 of the 50
-bins are flagged — spanning roughly 53–66, 115–129, 161–200 and 224–250 Hz — so
-`good.sum()` is 44. Aggregate on demand with
-`preprocessing/bipolar_bands.py`, which does it **linear-then-log** to avoid
-Jensen bias — see §12 and §14.3.
+**Nothing is removed or reduced.** No QC mask, no line-noise notch, no band or
+log-bin aggregation. Notch with `views.fullres_reader.notch_freqs(half_width)`
+and aggregate to bands **linear-then-log** (§12, §14.3) in a view.
 
 **Values are log10 power. Do not average them in the linear domain by
 accident**, and if you exponentiate, do it in float64 (§12).
+
+**The retired 50-bin file.** Until 2026-10-12 the same script stored
+`psd_log_bins`, `(windows, pairs, 50)` log-spaced bins with `contains_line_noise`
+flags, in `preprocessed/bipolar_fft/`. That tree now sits on `$GROUP_SCRATCH`
+(`config.BIPOLAR_PSD_DERIV_ROOT`) until the purge removes it around 2027-01-10.
+The 50 log bins are a view of the native grid.
 
 ---
 
@@ -607,7 +608,8 @@ Verified 2026-09-04.
 | Raw iEEG | `iEEG_NWB/sub-*/ses-*/ieeg/` | 107 subjects |
 | EHR tables | `iEEG_NWB/sub-*/ses-*/ehr/` | per session |
 | Run index | `iEEG_NWB/sherlock_file_registry.csv` | 104 subjects, 7,902 runs |
-| **Bipolar PSD** | `derivatives/sisler/preprocessed/bipolar_fft/` | **97 subjects** |
+| **Bipolar PSD**, native 0.5 Hz grid | `derivatives/sisler/preprocessed/bipolar_psd/` | discovery cohort (63 subjects, minus 071/209) in progress 2026-10-12 |
+| Bipolar PSD, 50 log bins (retired) | `$GROUP_SCRATCH/sisler/bipolar_fft/` | 97 subjects. Purged around 2027-01-10 |
 | Raw-voltage QC masks | `derivatives/sisler/qc/raw_voltage/masks/` | 90 subject-sessions per label |
 | Bipolar variance QC | `derivatives/sisler/qc/bipolar/` | ~82 subjects |
 | **Pain epoch cache** (50 log bins) | `derivatives/sisler/features/pain/psd_epochs/epoch-5min-pre/` | **83 files / 81 subjects, 34 GB** |
@@ -616,7 +618,7 @@ Verified 2026-09-04.
 
 ```bash
 D=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler
-ls -1d $D/preprocessed/bipolar_fft/sub-* | wc -l
+ls -1d $D/preprocessed/bipolar_psd/sub-* | wc -l
 ls -1 $D/qc/raw_voltage/masks/gross-std3_satmargin15_sw_logz4/*.csv | wc -l
 ls -1 $D/features/pain/psd_epochs/epoch-5min-pre/cache/*.parquet | wc -l
 du -sh $D/features/pain/psd_epochs/epoch-5min-pre
@@ -651,7 +653,7 @@ flags apply identically to both.
 | Layout | LONG — a `bin` column, 50 rows per window-channel | **WIDE** — one row per window-channel, 499 float32 columns `f000..f498` |
 | Axis lives in | manifest `bin_edges_hz` + `contains_line_noise` | manifest **`freqs_hz`** (the columns are positional; nothing else says what `f000` is in Hz) |
 | Line noise | stored flags, fixed at the ±2 Hz guard it was built with | **a view parameter** — `fullres_reader.notch_freqs(half_width)` |
-| Source | `preprocessed/bipolar_fft` NWBs | **raw NWB** (the full-res PSD exists nowhere on disk) |
+| Source | `preprocessed/bipolar_fft` NWBs (retired 2026-10-12) | **raw NWB** |
 | Reader | `views/cache_reader.py` | `views/fullres_reader.py` |
 | AXIS 2 `whole_session` | available | **NOT available** (no non-epoch windows) |
 | Size | ~34 GB | ~10x that |
@@ -667,7 +669,8 @@ window's 0.5 Hz resolution, so `views.cache_reader.unresolvable_bins` shows the
 
 **Reasons to still reach for `psd_epochs`:** you need an AXIS 2 `whole_session`
 baseline, you are reproducing a pre-2026-09-15 number exactly, or you want the
-smaller file. It is not deprecated.
+smaller file. It is not deprecated. Native-grid whole-session spectra exist in
+`preprocessed/bipolar_psd/` from 2026-10-12 (§4.6), but no view reads them yet.
 
 Everything downstream of the read is SHARED: `views/axes.py` (all seven axes),
 `views/aperiodic.py`, and `cache_reader`'s `load_mask` / `epoch_excluded` /
@@ -878,11 +881,14 @@ iEEG_NWB/sub-019/ses-01/preprocessed/sub-019_ses-01_run-CA0652B0_bipolar_psd.nwb
      and a rebuild by build_file_registry.py would set has_preprocessed=False.
 
 derivatives/sisler/preprocessed/bipolar_fft/sub-019/ses-01/sub-019_ses-01_run-CA0652B0_bipolar_psd.nwb
-   → 99 MB, Jul 2026. CURRENT: 2 s / 50 % overlap / 50 log bins (§4.6).
+   → 99 MB, Jul 2026. RETIRED 2026-10-12: 2 s / 50 % overlap / 50 log bins.
+     Now on $GROUP_SCRATCH/sisler/bipolar_fft/ until the purge.
 ```
 
 Same filename, ~170× size difference. Use `config.bipolar_psd_nwb_path()`. The
-in-tree `_bipolar_fullTFR.nwb` files are likewise legacy.
+in-tree `_bipolar_fullTFR.nwb` files are likewise legacy. The CURRENT file is
+`preprocessed/bipolar_psd/.../*_bipolar_psd_fullres.nwb` (§4.6), named apart on
+purpose. Use `config.bipolar_psd_fullres_nwb_path()`.
 
 **14.1b The FULL-RESOLUTION epoch cache reads `freqs_hz` from its manifest, not
 a config constant — and the 50-bin path still does the opposite.**
