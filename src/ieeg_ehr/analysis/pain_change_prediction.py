@@ -260,7 +260,6 @@ def main(argv=None):
     run_dir = score(args.trajectory_dir, args.weights, args.run_name)
     for weighting in PREDICTIONS:
         plots.render_all(run_dir, weights_name=args.weights, weighting=weighting)
-    plots.render_dz(run_dir)
     print(run_dir)
     return 0
 

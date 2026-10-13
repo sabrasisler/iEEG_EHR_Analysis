@@ -18,7 +18,6 @@ marks.
                          report before t1 + 3 h
     coverage             pairs and subjects contributing per step and bin
     subject_detail       per subject: each pair, and the bin means
-    dz_domains           mean d_z per domain x band by bin (no weights)
 
 Written to `<run>/figures/` as PNG and PDF, suffixed with the weighting.
 """
@@ -39,10 +38,7 @@ from ieeg_ehr import io  # noqa: E402
 from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR  # noqa: E402
 from ieeg_ehr.analysis.pain_change_prediction import (DPAIN_BINS, assign_bins,  # noqa: E402
                                                       load_trajectory)
-from ieeg_ehr.analysis.plot_band_map_domains import domain_rows  # noqa: E402
-from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS  # noqa: E402
-from ieeg_ehr.features.build_pain_change_trajectory import (BAND_SET,  # noqa: E402
-                                                            WINDOW_MIN, cell_column)
+from ieeg_ehr.features.build_pain_change_trajectory import WINDOW_MIN  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +52,6 @@ NEUTRAL = '#5f5e5a'
 TERCILE_COLOURS = ('#86b6ef', '#2a78d6', '#104281')
 INK, MUTED, GRID, SHADE = '#2b2b29', '#6b6a66', '#e4e3df', '#f0efec'
 DOSE_WINDOW_MIN = 10
-DOMAIN_SCHEME = 'pain_domains_v4'
 
 
 # ============================================================================
@@ -131,7 +126,7 @@ def _legend(ax, **kw):
 
 
 def _footer(fig, text):
-    fig.text(0.01, 0.005, text, fontsize=7, color=MUTED, ha='left', va='bottom')
+    fig.text(0.01, -0.01, text, fontsize=7, color=MUTED, ha='left', va='top')
 
 
 def _save(fig, out_dir, name):
@@ -152,8 +147,7 @@ def fig_validation(df, out_dir, tag, title):
     rng = np.random.default_rng(0)
     fig, ax = plt.subplots(figsize=(5.2, 4.6))
     _style(ax)
-    lim = np.nanpercentile(np.abs(at_t2['value']), 99) if len(at_t2) else 1
-    lim = max(lim, at_t2['delta_pain'].abs().max() + 1)
+    lim = max(at_t2['value'].abs().max(), at_t2['delta_pain'].abs().max()) * 1.05
     ax.plot([-lim, lim], [-lim, lim], color=MUTED, lw=0.8, ls='--', label='identity')
     for i, sid in enumerate(subjects):
         s = at_t2[at_t2['subject'] == sid]
@@ -224,7 +218,7 @@ def fig_dose(df, out_dir, name, title, min_subjects, hue=None, hue_levels=(),
                 ax.annotate(f'{r.n_subjects}/{r.n_pairs}', (r.delta_pain, r.mean),
                             textcoords='offset points', xytext=(0, 8), ha='center',
                             fontsize=7, color=MUTED)
-    ax.set_xlim(df['delta_pain'].min() - 1, df['delta_pain'].max() + 1)
+    ax.set_xlim(pts['delta_pain'].min() - 1, pts['delta_pain'].max() + 1)
     _dose_axes(ax, title)
     _legend(ax, loc='upper left')
     _footer(fig, 'Labels: subjects/pairs. Points with fewer than '
@@ -286,6 +280,9 @@ def fig_subject_detail(df, out_dir, name, title, bins):
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 2.8 * nrows),
                              sharex=True, sharey=True, squeeze=False)
     colour_of = dict(zip(bins, BIN_COLOURS))
+    # Single pairs reach far past the bin means, so the shared y axis is clipped.
+    lim = max(np.nanpercentile(df['value'].abs(), 99), 5.0)
+    n_out = int((df['value'].abs() > lim).sum())
     for ax, sid in zip(axes.flat, subjects):
         _style(ax)
         _time_axis(ax)
@@ -300,73 +297,33 @@ def fig_subject_detail(df, out_dir, name, title, bins):
                 ax.plot(m['t_min'] / 60, m['value'], color=colour_of[b], lw=1.8)
         ax.set_title(f'{sid} ({s["pair_id"].nunique()} pairs)', fontsize=9, color=INK)
         ax.set_xlabel('')
+        ax.set_ylim(-lim, lim)
     for ax in axes.flat[len(subjects):]:
         ax.set_visible(False)
-    handles = [plt.Line2D([], [], color=c, lw=1.8) for c in BIN_COLOURS[:len(bins)]]
-    fig.legend(handles, list(bins), loc='lower center', ncol=len(bins), frameon=False,
-               fontsize=8, labelcolor=INK)
     fig.supxlabel('Hours since first report', color=INK, fontsize=9)
     fig.supylabel('Predicted Δpain (NRS)', color=INK, fontsize=9)
-    fig.suptitle(title, fontsize=10, color=INK)
-    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    fig.suptitle(f'{title}\nThin: single pairs. Thick: bin means. y clipped at ±{lim:.0f} '
+                 f'({n_out} of {df["value"].notna().sum()} values beyond).',
+                 fontsize=10, color=INK)
+    fig.tight_layout()
+    handles = [plt.Line2D([], [], color=c, lw=1.8) for c in BIN_COLOURS[:len(bins)]]
+    fig.legend(handles, list(bins), loc='upper center', bbox_to_anchor=(0.5, 0.0),
+               ncol=len(bins), frameon=False, fontsize=8, labelcolor=INK)
     _save(fig, out_dir, name)
-
-
-# ============================================================================
-# d_z by domain (no weights)
-# ============================================================================
-
-def fig_dz_domains(pairs, dz, out_dir, min_subjects, bins):
-    bands = list(BAND_SETS[BAND_SET])
-    regions = list(dict.fromkeys(c.split('|')[0] for c in dz.columns if '|' in c
-                                 and not c.startswith('n_channels')))
-    groups = domain_rows(regions, DOMAIN_SCHEME)
-    meta = pairs[['pair_id', 'subject', 'delta_pain']].assign(
-        bin=assign_bins(pairs['delta_pain'], bins))
-    fig, axes = plt.subplots(len(groups), len(bands),
-                             figsize=(2.6 * len(bands), 2.2 * len(groups)),
-                             sharex=True, sharey=True, squeeze=False)
-    for i, (domain, rois) in enumerate(groups):
-        for j, band in enumerate(bands):
-            ax = axes[i, j]
-            _style(ax)
-            _time_axis(ax)
-            ax.set_xlabel('')
-            cols = [cell_column(r, band) for r in rois]
-            with np.errstate(invalid='ignore'):
-                value = np.nanmean(dz[cols].to_numpy(dtype=float), axis=1)
-            df = dz[['pair_id', 't_min']].assign(value=value).merge(meta, on='pair_id')
-            _trajectory_lines(ax, df, 'bin', list(bins), BIN_COLOURS, min_subjects)
-            if i == 0:
-                ax.set_title(band, fontsize=9, color=INK)
-            if j == 0:
-                ax.set_ylabel(domain, fontsize=9, color=INK)
-    handles = [plt.Line2D([], [], color=c, lw=1.6) for c in BIN_COLOURS[:len(bins)]]
-    fig.legend(handles, list(bins), loc='lower center', ncol=len(bins), frameon=False,
-               fontsize=8, labelcolor=INK)
-    fig.suptitle('d_z (ROI mean within domain) by Δpain bin', fontsize=10, color=INK)
-    fig.supxlabel('Hours since first report', color=INK, fontsize=9)
-    fig.tight_layout(rect=(0, 0.04, 1, 1))
-    _save(fig, out_dir, 'dz_domains')
 
 
 # ============================================================================
 # Entry points
 # ============================================================================
 
-def _run_inputs(run_dir, weights_name):
-    params = json.loads((Path(run_dir) / 'provenance.json').read_text())['params']
-    pairs, dz = load_trajectory(params['trajectory_dir'])
-    preds = io.read_table(Path(run_dir) / f'predictions_{weights_name}.csv', on_stale='warn')
-    return params, pairs, dz, preds
-
-
 def render_all(run_dir, weights_name, weighting='uniform', min_subjects=3, bins=None):
     """Every prediction figure for one weighting."""
     bins = bins or DPAIN_BINS
     run_dir = Path(run_dir)
     out_dir = run_dir / FIGURES_SUBDIR
-    _, pairs, _, preds = _run_inputs(run_dir, weights_name)
+    params = json.loads((run_dir / 'provenance.json').read_text())['params']
+    pairs, _ = load_trajectory(params['trajectory_dir'])
+    preds = io.read_table(run_dir / f'predictions_{weights_name}.csv', on_stale='warn')
     meta = pairs.assign(bin=assign_bins(pairs['delta_pain'], bins))[
         ['pair_id', 'subject', 'bin', 'delta_pain', 'gap_min', 'pain1',
          'analgesic_in_interval', 'next_report_in_window']]
@@ -395,14 +352,6 @@ def render_all(run_dir, weights_name, weighting='uniform', min_subjects=3, bins=
     fig_subject_detail(df, out_dir, f'subject_detail_{tag}', title, list(bins))
 
 
-def render_dz(run_dir, min_subjects=3, bins=None):
-    """The weights-free d_z figure."""
-    params = json.loads((Path(run_dir) / 'provenance.json').read_text())['params']
-    pairs, dz = load_trajectory(params['trajectory_dir'])
-    fig_dz_domains(pairs, dz, Path(run_dir) / FIGURES_SUBDIR, min_subjects,
-                   bins or DPAIN_BINS)
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -417,7 +366,6 @@ def main(argv=None):
                         format='%(asctime)s %(levelname)s %(message)s')
     bins = {k: tuple(v) for k, v in args.bins.items()} if args.bins else None
     render_all(args.run_dir, args.weights, args.weighting, args.min_subjects, bins)
-    render_dz(args.run_dir, args.min_subjects, bins)
     io.log_analysis(f'pain_change prediction figures, {args.weighting}', Path(args.run_dir))
     return 0
 
