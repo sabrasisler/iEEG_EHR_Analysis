@@ -30,7 +30,9 @@ set -euo pipefail
 # A running task's in-progress run has no NWB yet, so it would be listed and its
 # .partial.nwb deleted from under it. Tasks only COMPLETING when the
 # afterany dependency releases this job are already done writing.
-if [ -n "$(squeue -h -t PENDING,RUNNING,SUSPENDED -j "$ARRAY_JOB" 2>/dev/null)" ]; then
+# Listed by array id, not `squeue -j`: for a purged id that prints its error to
+# STDOUT and exits 0.
+if squeue -h -u "$USER" -t PENDING,RUNNING,SUSPENDED -o %F | grep -qx "$ARRAY_JOB"; then
     echo "array $ARRAY_JOB still has tasks in the queue; run after it ends" >&2
     exit 1
 fi
