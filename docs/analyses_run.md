@@ -452,3 +452,6 @@ working tree had uncommitted changes, so that commit does NOT describe what ran.
 - 2026-10-12 15:42 | dk_midpoint label coverage, hemispheres merged, 50 labels, 6619 pairs, n=49 | $DERIV/analysis/electrode_localization/dk_midpoint_coverage/label_counts/contpain_ref_coordqc_20261012-154215 | 2afb887c0d5f+dirty | [ ]
 - 2026-10-12 15:46 | cabnp label coverage, hemispheres merged, 14 labels, 6619 pairs, n=49 | $DERIV/analysis/electrode_localization/cabnp_coverage/label_counts/contpain_ref_coordqc_20261012-154559 | 2afb887c0d5f+dirty | [ ]
 - 2026-10-12 15:46 | hcpex label coverage, hemispheres merged, 197 labels, 6619 pairs, n=49 | $DERIV/analysis/electrode_localization/hcpex_coverage/label_counts/contpain_ref_coordqc_20261012-154559 | 2afb887c0d5f+dirty | [ ]
+- 2026-10-13 16:07 | pain_change sliding-window d_z, 1 subject(s) | $DERIV/features/pain/pain_change_trajectory/dz-w5m-s1m-h180m_5d6156e6a827 | 6006639f5648 | [ ]
+- 2026-10-13 16:08 | pain_change sliding-window d_z, 1 subject(s) | $DERIV/features/pain/pain_change_trajectory/dz-w5m-s1m-h180m_5d6156e6a827 | 6006639f5648+dirty | [ ]
+- 2026-10-13 16:18 | pain_change sliding-window prediction, weights insample_painchange_20261006-211218, 4 subjects, 194 pairs | $DERIV/analysis/pain/pain_change/prediction/painpred_pilot_20261013-161854 | 6006639f5648+dirty | [ ]
