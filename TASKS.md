@@ -31,6 +31,12 @@ date, or figure that prompted it.
       constants** (formula, `vc_formula`, REML/optimizer/maxiter, correction,
       floors). Template: `analysis/pain_change.py:write_methods`. Audit in
       notebook 2026-10-06 16:45.
+- [ ] **Move `zscore_epochs` out of `analysis/`** into
+      `config.fullres_epoch_views_dir` (`fullresz-zscoreallep-relpain_a06f488c2cc2`),
+      drop `config.pain_change_zscore_dir`, point `build_pain_epoch_fullres_zscore`
+      at the new path, and append a DECISIONS entry that maps old path to new (the
+      2026-10-06 painchange run provenance still names the old path).
+      (→ pain-change prediction planning 2026-10-13)
 
 ### Full-resolution PSD re-extraction (DECISIONS 2026-09-15)
 
