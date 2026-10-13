@@ -1123,3 +1123,23 @@ from the same block reads. Off for discovery, which already has it.
 
 *Reverses if:* Oak cannot hold the remaining subjects losslessly, or a change of
 `PSD_WINDOW_SEC`, which changes the grid.
+
+## 2026-10-13 — sub-071 and sub-209 leave every discovery analysis
+
+`config.discovery_subjects()` now returns the locked set minus
+`config.EXCLUDED_DISCOVERY = ('071', '209')`. The user made this call.
+
+**Why:** both subjects have distorted MNI coordinate registration, which already
+kept them out of the continuous `bipolar_psd` extraction (2026-10-12). Their ROI
+labels and the insula split depend on those coordinates.
+
+**They stay locked discovery.** The cohort file is not edited, and
+`unassigned_subjects()` subtracts the full locked set, so neither subject can
+become unassigned or hold-out eligible. `split_of` reports them as `excluded`.
+
+**Earlier runs keep them.** The 2026-10-06 `pain_change` grid
+(`painchange_20261006-211218`) fit 55 subjects including both, so its weights
+come from a cohort that no longer exists. A run's `provenance.json` `subjects[]`
+remains the record of who was in it.
+
+*Reverses if:* their coordinates are re-registered and pass the coordinate QC.

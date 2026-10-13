@@ -64,6 +64,11 @@ SPLITS = ('discovery', 'unassigned', 'all')
 # a view; sub-259 needs its PSD re-extracted first (qc/psd_timing/).
 SELECTED_NOT_ANALYSED = ('122', '138', '212', '235', '259')
 
+# Locked discovery subjects that no analysis may use: distorted MNI coordinate
+# registration (DECISIONS 2026-10-13). They stay in the locked set, so they never
+# become unassigned or hold-out eligible.
+EXCLUDED_DISCOVERY = ('071', '209')
+
 
 class HoldoutUnavailableError(RuntimeError):
     """`--split heldout` was requested before the matched hold-out exists.
@@ -94,9 +99,14 @@ def load_discovery_cohort(path=None):
         return json.load(fh)
 
 
-def discovery_subjects(path=None):
-    """The locked discovery set, sorted."""
+def locked_discovery_subjects(path=None):
+    """The locked discovery set as drawn, EXCLUDED_DISCOVERY included, sorted."""
     return sorted(_norm(s) for s in load_discovery_cohort(path)['discovery'])
+
+
+def discovery_subjects(path=None):
+    """The discovery subjects an analysis may use: the locked set minus EXCLUDED_DISCOVERY."""
+    return [s for s in locked_discovery_subjects(path) if s not in EXCLUDED_DISCOVERY]
 
 
 def registry_subjects():
@@ -112,7 +122,7 @@ def unassigned_subjects(path=None):
     would be wrong the moment one lands. Storing only the discovery side means the
     file states the irreversible fact and infers the rest.
     """
-    discovery = set(discovery_subjects(path))
+    discovery = set(locked_discovery_subjects(path))
     return [s for s in registry_subjects() if s not in discovery]
 
 
@@ -210,8 +220,11 @@ def viewable_subjects(split='discovery', mask_label=None, minutes_before=None, p
 
 
 def split_of(subject, path=None):
-    """'discovery' or 'unassigned' for one subject."""
-    return 'discovery' if _norm(subject) in set(discovery_subjects(path)) else 'unassigned'
+    """'excluded', 'discovery' or 'unassigned' for one subject."""
+    subject = _norm(subject)
+    if subject in EXCLUDED_DISCOVERY:
+        return 'excluded'
+    return 'discovery' if subject in set(locked_discovery_subjects(path)) else 'unassigned'
 
 
 def assert_split_allowed(subjects, split='discovery', path=None):
@@ -238,6 +251,7 @@ def cohort_provenance(path=None):
     cohort = load_discovery_cohort(path)
     return {'cohort_file': str(path or DISCOVERY_COHORT_JSON),
             'n_discovery': len(cohort['discovery']),
+            'excluded_discovery': list(EXCLUDED_DISCOVERY),
             'created': cohort.get('created'),
             'source': cohort.get('source')}
 
@@ -345,6 +359,7 @@ def main():
         print(f"discovery   : {len(disc)}  {' '.join(disc)}")
         print(f"unassigned  : {len(unas)}  {' '.join(unas[:20])}"
               f"{' ...' if len(unas) > 20 else ''}")
+        print(f"excluded    : {' '.join(EXCLUDED_DISCOVERY)}")
         print(f"selected but never analysed: {' '.join(cohort.get('selected_not_analysed', []))}")
 
 
