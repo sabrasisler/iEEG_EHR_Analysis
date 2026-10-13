@@ -39,6 +39,7 @@ Each run lands in `analysis/pain/pain_change/bandpower/<run_name>_<timestamp>/`
 """
 
 import argparse
+import dataclasses
 import inspect
 import logging
 import os
@@ -130,8 +131,8 @@ def cell_frame(index, values, j, pairs):
     return df.reset_index(drop=True)
 
 
-def fit_cell_record(df, meta, min_subjects):
-    """One row of results for one ROI x frequency cell."""
+def fit_cell_record(df, meta, min_subjects, with_lrt=True):
+    """One row of results for one ROI x frequency cell. `with_lrt=False` skips the reduced fit."""
     t0 = time.time()
     base = {**meta, 'n_subjects': df['subject'].nunique(),
             'n_channels': df['channel_uid'].nunique(),
@@ -145,11 +146,13 @@ def fit_cell_record(df, meta, min_subjects):
         res, warn = mm.fit_cell(df, mm.VC_CHANGE, formula=FORMULA)
     except mm.CellFitError as exc:
         return {**base, 'converged': False, 'error': str(exc)[:200]}
-    try:
-        res_red, _ = mm.fit_cell(df, mm.VC_CHANGE_REDUCED, formula=FORMULA)
-        stat, p_lrt = mm.lrt(res, res_red)
-    except mm.CellFitError:
-        stat, p_lrt = np.nan, np.nan
+    stat, p_lrt = np.nan, np.nan
+    if with_lrt:
+        try:
+            res_red, _ = mm.fit_cell(df, mm.VC_CHANGE_REDUCED, formula=FORMULA)
+            stat, p_lrt = mm.lrt(res, res_red)
+        except mm.CellFitError:
+            pass
 
     rec = dict(base)
     for term, prefix in TERMS:
@@ -162,6 +165,91 @@ def fit_cell_record(df, meta, min_subjects):
                 'converged': bool(res.converged), 'n_warnings': len(warn),
                 'error': '', 'fit_seconds': round(time.time() - t0, 1)})
     return rec
+
+
+@dataclasses.dataclass
+class Rows:
+    """Every pair x channel d_z row of a fit, with what the cell fits need."""
+    index: pd.DataFrame
+    values: np.ndarray
+    pairs: pd.DataFrame
+    regions: list
+    cols: list
+    col_hz: dict
+    bands: dict
+    notch: list
+    no_roi: list
+    split_report: dict
+
+
+def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
+              notch_half_width_hz=None, insula_threshold=None):
+    """The d_z rows of the z-score tables at `paths`, ROI-mapped channels only.
+
+    `insula_threshold` pins the coordinate insula split to an earlier run's cut.
+    """
+    subjects = {f'sub-{fullres_cells.subject_session_of(p)[0]}' for p in paths}
+    split_report = {}
+    roi_by_subject, no_roi = roi_maps(paths, subjects, roi_scheme,
+                                      insula_threshold=insula_threshold,
+                                      report=split_report)
+    regions = view_tables.roi_regions_for({'roi_scheme': roi_scheme})
+
+    admin = med_state.load_admin_table(subclasses=med_state.DRUG_SETS['analgesics'])
+    defs = med_state.load_epoch_defs(subjects=sorted(subjects))
+    pairs = change_score.build_pairs(defs, admin, min_gap_min, max_gap_min)
+
+    freq_table, notch = fullres_cells.analysis_freq_table(notch_half_width_hz)
+    bands = BAND_SETS.get(band_set)
+    if bands is None:
+        all_cols = fullres_reader.freq_columns()
+        cols = [all_cols[i] for i in freq_table.index]
+        col_hz = {c: (float(freq_table.at[i, 'bin_low_hz']),
+                      float(freq_table.at[i, 'bin_high_hz']))
+                  for c, i in zip(cols, freq_table.index)}
+    else:
+        cols, col_hz = list(bands), dict(bands)
+
+    index_parts, value_parts = [], []
+    for path in paths:
+        subject, session = fullres_cells.subject_session_of(path)
+        sid = f'sub-{subject}'
+        sp = pairs[(pairs['subject'] == subject) & (pairs['session'] == session)]
+        if sid not in roi_by_subject or sp.empty:
+            logger.warning('%s ses-%s: %s, skipped', sid, session,
+                           'no pairs' if sp.empty else 'no ROI-labelled channel')
+            continue
+        idx, vals = session_rows(path, sp.reset_index(drop=True),
+                                 roi_by_subject[sid], freq_table, bands)
+        if idx is not None:
+            index_parts.append(idx)
+            value_parts.append(vals)
+    index = pd.concat(index_parts, ignore_index=True)
+    logger.info('%d pair x channel rows, %d subjects, %d regions x %d %s cells',
+                len(index), index['subject'].nunique(), len(regions), len(cols), band_set)
+    return Rows(index, np.vstack(value_parts), pairs, regions, cols, col_hz, bands,
+                notch, no_roi, split_report)
+
+
+def cell_jobs(rows, min_subjects, holdout=None, with_lrt=True):
+    """One delayed fit per ROI x frequency cell, without `holdout`'s rows when given.
+
+    A generator, so joblib builds each cell frame only when a worker is free.
+    """
+    from joblib import delayed
+    keep = (rows.index['subject'] != holdout).to_numpy()
+    for region in rows.regions:
+        in_region = (rows.index['region'] == region).to_numpy() & keep
+        if not in_region.any():
+            continue
+        sub_index, sub_values = rows.index[in_region], rows.values[in_region]
+        for j, col in enumerate(rows.cols):
+            meta = {'region': region, 'freq': col, 'freq_low_hz': rows.col_hz[col][0],
+                    'freq_high_hz': rows.col_hz[col][1]}
+            if holdout is not None:
+                meta['heldout_subject'] = holdout
+            yield delayed(fit_cell_record)(cell_frame(sub_index, sub_values, j, rows.pairs),
+                                           meta, min_subjects, with_lrt)
 
 
 def random_effects_text(vc):
@@ -235,7 +323,7 @@ Consecutive assessment pairs within a session, {params['min_gap_min']:g}-{params
 
 
 def main(argv=None):
-    from joblib import Parallel, delayed
+    from joblib import Parallel
 
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -258,65 +346,13 @@ def main(argv=None):
 
     vc = view_config.from_args(args)
     zdir = zview.zscore_dir(vc)
-    paths = discovery_paths(zdir)
-    subjects = {f'sub-{fullres_cells.subject_session_of(p)[0]}' for p in paths}
-
-    split_report = {}
-    roi_by_subject, no_roi = roi_maps(paths, subjects, args.roi_scheme,
-                                      report=split_report)
-    regions = view_tables.roi_regions_for({'roi_scheme': args.roi_scheme})
-
-    admin = med_state.load_admin_table(subclasses=med_state.DRUG_SETS['analgesics'])
-    defs = med_state.load_epoch_defs(subjects=sorted(subjects))
-    pairs = change_score.build_pairs(defs, admin, args.min_gap_min, args.max_gap_min)
-
-    freq_table, notch = fullres_cells.analysis_freq_table(args.notch_half_width_hz)
-    bands = BAND_SETS.get(args.band_set)
-    if bands is None:
-        all_cols = fullres_reader.freq_columns()
-        cols = [all_cols[i] for i in freq_table.index]
-        col_hz = {c: (float(freq_table.at[i, 'bin_low_hz']),
-                      float(freq_table.at[i, 'bin_high_hz']))
-                  for c, i in zip(cols, freq_table.index)}
-    else:
-        cols, col_hz = list(bands), dict(bands)
-
-    index_parts, value_parts = [], []
-    for path in paths:
-        subject, session = fullres_cells.subject_session_of(path)
-        sid = f'sub-{subject}'
-        sp = pairs[(pairs['subject'] == subject) & (pairs['session'] == session)]
-        if sid not in roi_by_subject or sp.empty:
-            logger.warning('%s ses-%s: %s, skipped', sid, session,
-                           'no pairs' if sp.empty else 'no ROI-labelled channel')
-            continue
-        idx, vals = session_rows(path, sp.reset_index(drop=True),
-                                 roi_by_subject[sid], freq_table, bands)
-        if idx is not None:
-            index_parts.append(idx)
-            value_parts.append(vals)
-    index = pd.concat(index_parts, ignore_index=True)
-    values = np.vstack(value_parts)
-    logger.info('%d pair x channel rows, %d subjects, %d regions x %d %s cells',
-                len(index), index['subject'].nunique(), len(regions), len(cols),
-                args.band_set)
-
-    def cells_to_fit():
-        # A generator, so joblib builds each cell frame only when a worker is free.
-        for region in regions:
-            in_region = (index['region'] == region).to_numpy()
-            if not in_region.any():
-                continue
-            sub_index, sub_values = index[in_region], values[in_region]
-            for j, col in enumerate(cols):
-                meta = {'region': region, 'freq': col, 'freq_low_hz': col_hz[col][0],
-                        'freq_high_hz': col_hz[col][1]}
-                yield delayed(fit_cell_record)(
-                    cell_frame(sub_index, sub_values, j, pairs), meta, args.min_subjects)
-
-    logger.info('fitting up to %d cells on %d worker(s)', len(regions) * len(cols),
+    rows = load_rows(discovery_paths(zdir), args.roi_scheme, args.band_set,
+                     args.min_gap_min, args.max_gap_min, args.notch_half_width_hz)
+    index, pairs, bands, notch = rows.index, rows.pairs, rows.bands, rows.notch
+    no_roi, split_report = rows.no_roi, rows.split_report
+    logger.info('fitting up to %d cells on %d worker(s)', len(rows.regions) * len(rows.cols),
                 args.n_jobs)
-    records = Parallel(n_jobs=args.n_jobs, verbose=5)(cells_to_fit())
+    records = Parallel(n_jobs=args.n_jobs, verbose=5)(cell_jobs(rows, args.min_subjects))
     cells = add_fdr(pd.DataFrame(records), 'dpain_p', 'dpain')
 
     run_dir = config.analysis_run_dir(

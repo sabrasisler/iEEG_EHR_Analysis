@@ -59,3 +59,15 @@ def test_bins_cover_every_score_change_and_count_both_levels():
     counts = pcp.count_table(pairs).set_index(['level', 'group'])
     assert counts.loc[('bin', 'no change'), 'n_subjects'] == 1
     assert counts.loc[('delta_pain', 0), 'n_pairs'] == 2
+
+
+def test_loo_export_keeps_folds_and_drops_the_gate_fold(tmp_path, monkeypatch):
+    cells = pd.DataFrame({
+        'region': ['A'] * 3, 'freq': ['alpha'] * 3, 'dpain_beta': [0.02, 0.03, np.nan],
+        'var_resid': [0.1, 0.1, np.nan], 'n_subjects': 9, 'n_pairs': 50,
+        'converged': [True, True, False], 'heldout_subject': ['none', 's1', 's2']})
+    monkeypatch.setattr(pcp.io, 'read_table', lambda path, on_stale: cells)
+    (tmp_path / 'cells_loo.csv').touch()
+    w = pcp.export_weights(tmp_path)
+    assert list(w['heldout_subject']) == ['s1']
+    assert w['beta'].tolist() == [0.03]

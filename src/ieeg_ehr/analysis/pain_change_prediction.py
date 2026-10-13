@@ -12,8 +12,9 @@ weights file, so a leave-one-subject-out or split-half set needs only a new file
 
 `weights` exports one row per CONVERGED ROI x band cell of a `pain_change` fit:
 `roi, band, beta` (the `d_pain` fixed effect), `var_resid`, `n_subjects`, `n_pairs`.
-A held-out set uses the same schema plus `heldout_subject`, one set of rows per
-fold, and `predict` scores each subject with the fold that excluded it.
+From a `pain_change_loo` run it exports the same schema plus `heldout_subject`, one
+set of rows per fold, and `predict` scores each subject with the fold that
+excluded it.
 
 `score` computes, per pair and window end t, over the cells the subject has
 (a NaN cell drops out of both sums):
@@ -84,14 +85,29 @@ def count_table(pairs, bins=None):
 # Weights
 # ============================================================================
 
+def weights_source(source_run):
+    """`cells_loo.csv` of a `pain_change_loo` run, else `cells.csv` of a `pain_change` run."""
+    loo = Path(source_run) / 'cells_loo.csv'
+    return loo if loo.exists() else Path(source_run) / 'cells.csv'
+
+
 def export_weights(source_run):
-    """The converged cells of a pain_change run, in the weights schema."""
-    cells = io.read_table(Path(source_run) / 'cells.csv', on_stale='warn')
+    """The converged cells of a pain_change run, in the weights schema.
+
+    From a leave-one-subject-out run, one set per fold with `heldout_subject`,
+    the everyone-in gate fold left out.
+    """
+    from ieeg_ehr.analysis.pain_change_loo import NO_HOLDOUT
+    cells = io.read_table(weights_source(source_run), on_stale='warn')
+    columns = list(WEIGHT_COLUMNS)
+    if 'heldout_subject' in cells.columns:
+        cells = cells[cells['heldout_subject'] != NO_HOLDOUT]
+        columns.append('heldout_subject')
     keep = (cells['converged'].astype(bool) & np.isfinite(cells['dpain_beta'])
             & np.isfinite(cells['var_resid']))
     w = cells[keep].rename(columns={'region': 'roi', 'freq': 'band', 'dpain_beta': 'beta'})
     logger.info('%d of %d cells converged and exported', len(w), len(cells))
-    return w[WEIGHT_COLUMNS].reset_index(drop=True)
+    return w[columns].reset_index(drop=True)
 
 
 # ============================================================================
@@ -251,7 +267,7 @@ def main(argv=None):
         path = io.write_table(weights, config.pain_change_prediction_weights_path(args.name),
                               params={'source_run': str(args.source_run),
                                       'filter': 'converged, finite beta and var_resid'},
-                              parents=[str(Path(args.source_run) / 'cells.csv')],
+                              parents=[str(weights_source(args.source_run))],
                               script=SCRIPT)
         print(path)
         return 0
