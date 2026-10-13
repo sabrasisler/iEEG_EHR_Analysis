@@ -407,6 +407,18 @@ def test_median_split_can_be_pinned_to_an_earlier_runs_threshold():
     assert list(out['ins_part']) == ['aIns', 'aIns', 'aIns']
 
 
+def test_pinned_split_accepts_a_cohort_with_no_insula():
+    """One subject without insular contacts, as a per-subject array task sees it."""
+    import pytest
+    from ieeg_ehr.analysis import insula_ap
+    empty = pd.DataFrame(columns=['subject_id', 'channel', 'mni_x', 'mni_y', 'mni_z',
+                                  'hemisphere'])
+    out, desc = insula_ap.median_split(empty, threshold=-1.5)
+    assert out.empty and desc['n_anterior'] == 0
+    with pytest.raises(SystemExit):
+        insula_ap.median_split(empty)
+
+
 # ---------------------------------------------------------------------------
 # DerSimonian-Laird tau / I2 (domain-level consistency)
 # ---------------------------------------------------------------------------

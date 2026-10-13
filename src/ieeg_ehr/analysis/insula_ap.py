@@ -136,7 +136,10 @@ def load_insula_contacts(subjects, session=None, epoch_minutes=None):
                             'mni_x', 'mni_y', 'mni_z']])
 
     if not frames:
-        raise SystemExit('no insular contact found in any subject')
+        # A pinned split has nothing to do here. median_split refuses an unpinned one.
+        logger.warning('no insular contact found in any subject')
+        frames = [pd.DataFrame(columns=['subject_id', 'channel', 'dk_anode',
+                                        'mni_x', 'mni_y', 'mni_z'])]
 
     contacts = pd.concat(frames, ignore_index=True)
     n0 = len(contacts)
@@ -175,6 +178,8 @@ def median_split(contacts, axis=SPLIT_AXIS, per_hemisphere=False, threshold=None
     written down or two implementations will differ by it.
     """
     out = contacts.copy()
+    if out.empty and threshold is None:
+        raise SystemExit('no insular contact found in any subject')
 
     if threshold is not None:
         thresholds = (dict(threshold) if isinstance(threshold, dict)
