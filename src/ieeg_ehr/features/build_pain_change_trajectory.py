@@ -130,14 +130,17 @@ def session_runs(subject, session):
     if not runs:
         raise FileNotFoundError(f'no bipolar_psd runs in {pattern.parent}')
     runs = sorted(runs, key=lambda r: r.start)
-    # Consecutive runs can share their boundary seconds. The earlier run keeps
-    # them, as an epoch is assigned to the earlier run, and the later run's
-    # duplicate rows are skipped.
-    for prev, run in zip(runs, runs[1:]):
-        last = prev.start + pd.Timedelta(seconds=prev.n_windows - 1)
-        run.first_row = max(0, int((last - run.start).total_seconds()) + 1)
-        if run.first_row >= run.n_windows:
-            raise ValueError(f'run-{run.run_id} lies inside run-{prev.run_id}')
+    # Runs can share seconds: consecutive runs at their boundary (sub-143), or two
+    # recording systems during a switch (sub-211). Any earlier run keeps a shared
+    # second, as an epoch is assigned to the earlier run, and a later run's
+    # duplicate rows are skipped. A run with no new second contributes nothing.
+    covered = runs[0].start + pd.Timedelta(seconds=runs[0].n_windows - 1)
+    for run in runs[1:]:
+        run.first_row = min(run.n_windows,
+                            max(0, int((covered - run.start).total_seconds()) + 1))
+        if run.first_row == run.n_windows:
+            logger.warning('run-%s lies inside earlier runs and is skipped', run.run_id)
+        covered = max(covered, run.start + pd.Timedelta(seconds=run.n_windows - 1))
     return runs
 
 
