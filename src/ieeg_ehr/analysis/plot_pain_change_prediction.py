@@ -1,7 +1,7 @@
 """Figures of a pain_change prediction run (`pain_change_prediction score`).
 
     python -m ieeg_ehr.analysis.plot_pain_change_prediction --run-dir <run> \\
-        --weights insample_painchange_20261006-211218 --weighting uniform
+        --weights loo_adj_painchange_20261006-211218 --prediction adj --weighting uniform
 
 Every figure averages within subject first, then shows mean +/- SEM across
 subjects, and drops any group with fewer than `--min-subjects` subjects. The x
@@ -19,7 +19,9 @@ marks.
     coverage             pairs and subjects contributing per step and bin
     subject_detail       per subject: each pair, and the bin means
 
-Written to `<run>/figures/` as PNG, suffixed with the weighting.
+Written to `<run>/figures/` as PNG, suffixed `<prediction>_<weighting>`. For the
+adjusted prediction the first EXTRAPOLATE_BELOW_MIN minutes are hatched: the fit saw no
+gap that short.
 """
 
 import argparse
@@ -36,8 +38,8 @@ import pandas as pd  # noqa: E402
 
 from ieeg_ehr import io  # noqa: E402
 from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR  # noqa: E402
-from ieeg_ehr.analysis.pain_change_prediction import (DPAIN_BINS, assign_bins,  # noqa: E402
-                                                      load_trajectory)
+from ieeg_ehr.analysis.pain_change_prediction import (  # noqa: E402
+    DPAIN_BINS, EXTRAPOLATE_BELOW_MIN, assign_bins, load_trajectory)
 from ieeg_ehr.features.build_pain_change_trajectory import WINDOW_MIN  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,7 @@ NEUTRAL = '#5f5e5a'
 TERCILE_COLOURS = ('#86b6ef', '#2a78d6', '#104281')
 INK, MUTED, GRID, SHADE = '#2b2b29', '#6b6a66', '#e4e3df', '#f0efec'
 DOSE_WINDOW_MIN = 10
+EXTRAPOLATED_NOTE = " Hatched: below the fit's gap floor, so extrapolated."
 
 
 # ============================================================================
@@ -90,7 +93,10 @@ def _style(ax):
     ax.set_axisbelow(True)
 
 
-def _time_axis(ax):
+def _time_axis(ax, grey_h=None):
+    """Hours on x, the baseline overlap shaded, and hatched up to `grey_h` (extrapolated)."""
+    if grey_h:
+        ax.axvspan(0, grey_h, facecolor='none', edgecolor=GRID, hatch='///', lw=0, zorder=0)
     ax.axvspan(0, WINDOW_MIN / 60, color=SHADE, zorder=0, lw=0)
     ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
     ax.set_xlim(0, 3)
@@ -166,17 +172,17 @@ def fig_validation(df, out_dir, tag, title):
     _save(fig, out_dir, f'validation_scatter_{tag}')
 
 
-def fig_trajectories(df, out_dir, name, title, min_subjects, bins, footer=''):
+def fig_trajectories(df, out_dir, name, title, min_subjects, bins, grey_h=None):
     fig, ax = plt.subplots(figsize=(7, 4.4))
     _style(ax)
-    _time_axis(ax)
+    _time_axis(ax, grey_h)
     drawn = _trajectory_lines(ax, df, 'bin', list(bins), BIN_COLOURS, min_subjects)
     ax.set_ylabel('Predicted Δpain (NRS)', color=INK)
     ax.set_title(title, fontsize=10, color=INK)
     _legend(ax, loc='upper left', bbox_to_anchor=(1.01, 1))
     _footer(fig, f'{df["subject"].nunique()} subjects, {df["pair_id"].nunique()} pairs. '
                  f'Bins with fewer than {min_subjects} subjects dropped '
-                 f'({len(bins) - len(drawn)}). {footer}')
+                 f'({len(bins) - len(drawn)}).' + EXTRAPOLATED_NOTE * bool(grey_h))
     _save(fig, out_dir, name)
 
 
@@ -226,7 +232,7 @@ def fig_dose(df, out_dir, name, title, min_subjects, hue=None, hue_levels=(),
     _save(fig, out_dir, name)
 
 
-def fig_analgesic(df, out_dir, name, title, min_subjects, bins):
+def fig_analgesic(df, out_dir, name, title, min_subjects, bins, grey_h=None):
     labels = list(bins)
     decrease = [b for b in labels if 'decrease' in b]
     reference = [b for b in labels if b == 'no change']
@@ -246,7 +252,7 @@ def fig_analgesic(df, out_dir, name, title, min_subjects, bins):
     colours += [colour_of[b] for b in reference]
     fig, ax = plt.subplots(figsize=(7, 4.4))
     _style(ax)
-    _time_axis(ax)
+    _time_axis(ax, grey_h)
     drawn = _trajectory_lines(ax, split, 'group', groups, colours, min_subjects, styles)
     ax.set_ylabel('Predicted Δpain (NRS)', color=INK)
     ax.set_title(title, fontsize=10, color=INK)
@@ -256,12 +262,12 @@ def fig_analgesic(df, out_dir, name, title, min_subjects, bins):
     _save(fig, out_dir, name)
 
 
-def fig_coverage(df, out_dir, name, bins):
+def fig_coverage(df, out_dir, name, bins, grey_h=None):
     finite = df.dropna(subset=['value'])
     fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), sharex=True)
     for ax, (what, col) in zip(axes, (('pairs', 'pair_id'), ('subjects', 'subject'))):
         _style(ax)
-        _time_axis(ax)
+        _time_axis(ax, grey_h)
         counts = finite.groupby(['bin', 't_min'], observed=True)[col].nunique().reset_index()
         for b, colour in zip(bins, BIN_COLOURS):
             s = counts[counts['bin'] == b]
@@ -273,7 +279,7 @@ def fig_coverage(df, out_dir, name, bins):
     _save(fig, out_dir, name)
 
 
-def fig_subject_detail(df, out_dir, name, title, bins):
+def fig_subject_detail(df, out_dir, name, title, bins, grey_h=None):
     subjects = sorted(df['subject'].unique())
     ncols = min(4, len(subjects))
     nrows = int(np.ceil(len(subjects) / ncols))
@@ -285,7 +291,7 @@ def fig_subject_detail(df, out_dir, name, title, bins):
     n_out = int((df['value'].abs() > lim).sum())
     for ax, sid in zip(axes.flat, subjects):
         _style(ax)
-        _time_axis(ax)
+        _time_axis(ax, grey_h)
         s = df[df['subject'] == sid]
         for _, p in s.groupby('pair_id'):
             ax.plot(p['t_min'] / 60, p['value'], color=colour_of[p['bin'].iloc[0]],
@@ -316,8 +322,9 @@ def fig_subject_detail(df, out_dir, name, title, bins):
 # Entry points
 # ============================================================================
 
-def render_all(run_dir, weights_name, weighting='uniform', min_subjects=3, bins=None):
-    """Every prediction figure for one weighting."""
+def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min_subjects=3,
+               bins=None):
+    """Every figure for one prediction (raw | adj) and weighting (uniform | ivw)."""
     bins = bins or DPAIN_BINS
     run_dir = Path(run_dir)
     out_dir = run_dir / FIGURES_SUBDIR
@@ -327,12 +334,14 @@ def render_all(run_dir, weights_name, weighting='uniform', min_subjects=3, bins=
     meta = pairs.assign(bin=assign_bins(pairs['delta_pain'], bins))[
         ['pair_id', 'subject', 'bin', 'delta_pain', 'gap_min', 'pain1',
          'analgesic_in_interval', 'next_report_in_window']]
-    df = preds.merge(meta, on='pair_id').rename(columns={f'pred_{weighting}': 'value'})
-    tag = weighting
-    title = f'Predicted Δpain, raw, {weighting}, {weights_name}'
+    df = preds.merge(meta, on='pair_id').rename(
+        columns={f'pred_{prediction}_{weighting}': 'value'})
+    tag = f'{prediction}_{weighting}'
+    title = f'Predicted Δpain, {prediction}, {weighting}, {weights_name}'
+    grey_h = EXTRAPOLATE_BELOW_MIN / 60 if prediction == 'adj' else None
 
     fig_validation(df, out_dir, tag, title)
-    fig_trajectories(df, out_dir, f'trajectories_{tag}', title, min_subjects, bins)
+    fig_trajectories(df, out_dir, f'trajectories_{tag}', title, min_subjects, bins, grey_h)
     fig_dose(df, out_dir, f'dose_response_{tag}', title, min_subjects)
 
     cuts = df.drop_duplicates('pair_id')['pain1'].quantile([1 / 3, 2 / 3]).to_numpy()
@@ -342,14 +351,15 @@ def render_all(run_dir, weights_name, weighting='uniform', min_subjects=3, bins=
              f'{title}\nby starting-pain tercile (cuts {cuts[0]:g}, {cuts[1]:g})',
              min_subjects, hue='start', hue_levels=terciles, hue_colours=TERCILE_COLOURS)
     fig_trajectories(df[df['pain1'].between(4, 6)], out_dir, f'confound_b_pain1_4to6_{tag}',
-                     f'{title}\npain1 between 4 and 6', min_subjects, bins)
+                     f'{title}\npain1 between 4 and 6', min_subjects, bins, grey_h)
     fig_analgesic(df, out_dir, f'confound_c_analgesic_{tag}',
-                  f'{title}\ndecrease bins by analgesic in [t1, t2)', min_subjects, bins)
+                  f'{title}\ndecrease bins by analgesic in [t1, t2)', min_subjects, bins,
+                  grey_h)
     fig_trajectories(df[~df['next_report_in_window'].astype(bool)], out_dir,
                      f'confound_d_no_next_report_{tag}',
-                     f'{title}\nno other report in (t2, t1 + 3 h]', min_subjects, bins)
-    fig_coverage(df, out_dir, f'coverage_{tag}', list(bins))
-    fig_subject_detail(df, out_dir, f'subject_detail_{tag}', title, list(bins))
+                     f'{title}\nno other report in (t2, t1 + 3 h]', min_subjects, bins, grey_h)
+    fig_coverage(df, out_dir, f'coverage_{tag}', list(bins), grey_h)
+    fig_subject_detail(df, out_dir, f'subject_detail_{tag}', title, list(bins), grey_h)
 
 
 def main(argv=None):
@@ -357,6 +367,7 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run-dir', required=True)
     ap.add_argument('--weights', required=True)
+    ap.add_argument('--prediction', choices=['raw', 'adj'], default='raw')
     ap.add_argument('--weighting', choices=['uniform', 'ivw'], default='uniform')
     ap.add_argument('--min-subjects', type=int, default=3)
     ap.add_argument('--bins', type=json.loads, default=None,
@@ -365,8 +376,9 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     bins = {k: tuple(v) for k, v in args.bins.items()} if args.bins else None
-    render_all(args.run_dir, args.weights, args.weighting, args.min_subjects, bins)
-    io.log_analysis(f'pain_change prediction figures, {args.weighting}', Path(args.run_dir))
+    render_all(args.run_dir, args.weights, args.prediction, args.weighting,
+               args.min_subjects, bins)
+    io.log_analysis(f'pain_change prediction figures, {args.prediction}, {args.weighting}', Path(args.run_dir))
     return 0
 
 

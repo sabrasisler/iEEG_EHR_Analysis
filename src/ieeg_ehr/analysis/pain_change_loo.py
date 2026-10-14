@@ -20,7 +20,9 @@ any fold runs.
 
 Output: `analysis/pain/pain_change/bandpower/painchange_loo_<timestamp>/`
 `cells_loo.csv`, one row per fold x cell with `heldout_subject` (`none` for the
-gate fold), plus METHODS.md and provenance.json. Export the folds as weights with
+gate fold) and every fixed effect including the intercept, `centering.csv`, the
+per-subject pain_1 mean of each cell that `pain_1_within` subtracts, plus
+METHODS.md and provenance.json. Export the folds as weights with
 `pain_change_prediction weights --source-run <this run>`.
 
 EXPLORATORY. Discovery cohort only. Nominations, not findings.
@@ -64,6 +66,27 @@ def reproduce_reference(records, reference_cells):
     if max(diffs.values()) > REPRODUCE_TOL:
         raise AssertionError(f'the full refit does not reproduce the reference: {diffs}')
     return diffs
+
+
+def centering(rows):
+    """Per cell and subject, the pain_1 mean the fit centres `pain_1_within` on.
+
+    Over that subject's rows of the cell (`pain_change.cell_frame`), so
+    channel-weighted, and the same in every fold: the centring is within subject.
+    """
+    parts = []
+    for region in rows.regions:
+        in_region = (rows.index['region'] == region).to_numpy()
+        if not in_region.any():
+            continue
+        sub_index, sub_values = rows.index[in_region], rows.values[in_region]
+        for j, col in enumerate(rows.cols):
+            means = (pain_change.cell_frame(sub_index, sub_values, j, rows.pairs)
+                     .groupby('subject')['pain_1'].mean())
+            parts.append(pd.DataFrame({'region': region, 'freq': col,
+                                       'subject': means.index,
+                                       'pain_1_mean': means.to_numpy()}))
+    return pd.concat(parts, ignore_index=True)
 
 
 def write_methods(run_dir, reference_run, folds, n_train, diffs, cells):
@@ -160,6 +183,8 @@ def main(argv=None):
     io.write_table(cells, run_dir / 'cells_loo.csv', params=run_params,
                    parents=[str(zdir), str(reference_run / 'cells.csv')],
                    subjects=subjects, script=SCRIPT)
+    io.write_table(centering(rows), run_dir / 'centering.csv', params=run_params,
+                   parents=[str(zdir)], subjects=subjects, script=SCRIPT)
     write_methods(run_dir, reference_run, folds, len(train), diffs, cells)
     io.write_run_provenance(
         run_dir, script=SCRIPT, params=run_params,

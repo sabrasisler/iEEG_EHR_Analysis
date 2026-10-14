@@ -67,7 +67,8 @@ FIGURES_SUBDIR = 'figures'
 RUN_NAME = 'painchange'
 
 FORMULA = 'd_z ~ d_pain + pain_1_within + gap_h'
-TERMS = (('d_pain', 'dpain'), ('pain_1_within', 'baseline'), ('gap_h', 'gap'))
+TERMS = (('d_pain', 'dpain'), ('pain_1_within', 'baseline'), ('gap_h', 'gap'),
+         ('Intercept', 'intercept'))
 
 
 def discovery_paths(zdir):

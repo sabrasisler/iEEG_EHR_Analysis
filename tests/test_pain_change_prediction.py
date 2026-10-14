@@ -20,8 +20,8 @@ def test_noise_free_cells_recover_delta_pain_under_both_weightings():
                        'B|alpha': [0.03 * 3, np.nan]})
     pairs = pd.DataFrame({'pair_id': ['p1'], 'subject': ['sub-001']})
     out = pcp.predict(dz, pairs, w)
-    np.testing.assert_allclose(out['pred_uniform'], [3, -2])
-    np.testing.assert_allclose(out['pred_ivw'], [3, -2])
+    np.testing.assert_allclose(out['pred_raw_uniform'], [3, -2])
+    np.testing.assert_allclose(out['pred_raw_ivw'], [3, -2])
     np.testing.assert_array_equal(out['n_cells_used'], [3, 2])
     np.testing.assert_allclose(out['sum_beta2'], [0.0014, 0.0005])
 
@@ -32,8 +32,8 @@ def test_inverse_variance_weights_the_low_variance_cell():
                        'A|beta': [0.0], 'B|alpha': [0.0]})
     out = pcp.predict(dz, pd.DataFrame({'pair_id': ['p1'], 'subject': ['s']}), w)
     b, v = w['beta'].to_numpy(), w['var_resid'].to_numpy()
-    assert out['pred_uniform'].iloc[0] == pytest.approx(0.02 * 0.2 / (b ** 2).sum())
-    assert out['pred_ivw'].iloc[0] == pytest.approx(
+    assert out['pred_raw_uniform'].iloc[0] == pytest.approx(0.02 * 0.2 / (b ** 2).sum())
+    assert out['pred_raw_ivw'].iloc[0] == pytest.approx(
         0.02 * 0.2 / 0.1 / (b ** 2 / v).sum())
 
 
@@ -45,7 +45,7 @@ def test_held_out_weights_score_each_subject_with_its_own_fold():
                        'B|alpha': [0.03, 0.06]})
     pairs = pd.DataFrame({'pair_id': ['p1', 'p2'], 'subject': ['s1', 's2']})
     out = pcp.predict(dz, pairs, folds).set_index('pair_id')
-    np.testing.assert_allclose(out['pred_uniform'], [1.0, 1.0])
+    np.testing.assert_allclose(out['pred_raw_uniform'], [1.0, 1.0])
     with pytest.raises(ValueError, match='holds out'):
         pcp.predict(dz, pairs.assign(subject=['s1', 's3']), folds)
 
@@ -71,3 +71,23 @@ def test_loo_export_keeps_folds_and_drops_the_gate_fold(tmp_path, monkeypatch):
     w = pcp.export_weights(tmp_path)
     assert list(w['heldout_subject']) == ['s1']
     assert w['beta'].tolist() == [0.03]
+
+
+def test_adjusted_prediction_inverts_the_full_model():
+    """d_z built from the model itself: adj recovers d_pain, raw does not."""
+    w = _weights().assign(alpha=[0.05, -0.02, 0.01], gamma=[0.004, 0.002, -0.003],
+                          delta=[-0.03, 0.01, 0.02])
+    centering = pd.DataFrame({'roi': ['A', 'A', 'B'], 'band': ['alpha', 'beta', 'alpha'],
+                              'subject': 's', 'pain_1_mean': [5.0, 5.5, 4.0]})
+    pairs = pd.DataFrame({'pair_id': ['p1'], 'subject': ['s'], 'pain1': [7.0]})
+    t_min, d_pain = np.array([20, 60, 120]), -3.0
+    p1w = 7.0 - centering['pain_1_mean'].to_numpy()
+    dz = (w['alpha'].to_numpy() + w['beta'].to_numpy() * d_pain
+          + w['gamma'].to_numpy() * p1w + w['delta'].to_numpy() * t_min[:, None] / 60)
+    frame = pd.DataFrame(dz, columns=['A|alpha', 'A|beta', 'B|alpha']).assign(
+        pair_id='p1', t_min=t_min)
+    out = pcp.predict(frame, pairs, w, centering)
+    np.testing.assert_allclose(out['pred_adj_uniform'], d_pain)
+    np.testing.assert_allclose(out['pred_adj_ivw'], d_pain)
+    assert not np.allclose(out['pred_raw_uniform'], d_pain)
+    assert list(out['extrapolated']) == [True, False, False]
