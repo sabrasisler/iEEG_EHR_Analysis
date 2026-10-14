@@ -4,10 +4,10 @@
         --weights loo_adj_painchange_20261006-211218 --prediction adj --weighting uniform
 
 Every figure averages within subject first, then shows mean +/- SEM across
-subjects, and drops any group with fewer than `--min-subjects` subjects. The x
-axis is hours since the first report, and the shaded first 5 min is where the
-sliding window still overlaps the baseline window. Descriptive: no significance
-marks.
+subjects, and drops any group with fewer than `--min-subjects` subjects. The
+time-axis figures show hours since the first report out to PLOT_HORIZON_MIN, and
+shade the first 5 min, where the sliding window still overlaps the baseline
+window. Descriptive: no significance marks.
 
     validation_scatter   predicted at t2 vs actual delta pain, one point per pair
     trajectories         one line per delta-pain bin over 0-3 h
@@ -54,6 +54,8 @@ NEUTRAL = '#5f5e5a'
 TERCILE_COLOURS = ('#86b6ef', '#2a78d6', '#104281')
 INK, MUTED, GRID, SHADE = '#2b2b29', '#6b6a66', '#e4e3df', '#f0efec'
 DOSE_WINDOW_MIN = 10
+#: The time-axis figures stop here, though the extraction runs to 3 h.
+PLOT_HORIZON_MIN = 120
 EXTRAPOLATED_NOTE = " Hatched: below the fit's gap floor, so extrapolated."
 
 
@@ -99,8 +101,8 @@ def _time_axis(ax, grey_h=None):
         ax.axvspan(0, grey_h, facecolor='none', edgecolor=GRID, hatch='///', lw=0, zorder=0)
     ax.axvspan(0, WINDOW_MIN / 60, color=SHADE, zorder=0, lw=0)
     ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
-    ax.set_xlim(0, 3)
-    ax.set_xticks([0, 0.5, 1, 1.5, 2, 2.5, 3])
+    ax.set_xlim(0, PLOT_HORIZON_MIN / 60)
+    ax.set_xticks(np.arange(0, PLOT_HORIZON_MIN / 60 + 0.25, 0.5))
     ax.set_xlabel('Hours since first report', color=INK)
 
 
@@ -339,9 +341,11 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
     tag = f'{prediction}_{weighting}'
     title = f'Predicted Δpain, {prediction}, {weighting}, {weights_name}'
     grey_h = EXTRAPOLATE_BELOW_MIN / 60 if prediction == 'adj' else None
+    # Validation and dose-response read each pair at its own t2, out to 3 h.
+    early = df[df['t_min'] <= PLOT_HORIZON_MIN]
 
     fig_validation(df, out_dir, tag, title)
-    fig_trajectories(df, out_dir, f'trajectories_{tag}', title, min_subjects, bins, grey_h)
+    fig_trajectories(early, out_dir, f'trajectories_{tag}', title, min_subjects, bins, grey_h)
     fig_dose(df, out_dir, f'dose_response_{tag}', title, min_subjects)
 
     cuts = df.drop_duplicates('pair_id')['pain1'].quantile([1 / 3, 2 / 3]).to_numpy()
@@ -350,16 +354,16 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
     fig_dose(df.assign(start=tercile), out_dir, f'confound_a_start_tercile_{tag}',
              f'{title}\nby starting-pain tercile (cuts {cuts[0]:g}, {cuts[1]:g})',
              min_subjects, hue='start', hue_levels=terciles, hue_colours=TERCILE_COLOURS)
-    fig_trajectories(df[df['pain1'].between(4, 6)], out_dir, f'confound_b_pain1_4to6_{tag}',
+    fig_trajectories(early[early['pain1'].between(4, 6)], out_dir, f'confound_b_pain1_4to6_{tag}',
                      f'{title}\npain1 between 4 and 6', min_subjects, bins, grey_h)
-    fig_analgesic(df, out_dir, f'confound_c_analgesic_{tag}',
+    fig_analgesic(early, out_dir, f'confound_c_analgesic_{tag}',
                   f'{title}\ndecrease bins by analgesic in [t1, t2)', min_subjects, bins,
                   grey_h)
-    fig_trajectories(df[~df['next_report_in_window'].astype(bool)], out_dir,
+    fig_trajectories(early[~early['next_report_in_window'].astype(bool)], out_dir,
                      f'confound_d_no_next_report_{tag}',
                      f'{title}\nno other report in (t2, t1 + 3 h]', min_subjects, bins, grey_h)
-    fig_coverage(df, out_dir, f'coverage_{tag}', list(bins), grey_h)
-    fig_subject_detail(df, out_dir, f'subject_detail_{tag}', title, list(bins), grey_h)
+    fig_coverage(early, out_dir, f'coverage_{tag}', list(bins), grey_h)
+    fig_subject_detail(early, out_dir, f'subject_detail_{tag}', title, list(bins), grey_h)
 
 
 def main(argv=None):

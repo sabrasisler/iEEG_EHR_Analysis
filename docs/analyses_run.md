@@ -459,3 +459,6 @@ working tree had uncommitted changes, so that commit does NOT describe what ran.
 - 2026-10-13 16:59 | pain_change sliding-window prediction, weights loo_painchange_20261006-211218, 4 subjects, 194 pairs | $DERIV/analysis/pain/pain_change/prediction/painpred_pilot_loo_20261013-165949 | c22fbf7ec02f+dirty | [ ]
 - 2026-10-13 17:12 | pain_change prediction figures, uniform | $DERIV/analysis/pain/pain_change/prediction/painpred_pilot_20261013-161854 | b207e32da47c+dirty | [ ]
 - 2026-10-13 17:12 | pain_change prediction figures, uniform | $DERIV/analysis/pain/pain_change/prediction/painpred_pilot_loo_20261013-165949 | b207e32da47c+dirty | [ ]
+- 2026-10-13 18:08 | pain_change LOO refits, 53 folds of painchange_20261006-211218 | $DERIV/analysis/pain/pain_change/bandpower/painchange_loo_20261013-180844 | f93204859efe | [ ]
+- 2026-10-13 18:10 | pain_change sliding-window prediction, weights loo_adj_painchange_20261006-211218, 53 subjects, 1336 pairs | $DERIV/analysis/pain/pain_change/prediction/painpred_loo_adj_20261013-181022 | f93204859efe+dirty | [ ]
+- 2026-10-13 18:39 | pain_change prediction figures, raw, uniform | $DERIV/analysis/pain/pain_change/prediction/painpred_loo_adj_20261013-181022 | no-git | [ ]
