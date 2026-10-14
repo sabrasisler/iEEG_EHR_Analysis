@@ -91,3 +91,24 @@ def test_runs_sharing_boundary_seconds_count_each_second_once(tmp_path, monkeypa
     np.testing.assert_array_equal(v[:, 0], [60, 60, 60])
     # 10:10 holds four windows of run AAA (z = 0) and 56 of run BBB (z = 1).
     np.testing.assert_array_equal(s[1, 0], [56.0, 56.0])
+
+
+def test_a_run_inside_earlier_runs_adds_nothing(tmp_path, monkeypatch):
+    """A recording-system switch: the short run lies wholly inside an earlier long one."""
+    monkeypatch.setattr(config, 'bipolar_psd_fullres_nwb_path',
+                        lambda s, ses, run: tmp_path / f'sub-{s}_ses-{ses}_run-{run}_x.nwb')
+    _nwb(tmp_path / 'sub-000_ses-01_run-EA1_x.nwb', '2000-01-01T10:00:00-08:00',
+         np.zeros((1200, 1, 2), dtype=np.float32), ['A'])
+    _nwb(tmp_path / 'sub-000_ses-01_run-SA1_x.nwb', '2000-01-01T10:05:00-08:00',
+         np.ones((300, 1, 2), dtype=np.float32), ['A'])
+    _nwb(tmp_path / 'sub-000_ses-01_run-EA2_x.nwb', '2000-01-01T10:19:00-08:00',
+         np.ones((600, 1, 2), dtype=np.float32), ['A'])
+    runs = traj.session_runs('000', '01')
+    assert [(r.run_id, r.first_row) for r in runs] == [('EA1', 0), ('SA1', 300), ('EA2', 60)]
+    sess = SimpleNamespace(session_channels=['A'], channels_by_run={}, mask=None)
+    blocks = traj.MinuteBlocks(runs, sess, np.zeros((1, 2)), np.ones((1, 2)), ['A'],
+                               np.arange(2))
+    s, cnt, v = blocks.window(pd.Timestamp('2000-01-01 10:04:00'), 18)
+    np.testing.assert_array_equal(v[:, 0], 60)
+    # SA1 (z = 1) never enters. EA2 (z = 1) supplies 10:20 and 10:21.
+    np.testing.assert_array_equal(s[:, 0, 0], [0.0] * 16 + [60.0, 60.0])
