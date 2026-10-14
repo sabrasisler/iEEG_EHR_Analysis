@@ -465,3 +465,4 @@ working tree had uncommitted changes, so that commit does NOT describe what ran.
 - 2026-10-14 11:16 | pain_change per-subject tracking, raw uniform, 43 subjects | $DERIV/analysis/pain/pain_change/prediction/painpred_loo_adj_20261013-181022/tracking/raw_uniform_20261014-111645 | no-git | [ ]
 - 2026-10-14 11:17 | pain_change per-subject tracking, raw uniform, 43 subjects | $DERIV/analysis/pain/pain_change/prediction/painpred_loo_adj_20261013-181022/tracking/raw_uniform_20261014-111745 | 18ab337713ee | [ ]
 - 2026-10-14 11:23 | pain_change per-subject tracking, raw uniform, 43 subjects | $DERIV/analysis/pain/pain_change/prediction/painpred_loo_adj_20261013-181022/tracking/raw_uniform_20261014-112304 | dadbbefcbe20 | [ ]
+- 2026-10-14 11:23 | pain_change per-subject tracking, raw uniform, 43 subjects | $DERIV/analysis/pain/pain_change/prediction/painpred_loo_adj_20261013-181022/tracking/raw_uniform_20261014-112353 | a0a8404cfcb4 | [ ]
