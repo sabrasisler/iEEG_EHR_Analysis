@@ -188,7 +188,7 @@ def fig_rho_forest(table, out_dir, title):
     ax.set_xlim(-1, 1)
     ax.set_xlabel('Spearman rho, predicted vs actual Δpain at t2', color=pplot.INK)
     ax.set_title(title, fontsize=10, color=pplot.INK)
-    pplot._legend(ax, loc='lower right')
+    pplot._legend(ax, loc='upper left', bbox_to_anchor=(1.01, 1))
     n_above, n_below = band_counts(t)
     tail = (100 - NULL_BAND[1]) / 100
     pplot._footer(fig, f'{len(t)} subjects (n pairs in brackets). Above own null: {n_above}, '
