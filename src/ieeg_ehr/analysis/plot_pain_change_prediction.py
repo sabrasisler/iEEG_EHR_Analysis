@@ -4,13 +4,17 @@
         --weights loo_adj_painchange_20261006-211218 --prediction adj --weighting uniform
 
 Every figure averages within subject first, then shows mean +/- SEM across
-subjects, and drops any group with fewer than `--min-subjects` subjects. The
+subjects, and drops any group, and any time step of a line, with fewer than
+`--min-subjects` subjects. The
 time-axis figures show hours since the first report out to PLOT_HORIZON_MIN, and
 shade the first 5 min, where the sliding window still overlaps the baseline
 window. Descriptive: no significance marks.
 
     validation_scatter   predicted at t2 vs actual delta pain, one point per pair
-    trajectories         one line per delta-pain bin over 0-3 h
+    trajectories         one line per delta-pain bin over the first PLOT_HORIZON_MIN
+    trajectories_by_delta  the same, one line per integer delta pain, -10 to +10
+    trajectories_t2[_by_delta]  both, aligned to the second report over the
+                         T2_HORIZON_MIN before it
     dose_response        per integer delta pain, the mean prediction within
                          +/- DOSE_WINDOW_MIN of t2
     confound_*           (a) dose-response by starting-pain tercile, (b) pain1 4-6,
@@ -33,6 +37,8 @@ import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.cm import ScalarMappable  # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap, Normalize  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -56,6 +62,16 @@ INK, MUTED, GRID, SHADE = '#2b2b29', '#6b6a66', '#e4e3df', '#f0efec'
 DOSE_WINDOW_MIN = 10
 #: The time-axis figures stop here, though the extraction runs to 3 h.
 PLOT_HORIZON_MIN = 120
+#: The t2-aligned figures start this long before the second report.
+T2_HORIZON_MIN = 120
+#: One line per integer change in pain, on a diverging blue <-> red ramp around gray 0.
+DELTA_LINES = tuple(range(-10, 11))
+DELTA_CMAP = LinearSegmentedColormap.from_list(
+    'delta_pain', ['#184f95', '#86b6ef', '#8c8b86', '#ec8f8c', '#a8322f'])
+DELTA_NORM = Normalize(min(DELTA_LINES), max(DELTA_LINES))
+DELTA_COLOURS = tuple(DELTA_CMAP(DELTA_NORM(d)) for d in DELTA_LINES)
+T2_NOTE = (' Each pair enters at its first report, so pairs closer than 2 h cover only the'
+           ' right of the axis.')
 EXTRAPOLATED_NOTE = " Hatched: below the fit's gap floor, so extrapolated."
 
 
@@ -106,19 +122,28 @@ def _time_axis(ax, grey_h=None):
     ax.set_xlabel('Hours since first report', color=INK)
 
 
+def _t2_axis(ax):
+    """Hours before the second report on x, ending at the report."""
+    ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
+    ax.axvline(0, color=MUTED, lw=0.8, ls='--', zorder=1)
+    ax.set_xlim(-T2_HORIZON_MIN / 60, 0)
+    ax.set_xticks(np.arange(-T2_HORIZON_MIN / 60, 0.25, 0.5))
+    ax.set_xlabel('Hours before second report', color=INK)
+
+
 def _trajectory_lines(ax, df, group, groups, colours, min_subjects, styles=None,
                       label_fmt='{g}'):
-    """One mean +/- SEM line per group; returns the groups drawn."""
+    """One mean +/- SEM line per group over x_h (hours); returns the groups drawn."""
     sizes = group_sizes(df, group)
-    stats = subject_first(df, 'value', [group, 't_min'])
+    stats = subject_first(df, 'value', [group, 'x_h'])
     drawn = []
     for g, colour in zip(groups, colours):
         n_subj, n_pairs = sizes.get(g, (0, 0))
         if n_subj < min_subjects:
             logger.info('%s: %d subject(s), below %d, dropped', g, n_subj, min_subjects)
             continue
-        s = stats[(stats[group] == g) & (stats['n_subjects'] >= 1)]
-        h = s['t_min'] / 60
+        s = stats[(stats[group] == g) & (stats['n_subjects'] >= min_subjects)]
+        h = s['x_h']
         ls = (styles or {}).get(g, '-')
         ax.plot(h, s['mean'], color=colour, lw=1.6, ls=ls,
                 label=f'{label_fmt.format(g=g)} ({n_subj} subj, {n_pairs} pairs)')
@@ -174,17 +199,33 @@ def fig_validation(df, out_dir, tag, title):
     _save(fig, out_dir, f'validation_scatter_{tag}')
 
 
-def fig_trajectories(df, out_dir, name, title, min_subjects, bins, grey_h=None):
+def fig_trajectories(df, out_dir, name, title, min_subjects, groups, colours, grey_h=None,
+                     group='bin', label_fmt='{g}', t2=False, footer='', colorbar=None):
+    """One line per group over x_h: hours after t1, or before t2 when `t2` is set.
+
+    `colorbar` = (cmap, norm, label) replaces the legend, for many ordered groups.
+    """
     fig, ax = plt.subplots(figsize=(7, 4.4))
     _style(ax)
-    _time_axis(ax, grey_h)
-    drawn = _trajectory_lines(ax, df, 'bin', list(bins), BIN_COLOURS, min_subjects)
+    if t2:
+        _t2_axis(ax)
+    else:
+        _time_axis(ax, grey_h)
+    drawn = _trajectory_lines(ax, df, group, groups, colours, min_subjects,
+                              label_fmt=label_fmt)
     ax.set_ylabel('Predicted Δpain (NRS)', color=INK)
     ax.set_title(title, fontsize=10, color=INK)
-    _legend(ax, loc='upper left', bbox_to_anchor=(1.01, 1))
+    if colorbar:
+        cmap, norm, label = colorbar
+        cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=0.02)
+        cb.set_label(label, color=INK)
+        cb.outline.set_visible(False)
+    else:
+        _legend(ax, loc='upper left', bbox_to_anchor=(1.01, 1))
+    dropped = [label_fmt.format(g=g) for g in groups if g not in drawn]
     _footer(fig, f'{df["subject"].nunique()} subjects, {df["pair_id"].nunique()} pairs. '
-                 f'Bins with fewer than {min_subjects} subjects dropped '
-                 f'({len(bins) - len(drawn)}).' + EXTRAPOLATED_NOTE * bool(grey_h))
+                 f'Fewer than {min_subjects} subjects, not drawn: '
+                 f'{", ".join(dropped) or "none"}.' + EXTRAPOLATED_NOTE * bool(grey_h) + footer)
     _save(fig, out_dir, name)
 
 
@@ -342,10 +383,27 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
     title = f'Predicted Δpain, {prediction}, {weighting}, {weights_name}'
     grey_h = EXTRAPOLATE_BELOW_MIN / 60 if prediction == 'adj' else None
     # Validation and dose-response read each pair at its own t2, out to 3 h.
-    early = df[df['t_min'] <= PLOT_HORIZON_MIN]
+    early = df[df['t_min'] <= PLOT_HORIZON_MIN].assign(x_h=lambda d: d['t_min'] / 60)
+    # Before t2 only, from each pair's t1. An adjusted step under the gap floor is
+    # extrapolated, and with no common t1 on this axis it is dropped, not hatched.
+    before_t2 = df.assign(x_h=(df['t_min'] - df['gap_min']) / 60)
+    before_t2 = before_t2[before_t2['x_h'].between(-T2_HORIZON_MIN / 60, 0)]
+    if prediction == 'adj':
+        before_t2 = before_t2[~before_t2['extrapolated'].astype(bool)]
+    t2_note = T2_NOTE + (' Extrapolated adjusted steps dropped.' if prediction == 'adj' else '')
+    delta_lines = dict(group='delta_pain', label_fmt='{g:+d}',
+                       colorbar=(DELTA_CMAP, DELTA_NORM, 'Δpain at report 2 (NRS)'))
 
     fig_validation(df, out_dir, tag, title)
-    fig_trajectories(early, out_dir, f'trajectories_{tag}', title, min_subjects, bins, grey_h)
+    fig_trajectories(early, out_dir, f'trajectories_{tag}', title, min_subjects, list(bins),
+                     BIN_COLOURS, grey_h)
+    fig_trajectories(early, out_dir, f'trajectories_by_delta_{tag}', title, min_subjects,
+                     DELTA_LINES, DELTA_COLOURS, grey_h, **delta_lines)
+    fig_trajectories(before_t2, out_dir, f'trajectories_t2_{tag}', title, min_subjects,
+                     list(bins), BIN_COLOURS, t2=True, footer=t2_note)
+    fig_trajectories(before_t2, out_dir, f'trajectories_t2_by_delta_{tag}', title,
+                     min_subjects, DELTA_LINES, DELTA_COLOURS, t2=True, footer=t2_note,
+                     **delta_lines)
     fig_dose(df, out_dir, f'dose_response_{tag}', title, min_subjects)
 
     cuts = df.drop_duplicates('pair_id')['pain1'].quantile([1 / 3, 2 / 3]).to_numpy()
@@ -354,14 +412,16 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
     fig_dose(df.assign(start=tercile), out_dir, f'confound_a_start_tercile_{tag}',
              f'{title}\nby starting-pain tercile (cuts {cuts[0]:g}, {cuts[1]:g})',
              min_subjects, hue='start', hue_levels=terciles, hue_colours=TERCILE_COLOURS)
-    fig_trajectories(early[early['pain1'].between(4, 6)], out_dir, f'confound_b_pain1_4to6_{tag}',
-                     f'{title}\npain1 between 4 and 6', min_subjects, bins, grey_h)
+    fig_trajectories(early[early['pain1'].between(4, 6)], out_dir,
+                     f'confound_b_pain1_4to6_{tag}', f'{title}\npain1 between 4 and 6',
+                     min_subjects, list(bins), BIN_COLOURS, grey_h)
     fig_analgesic(early, out_dir, f'confound_c_analgesic_{tag}',
                   f'{title}\ndecrease bins by analgesic in [t1, t2)', min_subjects, bins,
                   grey_h)
     fig_trajectories(early[~early['next_report_in_window'].astype(bool)], out_dir,
                      f'confound_d_no_next_report_{tag}',
-                     f'{title}\nno other report in (t2, t1 + 3 h]', min_subjects, bins, grey_h)
+                     f'{title}\nno other report in (t2, t1 + 3 h]', min_subjects, list(bins),
+                     BIN_COLOURS, grey_h)
     fig_coverage(early, out_dir, f'coverage_{tag}', list(bins), grey_h)
     fig_subject_detail(early, out_dir, f'subject_detail_{tag}', title, list(bins), grey_h)
 
