@@ -57,6 +57,19 @@ Hemispheres are merged in every atlas.
     the bars (in grey, at the bottom), because how many pairs carry no network
     is part of what this figure reports.
 
+`--atlas yeo7` / `--atlas yeo17`
+    The Yeo et al. 2011 (doi 10.1152/jn.00338.2011) 7- and 17-network cortical
+    parcellations at the same virtual electrode, from the 1 mm MNI152
+    LiberalMask volumes FreeSurfer 7.4.1 ships. LiberalMask, not the standard
+    volume, because the standard cortex is one template's thin ribbon, while the
+    liberal mask extends to wherever >= 150 of the 1000 subjects' cortex
+    landed, a fairer target for an electrode position. Network names come from
+    CBIG's `<n>NetworksOrderedNames.csv`. Yeo labels cortex only, so a pair with
+    no network is split by what FreeSurfer's cvs_avg35_inMNI152 aparc+aseg
+    (the `dk_midpoint` volume) finds at the same midpoint: white matter,
+    subcortex/cerebellum, ventricle/CSF, cortex the mask misses, or outside the
+    brain.
+
 THE COHORT is the reference run's `subjects[]` (reference_run.CONTPAIN_HEATMAP
 by default), so the counts describe the subjects the models saw.
 
@@ -67,6 +80,7 @@ Run on Slurm, never the login node:
 import argparse
 import logging
 import warnings
+from functools import partial
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -92,8 +106,12 @@ UNLABELED = 'Unlabeled'
 NO_COORDINATE = 'No MNI coordinate'
 NO_PARCEL = 'No parcel'
 OUTSIDE_GRID = 'Outside atlas grid'
+#: FreeSurfer template tissue classes for a pair an atlas leaves unlabeled.
+TISSUES = ('white matter', 'subcortex/cerebellum', 'ventricle/CSF', 'cortex',
+           'outside brain')
+NO_NETWORK = {t: f'No network: {t}' for t in TISSUES}
 #: Rows that name the ABSENCE of an atlas label rather than a label.
-NO_LABEL = (UNLABELED, NO_COORDINATE, NO_PARCEL, OUTSIDE_GRID)
+NO_LABEL = (UNLABELED, NO_COORDINATE, NO_PARCEL, OUTSIDE_GRID, *NO_NETWORK.values())
 
 HCPEX_DIR = config.DERIVATIVES_BASE / 'atlases' / 'HCPex_v1.1'
 #: HCPex values 1-360 are the Glasser cortical areas (left 1-180, right
@@ -104,6 +122,10 @@ HCPEX_TO_GLASSER = {'Hipp': 'H'}
 CABNP_DIR = config.DERIVATIVES_BASE / 'atlases' / 'CAB-NP_v1.1'
 CABNP_STEM = 'CortexSubcortex_ColeAnticevic_NetPartition_wSubcorGSR_parcels_LR'
 FS_MNI_DIR = config.DERIVATIVES_BASE / 'atlases' / 'FreeSurfer7.4.1_cvs_avg35_inMNI152'
+FS_WHITE_MATTER = ('Cerebral-White-Matter', 'WM-hypointensities')
+FS_FLUID = ('Lateral-Ventricle', 'Inf-Lat-Vent', '3rd-Ventricle', '4th-Ventricle',
+            '5th-Ventricle', 'choroid-plexus', 'CSF', 'vessel')
+YEO_DIR = config.DERIVATIVES_BASE / 'atlases' / 'Yeo2011_MNI152'
 MNI_COLUMNS = ['MNI_coord_1', 'MNI_coord_2', 'MNI_coord_3']
 #: Largest allowed gap (mm) between the computed and the stored pair midpoint.
 MIDPOINT_TOLERANCE_MM = 1e-3
@@ -114,6 +136,8 @@ TITLES = {
                     '{n} labels'),
     'hcpex': 'HCPex v1.1 labels at the pair midpoint, hemispheres merged: {n} labels',
     'cabnp': 'CAB-NP v1.1 networks at the pair midpoint: {n} networks',
+    'yeo7': 'Yeo 2011 7 networks at the pair midpoint: {n} networks',
+    'yeo17': 'Yeo 2011 17 networks at the pair midpoint: {n} networks',
 }
 FOOTNOTES = {
     'dk': 'one electrode = one bipolar pair, by anode label',
@@ -122,6 +146,10 @@ FOOTNOTES = {
     'hcpex': 'one electrode = one bipolar pair, at the anode-cathode MNI midpoint',
     'cabnp': ('one electrode = one bipolar pair, at the anode-cathode MNI midpoint; '
               'cortex via HCPex Glasser areas, subcortex via CAB-NP 2 mm voxels'),
+    'yeo7': ('one electrode = one bipolar pair, at the anode-cathode MNI midpoint; '
+             'Yeo LiberalMask; no-network pairs split by FreeSurfer template tissue'),
+    'yeo17': ('one electrode = one bipolar pair, at the anode-cathode MNI midpoint; '
+              'Yeo LiberalMask; no-network pairs split by FreeSurfer template tissue'),
 }
 
 
@@ -377,10 +405,63 @@ def label_dk_midpoint(pairs):
     return pairs, sources + [FS_MNI_DIR / 'aparc+aseg.mgz']
 
 
+# ============================================================================
+# Yeo 2011
+# ============================================================================
+
+def fs_tissue(xyz):
+    """FreeSurfer template tissue class (one of TISSUES) at each MNI point."""
+    img = nib.load(FS_MNI_DIR / 'aparc+aseg.mgz')
+    values, _, _ = voxel_values(np.rint(np.asarray(img.dataobj)).astype(int),
+                                img.affine, xyz)
+    names = freesurfer_names()
+
+    def tissue(v):
+        name = collapse_hemisphere(names[v])
+        if v == 0:
+            return 'outside brain'
+        if name in FS_WHITE_MATTER:
+            return 'white matter'
+        if name in FS_FLUID:
+            return 'ventricle/CSF'
+        # aparc+aseg numbers DK cortex 1000-1035 (left) and 2000-2035 (right).
+        return 'cortex' if v >= 1000 else 'subcortex/cerebellum'
+    return np.array([tissue(v) for v in values], dtype=object)
+
+
+def label_yeo(pairs, n_networks):
+    pairs, sources = virtual_electrodes(pairs)
+    check_midpoints(pairs)
+    xyz = pairs[['vx', 'vy', 'vz']].to_numpy()
+
+    volume = YEO_DIR / f'Yeo2011_{n_networks}Networks_MNI152_FreeSurferConformed1mm_LiberalMask.nii.gz'
+    img = nib.load(volume)
+    values, has_xyz, inside = voxel_values(
+        np.rint(np.asarray(img.dataobj)).astype(int).squeeze(), img.affine, xyz)
+    names_csv = YEO_DIR / f'{n_networks}NetworksOrderedNames.csv'
+    names = pd.read_csv(names_csv, skipinitialspace=True)
+    network = dict(zip(names['Network Order'], names['Network Name']))
+
+    tissue = fs_tissue(xyz)
+    label = np.array([network[v] if v else NO_NETWORK[t]
+                      for v, t in zip(values, tissue)], dtype=object)
+    label[has_xyz & ~inside] = OUTSIDE_GRID
+    label[~has_xyz] = NO_COORDINATE
+    pairs['yeo_value'] = values
+    pairs['fs_tissue'] = tissue
+    pairs['label'] = label
+    logger.info('Yeo %d: %d pair(s) in a network; FreeSurfer tissue of those in a '
+                'network: %s', n_networks, (values > 0).sum(),
+                pd.Series(tissue[values > 0]).value_counts().to_dict())
+    return pairs, sources + [volume, names_csv, FS_MNI_DIR / 'aparc+aseg.mgz']
+
+
 LABELERS = {'dk': label_dk, 'dk_midpoint': label_dk_midpoint,
-            'hcpex': label_hcpex, 'cabnp': label_cabnp}
+            'hcpex': label_hcpex, 'cabnp': label_cabnp,
+            'yeo7': partial(label_yeo, n_networks=7),
+            'yeo17': partial(label_yeo, n_networks=17)}
 #: Atlases whose no-label rows stay in the bars (see plot_counts).
-SHOW_NO_LABEL = ('dk_midpoint', 'cabnp')
+SHOW_NO_LABEL = ('dk_midpoint', 'cabnp', 'yeo7', 'yeo17')
 
 
 # ============================================================================

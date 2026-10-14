@@ -18,6 +18,8 @@
 #               (reads contact coordinates from the raw NWB of each run that adds pairs)
 #   ATLAS=cabnp the same midpoint, labeled with a CAB-NP v1.1 network: cortex
 #               through HCPex's Glasser areas, subcortex through CAB-NP's voxels
+#   ATLAS=yeo7 / ATLAS=yeo17  the same midpoint in the Yeo 2011 LiberalMask
+#               volumes; no-network pairs split by FreeSurfer template tissue
 #
 #   ATLAS=hcpex sbatch sbatch/atlas_coverage.sbatch
 #   ATLAS=cabnp sbatch sbatch/atlas_coverage.sbatch
