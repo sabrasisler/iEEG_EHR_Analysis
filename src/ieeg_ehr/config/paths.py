@@ -748,6 +748,10 @@ MED_DEFAULT_QUESTION = 'administration_patterns'
 #: administered", not another output type of it.
 MED_PAIN_QUESTION = 'pain_coupling'
 
+#: Level-2 question: modeled opioid exposure (MME) between doses, not dose
+#: counts. Opened deliberately (PLANNING.md, "PK curves").
+MED_PK_QUESTION = 'pk_curves'
+
 #: Frozen snapshot of the taxonomy source table (config/med_taxonomy.py records
 #: the live path). Copied once so a run's provenance points at something stable.
 MED_TAXONOMY_SNAPSHOT = MED_ANALYSIS_ROOT / 'medications_classified_snapshot.csv'

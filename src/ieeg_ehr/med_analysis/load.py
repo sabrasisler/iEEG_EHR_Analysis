@@ -135,9 +135,12 @@ def load_administrations(paths=None, drugs=None, subclasses=None,
             True — a new drug in the export is a data change, not a row to drop.
 
     Returns a DataFrame with columns:
-        subject, session, drug, level1, level2, is_combination, route,
-        dose, dose_unit, taken_dt, session_start, session_end,
+        subject, session, drug, medication, level1, level2, is_combination,
+        route, dose, dose_unit, taken_dt, session_start, session_end,
         hospital_day, hour_of_day
+
+    `medication` is the raw product string. Only the MME curves read it, for
+    the per-tablet strength of a combination product.
     """
     paths = list(paths) if paths is not None else config.med_admin_files()
     if not paths:
@@ -204,8 +207,9 @@ def load_administrations(paths=None, drugs=None, subclasses=None,
     if drugs is not None:
         given = given[given['drug'].isin(set(drugs))]
 
-    cols = ['subject', 'session', 'drug', 'level1', 'level2', 'is_combination',
-            'route', 'dose', 'dose_unit', 'taken_dt', 'session_start',
+    cols = ['subject', 'session', 'drug', 'medication', 'level1', 'level2',
+            'is_combination', 'route', 'dose', 'dose_unit', 'taken_dt',
+            'session_start',
             'session_end', 'hospital_day', 'hour_of_day']
     out = given[cols].sort_values(['subject', 'session', 'taken_dt'])
     return out.reset_index(drop=True)
