@@ -15,10 +15,11 @@ range, and the mean n_cells_used and sum_beta2 of the same steps. MDD comes from
 `dx_state.subject_labels` (90-day ICD window, a billing artefact, see there).
 
 NULL. Per subject, delta_pain is shuffled across its pairs `--n-perm` times and
-rho recomputed. The pooled null is drawn under the histogram and each subject's
-permutation percentile is stored. Both are descriptive: consecutive pairs share an
-assessment and so an epoch, so a per-subject percentile is not an independent
-test, and no group p-value is computed (CLAUDE.md, Sweeps). The null is rebuilt
+rho recomputed. Each subject's band (the middle of its own null) and permutation
+percentile are stored, the forest plot draws every subject against its own band,
+and the histogram draws the pooled null. All of it is descriptive: consecutive
+pairs share an assessment and so an epoch, so a per-subject percentile is not an
+independent test, and no group p-value is computed (CLAUDE.md, Sweeps). The null is rebuilt
 from `--seed`, not stored.
 
 Output: `<run>/tracking/<prediction>_<weighting>_<timestamp>/`
@@ -53,6 +54,10 @@ logger = logging.getLogger(__name__)
 SCRIPT = 'ieeg_ehr/analysis/pain_change_tracking.py'
 SUBDIR = 'tracking'
 RHO_BINS = np.linspace(-1, 1, 21)
+#: Percentiles of each subject's own null drawn as its band in the forest plot.
+NULL_BAND = (2.5, 97.5)
+#: Categorical slots: above the band, below it. Inside stays neutral.
+ABOVE, BELOW = '#2a78d6', '#eb6834'
 #: Sequential blue ramp (steps 250 -> 650) for sum_beta2.
 BETA2_CMAP = matplotlib.colors.LinearSegmentedColormap.from_list(
     'sum_beta2', ['#86b6ef', '#2a78d6', '#104281'])
@@ -88,6 +93,8 @@ def subject_metrics(pp, n_perm, rng):
            'slope': np.polyfit(actual, pred, 1)[0],
            'perm_percentile': 100 * float(np.mean(null < rho) + 0.5 * np.mean(null == rho)),
            'null_median': float(np.median(null)),
+           'null_lo': float(np.percentile(null, NULL_BAND[0])),
+           'null_hi': float(np.percentile(null, NULL_BAND[1])),
            'mean_sum_beta2': pp['sum_beta2'].mean(),
            'mean_n_cells_used': pp['n_cells_used'].mean()}
     return row, null
@@ -148,6 +155,46 @@ def _rho_axes(ax, table, null):
 def _annotation(table, null):
     return (f'{len(table)} subjects. rho > 0: {100 * (table["spearman_rho"] > 0).mean():.0f}%. '
             f'Median rho {table["spearman_rho"].median():.2f}, null median {np.median(null):.2f}.')
+
+
+def band_counts(table):
+    """(n above their own null band, n below)."""
+    return (int((table['spearman_rho'] > table['null_hi']).sum()),
+            int((table['spearman_rho'] < table['null_lo']).sum()))
+
+
+def fig_rho_forest(table, out_dir, title):
+    """One row per subject: its own null band and its observed rho, sorted by rho."""
+    t = table.sort_values('spearman_rho').reset_index(drop=True)
+    above = t['spearman_rho'] > t['null_hi']
+    below = t['spearman_rho'] < t['null_lo']
+    colour = np.where(above, ABOVE, np.where(below, BELOW, pplot.NEUTRAL))
+    y = np.arange(len(t))
+    fig, ax = plt.subplots(figsize=(6.4, 0.6 + 0.19 * len(t)))
+    pplot._style(ax)
+    ax.grid(axis='y', visible=False)
+    ax.hlines(y, t['null_lo'], t['null_hi'], color=pplot.GRID, lw=4.5,
+              label=f'own null, middle {NULL_BAND[1] - NULL_BAND[0]:g}%')
+    ax.axvline(0, color=pplot.MUTED, lw=0.8)
+    ax.scatter(t['spearman_rho'], y, s=26, c=colour, edgecolor='white', linewidth=0.5,
+               zorder=3)
+    for c, lab in ((ABOVE, 'above own null'), (pplot.NEUTRAL, 'inside'),
+                   (BELOW, 'below own null')):
+        ax.scatter([], [], s=26, c=c, label=lab)
+    ax.set_yticks(y)
+    ax.set_yticklabels([f'{s} ({n})' for s, n in zip(t['subject'], t['n_pairs'])],
+                       fontsize=6.5)
+    ax.set_ylim(-1, len(t))
+    ax.set_xlim(-1, 1)
+    ax.set_xlabel('Spearman rho, predicted vs actual Δpain at t2', color=pplot.INK)
+    ax.set_title(title, fontsize=10, color=pplot.INK)
+    pplot._legend(ax, loc='lower right')
+    n_above, n_below = band_counts(t)
+    tail = (100 - NULL_BAND[1]) / 100
+    pplot._footer(fig, f'{len(t)} subjects (n pairs in brackets). Above own null: {n_above}, '
+                       f'below: {n_below}. Chance expects about {tail * len(t):.1f} each. '
+                       'Descriptive: pairs share assessments.')
+    pplot._save(fig, out_dir, 'tracking_rho_forest')
 
 
 def fig_rho(table, null, out_dir, title):
@@ -247,6 +294,8 @@ EXPLORATORY, descriptive. Scoring run `{params['run_dir']}`, weights
 - Included: {len(table)} subjects (at least {params['min_pairs']} pairs and
   {params['min_levels']} distinct delta_pain values). Excluded: {len(excluded)}
   ({', '.join(f'{s} with {why}' for s, why in excluded.items()) or 'none'}).
+- Against each subject's own null (middle {NULL_BAND[1] - NULL_BAND[0]:g}%): {band_counts(table)[0]} above,
+  {band_counts(table)[1]} below, about {(100 - NULL_BAND[1]) / 100 * len(table):.1f} each expected by chance.
 - rho > 0 in {100 * (table['spearman_rho'] > 0).mean():.0f}% of subjects. Median rho
   {table['spearman_rho'].median():.2f} against a pooled null median of {np.median(null):.2f}
   ({params['n_perm']} within-subject shuffles each, seed {params['seed']}).
@@ -301,6 +350,7 @@ def main(argv=None):
                    parents=[str(source / f'predictions_{weights_name}.csv')],
                    subjects=subjects, script=SCRIPT)
     title = f'Per-subject tracking, {args.prediction}, {args.weighting}, {weights_name}'
+    fig_rho_forest(table, out_dir, title)
     fig_rho(table, null, out_dir, title)
     fig_rho_by_beta2(table, null, out_dir, title)
     fig_rho_by_mdd(table, null, out_dir, title)
