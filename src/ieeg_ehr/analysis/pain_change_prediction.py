@@ -193,8 +193,11 @@ def predict(dz_cells, pairs, weights, centering=None):
     return pd.concat(parts, ignore_index=True)
 
 
-def load_trajectory(trajectory_dir):
-    """(pairs, dz_cells) for every discovery subject in an extraction directory."""
+def load_trajectory(trajectory_dir, with_dz=True):
+    """(pairs, dz_cells) for every discovery subject in an extraction directory.
+
+    `with_dz=False` skips the dz files and returns None in their place.
+    """
     trajectory_dir = Path(trajectory_dir)
     discovery = {f'sub-{s}' for s in config.discovery_subjects()}
     pairs, dz = [], []
@@ -204,10 +207,12 @@ def load_trajectory(trajectory_dir):
             logger.warning('SPLIT GATE: %s is not discovery, skipped', sid)
             continue
         pairs.append(io.read_table(path, on_stale='warn'))
-        dz.append(io.read_table(trajectory_dir / f'dz_{sid}.parquet', on_stale='warn'))
+        if with_dz:
+            dz.append(io.read_table(trajectory_dir / f'dz_{sid}.parquet', on_stale='warn'))
     if not pairs:
         raise SystemExit(f'no discovery pairs_sub-*.parquet in {trajectory_dir}')
-    return pd.concat(pairs, ignore_index=True), pd.concat(dz, ignore_index=True)
+    return (pd.concat(pairs, ignore_index=True),
+            pd.concat(dz, ignore_index=True) if with_dz else None)
 
 
 def storage_report(trajectory_dir, n_pairs, reference_run):

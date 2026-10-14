@@ -229,12 +229,17 @@ def fig_trajectories(df, out_dir, name, title, min_subjects, groups, colours, gr
     _save(fig, out_dir, name)
 
 
+def near_t2(df, columns=('value',), keys=()):
+    """Per pair, the mean of `columns` over the steps within DOSE_WINDOW_MIN of t2."""
+    near = df[(df['t_min'] - df['gap_min']).abs() <= DOSE_WINDOW_MIN]
+    return (near.groupby(['pair_id', 'subject', 'delta_pain', *keys], observed=True)
+            [list(columns)].mean().reset_index())
+
+
 def dose_points(df, hue=None):
     """Per pair the mean prediction within DOSE_WINDOW_MIN of t2, then subject-first."""
-    near = df[(df['t_min'] - df['gap_min']).abs() <= DOSE_WINDOW_MIN]
     keys = ['delta_pain'] + ([hue] if hue else [])
-    per_pair = (near.groupby(['pair_id', 'subject'] + keys, observed=True)['value']
-                .mean().reset_index().dropna(subset=['value']))
+    per_pair = near_t2(df, keys=[hue] if hue else []).dropna(subset=['value'])
     stats = subject_first(per_pair, 'value', keys)
     n_pairs = per_pair.groupby(keys, observed=True)['pair_id'].nunique().rename('n_pairs')
     return stats.merge(n_pairs.reset_index(), on=keys)
@@ -365,20 +370,25 @@ def fig_subject_detail(df, out_dir, name, title, bins, grey_h=None):
 # Entry points
 # ============================================================================
 
+def prediction_frame(run_dir, weights_name, prediction='raw', weighting='uniform',
+                     bins=None):
+    """One scoring run's predictions joined to pair metadata, the chosen one as `value`."""
+    params = json.loads((Path(run_dir) / 'provenance.json').read_text())['params']
+    pairs, _ = load_trajectory(params['trajectory_dir'], with_dz=False)
+    preds = io.read_table(Path(run_dir) / f'predictions_{weights_name}.csv', on_stale='warn')
+    meta = pairs.assign(bin=assign_bins(pairs['delta_pain'], bins or DPAIN_BINS))[
+        ['pair_id', 'subject', 'bin', 'delta_pain', 'gap_min', 'pain1',
+         'analgesic_in_interval', 'next_report_in_window']]
+    return preds.merge(meta, on='pair_id').rename(
+        columns={f'pred_{prediction}_{weighting}': 'value'})
+
+
 def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min_subjects=3,
                bins=None):
     """Every figure for one prediction (raw | adj) and weighting (uniform | ivw)."""
     bins = bins or DPAIN_BINS
-    run_dir = Path(run_dir)
-    out_dir = run_dir / FIGURES_SUBDIR
-    params = json.loads((run_dir / 'provenance.json').read_text())['params']
-    pairs, _ = load_trajectory(params['trajectory_dir'])
-    preds = io.read_table(run_dir / f'predictions_{weights_name}.csv', on_stale='warn')
-    meta = pairs.assign(bin=assign_bins(pairs['delta_pain'], bins))[
-        ['pair_id', 'subject', 'bin', 'delta_pain', 'gap_min', 'pain1',
-         'analgesic_in_interval', 'next_report_in_window']]
-    df = preds.merge(meta, on='pair_id').rename(
-        columns={f'pred_{prediction}_{weighting}': 'value'})
+    out_dir = Path(run_dir) / FIGURES_SUBDIR
+    df = prediction_frame(run_dir, weights_name, prediction, weighting, bins)
     tag = f'{prediction}_{weighting}'
     title = f'Predicted Δpain, {prediction}, {weighting}, {weights_name}'
     grey_h = EXTRAPOLATE_BELOW_MIN / 60 if prediction == 'adj' else None
