@@ -19,7 +19,7 @@ marks.
     coverage             pairs and subjects contributing per step and bin
     subject_detail       per subject: each pair, and the bin means
 
-Written to `<run>/figures/` as PNG and PDF, suffixed with the weighting.
+Written to `<run>/figures/` as PNG, suffixed with the weighting.
 """
 
 import argparse
@@ -131,10 +131,10 @@ def _footer(fig, text):
 
 def _save(fig, out_dir, name):
     out_dir.mkdir(parents=True, exist_ok=True)
-    for ext in ('png', 'pdf'):
-        fig.savefig(out_dir / f'{name}.{ext}', dpi=200, bbox_inches='tight')
+    path = out_dir / f'{name}.png'
+    fig.savefig(path, dpi=200, bbox_inches='tight')
     plt.close(fig)
-    logger.info('wrote %s', out_dir / f'{name}.png')
+    logger.info('wrote %s', path)
 
 
 # ============================================================================
