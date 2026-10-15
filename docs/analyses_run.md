@@ -466,3 +466,4 @@ working tree had uncommitted changes, so that commit does NOT describe what ran.
 - 2026-10-14 14:39 | yeo7 label coverage, hemispheres merged, 13 labels, 6619 pairs, n=49 | $DERIV/analysis/electrode_localization/yeo7_coverage/label_counts/contpain_ref_coordqc_20261014-143926 | 2991e0dffb1a+dirty | [ ]
 - 2026-10-14 16:52 | Active-MME curves, 91 sessions, one panel each; unit-dose and superposition checks | $DERIV/analysis/meds/pk_curves/mme_curves/mme_curves_20261014-165235 | 2991e0dffb1a+dirty | [ ]
 - 2026-10-14 16:54 | Active-MME curves, 91 sessions, one panel each; unit-dose and superposition checks | $DERIV/analysis/meds/pk_curves/mme_curves/mme_curves_20261014-165405 | 2991e0dffb1a+dirty | [ ]
+- 2026-10-14 17:24 | Active-MME curves, 91 sessions, one panel each; unit-dose and superposition checks | $DERIV/analysis/meds/pk_curves/mme_curves/mme_curves_20261014-172350 | a6ffe0216086 | [ ]
