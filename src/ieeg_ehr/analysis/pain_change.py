@@ -1,6 +1,7 @@
 """pain_change: does the change in z-scored power track the change in pain?
 
-    python -m ieeg_ehr.analysis.pain_change --roi-scheme roi_v3_ins \\
+    python -m ieeg_ehr.analysis.pain_change --model opioid --roi-scheme roi_v2_ofc_ins \\
+        --exclude-first-h 24 --insula-from-run <earlier pain_change run> \\
         --mask-label std10_rv-gross-std3_satmargin15_sw_logz4
 
 Input is the `fullresz` z-score table (`views/build_pain_epoch_fullres_zscore.py`):
@@ -19,32 +20,44 @@ then the mean d_z over the native frequencies inside each band of
 (`axes.aggregate_bands`), line-noise bins removed first. `--band-set fullres`
 keeps every native frequency as its own cell.
 
-One mixed model per ROI x band cell, rows = pair x channel:
+Every pair also carries the opioid exposure of `config.opioid_mme.EXPOSURE_VERSION`
+in typical doses (`add_exposure`): C at each assessment is the mean active-MME
+curve over the 5-min epoch before it, `dC = C_2 - C_1`, and `Cbar` is the mean
+curve over [t1, t2), centred on the cohort mean over pairs. Sessions with no MAR
+export are dropped for every model, so all models of one level-4 folder fit the
+same rows. `--exclude-first-h` drops pairs whose first epoch starts within that
+many hours of `session_start`.
 
-    d_z ~ d_pain + pain_1_within + gap_h + (1 | subject) + (0 + d_pain | subject)
+One mixed model per ROI x band cell, rows = pair x channel, fixed and random
+effects from `MODELS[--model]`. Every model has `RE_SUBJECT`,
+`(1 | subject) + (0 + d_pain | subject)`, uncorrelated, and no channel component (a
+channel's level cancels in the difference, see mixed_model.py). `opioid-pairint`
+adds `(1 | pair_id)`, a shift each pair's channels share, which only lme4 fits. `pain_1_within`
+is `pain_1` centred within subject over the cell's rows. The LRT on the random
+`d_pain` slope uses `VC_CHANGE_REDUCED`. Every cell gets one `fit_status`
+(`FIT_STATUSES`), and the run logs and writes the count per status.
 
-The random effects are `mixed_model.VC_CHANGE`: uncorrelated subject intercept
-and subject `d_pain` slope, no channel component (a channel's level cancels in
-the difference, see mixed_model.py). `pain_1_within` is `pain_1` centred within
-subject over the cell's rows, the same centring `mixed_model.add_nrs_components`
-applies to NRS. The reported term is `d_pain`: change in z per point of NRS
-change. The LRT on the random `d_pain` slope uses `VC_CHANGE_REDUCED`.
+BH FDR across all fitted cells and within each region, per term of `FDR_TERMS`
+(`add_fdr`). Discovery cohort only. Output is NOMINATIONS, not findings.
 
-BH FDR across all fitted cells and within each region (`add_fdr`). Discovery
-cohort only. Output is NOMINATIONS, not findings.
-
-Each run lands in `analysis/pain/pain_change/bandpower/<run_name>_<timestamp>/`
-(`fullres/` for `--freq fullres`): `cells.csv`, `pair_index.csv`, `METHODS.md`,
-`provenance.json`, and every figure in `figures/`.
+Each run lands in
+`analysis/pain/pain_change/bandpower/<data token>/<run token>_<timestamp>/`
+(`fullres/` for `--band-set fullres`), names from docs/run_tokens.md:
+`cells.csv`, `pair_index.csv`, `METHODS.md`, `provenance.json`, and every figure
+in `figures/`.
 """
 
 import argparse
 import dataclasses
 import inspect
+import json
 import logging
 import os
+import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -53,8 +66,11 @@ from ieeg_ehr import config, io
 from ieeg_ehr.analysis import (change_score, fullres_cells, med_state,
                                mixed_model as mm, view_tables)
 from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS
+from ieeg_ehr.analysis.run_domain_lmer import check_r, r_environment
 from ieeg_ehr.analysis.run_mixed_model_grid import FDR_Q, add_fdr
 from ieeg_ehr.analysis.run_mixed_model_pilot import roi_maps
+from ieeg_ehr.config import opioid_mme
+from ieeg_ehr.med_analysis import load, mme_curve
 from ieeg_ehr.views import axes, fullres_reader, view_config
 from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
 
@@ -64,10 +80,93 @@ SCRIPT = 'ieeg_ehr/analysis/pain_change.py'
 #: Level-3 folder per frequency axis. Figures go in each run's FIGURES_SUBDIR.
 OUTPUT_TYPE = {'bands': 'bandpower', 'fullres': 'fullres'}
 FIGURES_SUBDIR = 'figures'
-RUN_NAME = 'painchange'
 
-FORMULA = 'd_z ~ d_pain + pain_1_within + gap_h'
-TERMS = (('d_pain', 'dpain'), ('pain_1_within', 'baseline'), ('gap_h', 'gap'))
+#: The subject random effects of every model, `mixed_model.VC_CHANGE` in lme4 syntax.
+RE_SUBJECT = '(1 | subject) + (0 + d_pain | subject)'
+
+
+@dataclasses.dataclass(frozen=True)
+class Model:
+    """Fixed effects and random effects of one model ID."""
+    fixed: str
+    random: str = RE_SUBJECT
+
+    @property
+    def formula(self):
+        return f'{self.fixed} + {self.random}'
+
+
+_PAINCHANGE = 'd_z ~ d_pain + pain_1_within + gap_h'
+_OPIOID = 'd_z ~ d_pain + dC + Cbar + d_pain:Cbar + pain_1_within + gap_h'
+#: ΔC in place of Cbar, in the main effects and the interaction. dC is not centred:
+#: 0 already means no exposure change, so `d_pain` is the slope at steady exposure.
+_OPIOID_DC = 'd_z ~ d_pain + dC + d_pain:dC + pain_1_within + gap_h'
+_PAIR = f'{RE_SUBJECT} + (1 | pair_id)'
+#: Model ID -> model (docs/run_tokens.md). One ID always means one formula; a new
+#: formula takes a new ID. `(1 | pair_id)` gives each pair one shift shared by its
+#: channels, so pair-level predictors are tested against the number of pairs, not
+#: of channel rows. pair_id is unique across subjects, so it is `(1 | subject:pair)`.
+#: Only lme4 fits a random effect other than RE_SUBJECT.
+MODELS = {
+    'painchange': Model(_PAINCHANGE),
+    'painchange-pairint': Model(_PAINCHANGE, _PAIR),
+    'opioid': Model(_OPIOID),
+    'opioid-pairint': Model(_OPIOID, _PAIR),
+    'opioid-dc-pairint': Model(_OPIOID_DC, _PAIR),
+}
+#: Fixed-effect term -> column prefix in cells.csv.
+TERM_PREFIX = {'d_pain': 'dpain', 'pain_1_within': 'baseline', 'gap_h': 'gap',
+               'dC': 'dc', 'Cbar': 'cbar', 'd_pain:Cbar': 'dpain_x_cbar',
+               'd_pain:dC': 'dpain_x_dc'}
+#: Terms that each get their own BH family.
+FDR_TERMS = ('d_pain', 'd_pain:Cbar', 'd_pain:dC', 'dC', 'Cbar')
+EXPOSURE_TERMS = ('dC', 'Cbar', 'd_pain:Cbar', 'd_pain:dC')
+#: Fitting-engine tokens (docs/run_tokens.md): statsmodels `MixedLM`, `lme4::lmer`.
+ENGINES = ('sm', 'lme4')
+LME4_SCRIPT = Path(__file__).with_name('pain_change_lmer.R')
+LME4_OPTIMIZER = 'bobyqa'
+#: Columns the lme4 frame carries besides cell_id, subject and d_z.
+LME4_COLUMNS = ['pair_id', 'd_pain', 'dC', 'Cbar', 'pain_1_within', 'gap_h']
+#: Pair columns a cell frame carries.
+PAIR_COLUMNS = ['pair_id', 'd_pain', 'pain_1', 'gap_h', 'dC', 'Cbar']
+
+#: One per cell, in report order. `boundary`: a random-effect variance
+#: contributes under mm.BOUNDARY_TOL of the residual variance (`boundary_component`
+#: names it); the fixed effects still hold. `warn`: converged with a SERIOUS_WARNING,
+#: so the standard errors are suspect. `failed`: raised, non-finite, or not
+#: converged. `floor`: below the coverage floor, never fitted.
+FIT_STATUSES = ('ok', 'boundary', 'warn', 'failed', 'floor')
+#: statsmodels messages that make a converged fit's standard errors suspect. Its
+#: "MLE may be on the boundary" is NOT one: it fires on any variance component
+#: under an absolute 0.01, which the d_pain slope variance (z per NRS point,
+#: squared) always is. The relative check of `fit_status` replaces it.
+SERIOUS_WARNINGS = ('Hessian matrix', 'covariance is singular',           # statsmodels
+                    'Hessian is numerically singular', 'nearly unidentifiable')  # lme4
+
+
+def model_terms(model):
+    """The fixed-effect terms of `model`, in formula order."""
+    return [t.strip() for t in MODELS[model].fixed.split('~')[1].split('+')]
+
+
+def uses_exposure(model):
+    return any(t in EXPOSURE_TERMS for t in model_terms(model))
+
+
+def data_token(vc, band_set, exclude_first_h):
+    """The level-4 folder: which rows go in and what their d_z is (docs/run_tokens.md)."""
+    norm = (view_config.NORMALIZATION_CODES[vc.normalization]
+            + view_config.BASELINE_CODES[vc.baseline])
+    tokens = [norm, band_set.replace('_', ''), view_config.ROI_SCHEME_CODES[vc.roi_scheme]]
+    if exclude_first_h:
+        tokens.append(f'nofirst{exclude_first_h:g}h')
+    return '-'.join(tokens)
+
+
+def run_token(model, engine):
+    """The run name before its timestamp: model, exposure version if used, engine."""
+    exposure = [opioid_mme.EXPOSURE_VERSION] if uses_exposure(model) else []
+    return '_'.join([model, *exposure, engine])
 
 
 def discovery_paths(zdir):
@@ -83,6 +182,59 @@ def discovery_paths(zdir):
     if not paths:
         raise SystemExit(f'no discovery zmean_sub-*.parquet in {zdir}')
     return paths
+
+
+def load_exposure():
+    """(session_start per (subject, session), opioid doses in MME) from the MAR export."""
+    admin = load.load_administrations()
+    return (admin.groupby(['subject', 'session'])['session_start'].first(),
+            mme_curve.opioid_doses(admin))
+
+
+def add_exposure(pairs, exclude_first_h=None):
+    """(pairs with opioid exposure, report). Drops no-MAR sessions and early pairs.
+
+    `C_1`, `C_2`: mean active MME over the 5-min epoch before each assessment.
+    `dC = C_2 - C_1`. `Cbar`: mean over [t1, t2), NOT centred here (`load_rows`
+    centres it on the cohort). All in typical doses (`TYPICAL_DOSE_MME`).
+    `e1_start_h`: hours from `session_start` to the start of the first epoch.
+
+    A session with no MAR export has unknown exposure, not zero, so its pairs go.
+    A session with an export and no opioid dose has C = 0 throughout.
+    """
+    starts, doses = load_exposure()
+    has_mar = pd.MultiIndex.from_frame(pairs[['subject', 'session']]).isin(starts.index)
+    no_mar = sorted(pairs.loc[~has_mar, 'subject_id'].unique())
+    if no_mar:
+        logger.warning('NO MAR EXPORT: dropping %d pairs of %s', int((~has_mar).sum()), no_mar)
+    pairs = pairs[has_mar].reset_index(drop=True)
+
+    start = starts.reindex(pd.MultiIndex.from_frame(pairs[['subject', 'session']])).to_numpy()
+    t1_h = (pairs['t1'].to_numpy() - start) / np.timedelta64(1, 'h')
+    t2_h = (pairs['t2'].to_numpy() - start) / np.timedelta64(1, 'h')
+    epoch_h = config.EPOCH_MINUTES_BEFORE / 60.0
+    c1, c2, cbar = (np.zeros(len(pairs)) for _ in range(3))
+    for (subject, session), idx in pairs.groupby(['subject', 'session']).indices.items():
+        d = doses[(doses['subject'] == subject) & (doses['session'] == session)]
+        c1[idx] = mme_curve.window_mean(d, t1_h[idx] - epoch_h, t1_h[idx])
+        c2[idx] = mme_curve.window_mean(d, t2_h[idx] - epoch_h, t2_h[idx])
+        cbar[idx] = mme_curve.window_mean(d, t1_h[idx], t2_h[idx])
+    pairs['e1_start_h'] = t1_h - epoch_h
+    pairs['C_1'] = c1 / opioid_mme.TYPICAL_DOSE_MME
+    pairs['C_2'] = c2 / opioid_mme.TYPICAL_DOSE_MME
+    pairs['dC'] = pairs['C_2'] - pairs['C_1']
+    pairs['Cbar'] = cbar / opioid_mme.TYPICAL_DOSE_MME
+
+    report = {'no_mar_subjects': no_mar, 'n_pairs_no_mar': int((~has_mar).sum()),
+              'exclude_first_h': exclude_first_h, 'n_pairs_early': 0}
+    if exclude_first_h:
+        early = pairs['e1_start_h'] < exclude_first_h
+        logger.info('FIRST %g H: dropping %d of %d pairs (%d subjects lose all their pairs)',
+                    exclude_first_h, int(early.sum()), len(pairs),
+                    len(set(pairs['subject']) - set(pairs.loc[~early, 'subject'])))
+        report['n_pairs_early'] = int(early.sum())
+        pairs = pairs[~early].reset_index(drop=True)
+    return pairs, report
 
 
 def change_matrix(table, pairs, freq_cols):
@@ -126,45 +278,98 @@ def cell_frame(index, values, j, pairs):
     """One cell's model frame: rows with a finite d_z, covariates joined by pair."""
     df = index.assign(d_z=values[:, j])
     df = df[np.isfinite(df['d_z'])]
-    df = df.merge(pairs[['pair_id', 'd_pain', 'pain_1', 'gap_h']], on='pair_id')
+    df = df.merge(pairs[PAIR_COLUMNS], on='pair_id')
     df['pain_1_within'] = df['pain_1'] - df.groupby('subject')['pain_1'].transform('mean')
     return df.reset_index(drop=True)
 
 
-def fit_cell_record(df, meta, min_subjects, with_lrt=True):
-    """One row of results for one ROI x frequency cell. `with_lrt=False` skips the reduced fit."""
-    t0 = time.time()
-    base = {**meta, 'n_subjects': df['subject'].nunique(),
+def fit_status(converged, ratios, warnings):
+    """(status, boundary component) for a cell that reached the fitter.
+
+    `ratios` maps each variance component to its contribution over the residual
+    variance.
+    """
+    if not converged:
+        return 'failed', ''
+    low = [name for name, r in ratios.items() if r < mm.BOUNDARY_TOL]
+    if low:
+        return 'boundary', ','.join(low)
+    serious = any(s in w for w in warnings for s in SERIOUS_WARNINGS)
+    return ('warn' if serious else 'ok'), ''
+
+
+def cell_base(df, meta):
+    """A cell's identity and counts, the start of its results row."""
+    return {**meta, 'n_subjects': df['subject'].nunique(),
             'n_channels': df['channel_uid'].nunique(),
             'n_pairs': df['pair_id'].nunique(), 'n_rows': len(df)}
+
+
+def floor_record(df, base, min_subjects):
+    """The results row of a cell below the coverage floor, else None."""
     if (len(df) < mm.MIN_ROWS or base['n_subjects'] < min_subjects
             or df['d_pain'].std(ddof=0) == 0):
-        return {**base, 'converged': False,
+        return {**base, 'converged': False, 'fit_status': 'floor',
                 'error': f'below floor: {base["n_rows"]} rows, '
                          f'{base["n_subjects"]} subjects (min {min_subjects})'}
+    return None
+
+
+def variance_ratios(var_int, var_dpain, scale, df, var_pair=None):
+    """Each random-effect variance's contribution to the linear predictor over the residual."""
+    ratios = {'subj_int': var_int / scale,
+              'subj_dpain': var_dpain * float(df['d_pain'].var(ddof=0)) / scale}
+    if var_pair is not None:
+        ratios['pair'] = var_pair / scale
+    return ratios
+
+
+def fit_cell_record(df, meta, min_subjects, model, with_lrt=True):
+    """One row of results for one ROI x frequency cell. `with_lrt=False` skips the reduced fit."""
+    t0 = time.time()
+    if MODELS[model].random != RE_SUBJECT:
+        raise ValueError(f'model {model} has random effects only the lme4 engine fits')
+    formula = MODELS[model].fixed
+    base = cell_base(df, meta)
+    floor = floor_record(df, base, min_subjects)
+    if floor:
+        return floor
     try:
-        res, warn = mm.fit_cell(df, mm.VC_CHANGE, formula=FORMULA)
+        res, warn = mm.fit_cell(df, mm.VC_CHANGE, formula=formula)
     except mm.CellFitError as exc:
-        return {**base, 'converged': False, 'error': str(exc)[:200]}
+        return {**base, 'converged': False, 'fit_status': 'failed', 'error': str(exc)[:200]}
     stat, p_lrt = np.nan, np.nan
     if with_lrt:
         try:
-            res_red, _ = mm.fit_cell(df, mm.VC_CHANGE_REDUCED, formula=FORMULA)
+            res_red, _ = mm.fit_cell(df, mm.VC_CHANGE_REDUCED, formula=formula)
             stat, p_lrt = mm.lrt(res, res_red)
         except mm.CellFitError:
             pass
 
     rec = dict(base)
-    for term, prefix in TERMS:
-        rec.update(mm.term_stats(res, term, prefix))
+    for term in model_terms(model):
+        rec.update(mm.term_stats(res, term, TERM_PREFIX[term]))
     vc = mm.vcomp_by_name(res)
-    rec.update({'var_subj_int': float(vc.get('subj_int', np.nan)),
-                'var_subj_dpain': float(vc.get('subj_dpain', np.nan)),
-                'var_resid': float(res.scale),
+    var_int, var_dpain = float(vc['subj_int']), float(vc['subj_dpain'])
+    scale = float(res.scale)
+    ratios = variance_ratios(var_int, var_dpain, scale, df)
+    status, boundary = fit_status(bool(res.converged), ratios, warn)
+    rec.update({'var_subj_int': var_int, 'var_subj_dpain': var_dpain, 'var_resid': scale,
+                'int_var_ratio': ratios['subj_int'], 'slope_var_ratio': ratios['subj_dpain'],
                 'lrt_stat': float(stat), 'p_lrt_mixture': float(p_lrt),
                 'converged': bool(res.converged), 'n_warnings': len(warn),
+                'warnings': ' | '.join(warn), 'fit_status': status,
+                'boundary_component': boundary,
                 'error': '', 'fit_seconds': round(time.time() - t0, 1)})
     return rec
+
+
+def fit_summary(cells):
+    """Cells per fit status, with each fitted status's share of the cells above the floor."""
+    counts = cells['fit_status'].value_counts().reindex(FIT_STATUSES, fill_value=0)
+    fitted = int(counts.drop('floor').sum())
+    pct = (100 * counts / fitted).round(1) if fitted else counts * np.nan
+    return pd.DataFrame({'n_cells': counts, 'pct_of_fitted': pct.where(counts.index != 'floor')})
 
 
 @dataclasses.dataclass
@@ -180,10 +385,12 @@ class Rows:
     notch: list
     no_roi: list
     split_report: dict
+    pair_report: dict
+    cbar_center: float
 
 
 def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
-              notch_half_width_hz=None, insula_threshold=None):
+              notch_half_width_hz=None, insula_threshold=None, exclude_first_h=None):
     """The d_z rows of the z-score tables at `paths`, ROI-mapped channels only.
 
     `insula_threshold` pins the coordinate insula split to an earlier run's cut.
@@ -197,7 +404,8 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
 
     admin = med_state.load_admin_table(subclasses=med_state.DRUG_SETS['analgesics'])
     defs = med_state.load_epoch_defs(subjects=sorted(subjects))
-    pairs = change_score.build_pairs(defs, admin, min_gap_min, max_gap_min)
+    pairs, pair_report = add_exposure(
+        change_score.build_pairs(defs, admin, min_gap_min, max_gap_min), exclude_first_h)
 
     freq_table, notch = fullres_cells.analysis_freq_table(notch_half_width_hz)
     bands = BAND_SETS.get(band_set)
@@ -225,18 +433,22 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
             index_parts.append(idx)
             value_parts.append(vals)
     index = pd.concat(index_parts, ignore_index=True)
-    logger.info('%d pair x channel rows, %d subjects, %d regions x %d %s cells',
-                len(index), index['subject'].nunique(), len(regions), len(cols), band_set)
+
+    in_cohort = pairs['subject_id'].isin(index['subject'].unique())
+    cbar_center = float(pairs.loc[in_cohort, 'Cbar'].mean())
+    pairs['Cbar'] = pairs['Cbar'] - cbar_center
+    logger.info('%d pair x channel rows, %d subjects, %d regions x %d %s cells; '
+                'Cbar centred on %.4f typical doses', len(index), index['subject'].nunique(),
+                len(regions), len(cols), band_set, cbar_center)
     return Rows(index, np.vstack(value_parts), pairs, regions, cols, col_hz, bands,
-                notch, no_roi, split_report)
+                notch, no_roi, split_report, pair_report, cbar_center)
 
 
-def cell_jobs(rows, min_subjects, holdout=None, with_lrt=True):
-    """One delayed fit per ROI x frequency cell, without `holdout`'s rows when given.
+def cell_frames(rows, holdout=None):
+    """(meta, model frame) per ROI x frequency cell, without `holdout`'s rows when given.
 
-    A generator, so joblib builds each cell frame only when a worker is free.
+    A generator, so a caller builds each cell frame only when it needs it.
     """
-    from joblib import delayed
     keep = (rows.index['subject'] != holdout).to_numpy()
     for region in rows.regions:
         in_region = (rows.index['region'] == region).to_numpy() & keep
@@ -248,8 +460,80 @@ def cell_jobs(rows, min_subjects, holdout=None, with_lrt=True):
                     'freq_high_hz': rows.col_hz[col][1]}
             if holdout is not None:
                 meta['heldout_subject'] = holdout
-            yield delayed(fit_cell_record)(cell_frame(sub_index, sub_values, j, rows.pairs),
-                                           meta, min_subjects, with_lrt)
+            yield meta, cell_frame(sub_index, sub_values, j, rows.pairs)
+
+
+def cell_jobs(rows, min_subjects, model, holdout=None, with_lrt=True):
+    """One delayed statsmodels fit per ROI x frequency cell (`cell_frames`)."""
+    from joblib import delayed
+    for meta, df in cell_frames(rows, holdout):
+        yield delayed(fit_cell_record)(df, meta, min_subjects, model, with_lrt)
+
+
+def lme4_records(rows, min_subjects, model, n_jobs, holdout=None):
+    """Every cell fitted by `lme4::lmer` (`pain_change_lmer.R`), in fit_cell_record's schema.
+
+    The cell frames, floors, formula and random effects are the statsmodels path's,
+    so the two engines differ only in the fitter. p-values are Wald z as in
+    statsmodels. No LRT. `lme4_singular` is lme4's own `isSingular(tol = 1e-4)`.
+    """
+    from scipy import stats
+    check_r()
+    bases, records, frames = {}, [], []
+    for k, (meta, df) in enumerate(cell_frames(rows, holdout)):
+        base = cell_base(df, meta)
+        floor = floor_record(df, base, min_subjects)
+        if floor:
+            records.append(floor)
+            continue
+        bases[k] = (base, df)
+        frames.append(df.assign(cell_id=k))
+    formula = MODELS[model].formula
+    with tempfile.TemporaryDirectory(dir=os.environ.get('L_SCRATCH')) as tmp:
+        csv = Path(tmp) / 'frames.csv'
+        pd.concat(frames)[['cell_id', 'subject', 'd_z'] + LME4_COLUMNS].to_csv(csv, index=False)
+        cmd = ['Rscript', str(LME4_SCRIPT), '--in', str(csv), '--out', tmp,
+               '--formula', formula, '--cores', str(n_jobs), '--optimizer', LME4_OPTIMIZER]
+        logger.info('lme4: %d cells, %s', len(frames), ' '.join(cmd))
+        proc = subprocess.run(cmd, env=r_environment(), text=True, capture_output=True)
+        for line in proc.stdout.splitlines():
+            logger.info('[R] %s', line)
+        if proc.returncode != 0:
+            raise SystemExit(f'pain_change_lmer.R failed:\n{proc.stderr[-4000:]}')
+        fits = pd.read_csv(Path(tmp) / 'lmer_cells.csv', keep_default_na=False,
+                           na_values=['NA'])
+        terms = pd.read_csv(Path(tmp) / 'lmer_terms.csv')
+
+    terms = terms.groupby('cell_id')
+    for fit in fits.itertuples():
+        base, df = bases[fit.cell_id]
+        rec = dict(base)
+        warn = [w for w in str(fit.warnings).split(' | ') if w]
+        if fit.error:
+            records.append({**rec, 'converged': False, 'fit_status': 'failed',
+                            'warnings': ' | '.join(warn), 'error': fit.error[:200]})
+            continue
+        t = terms.get_group(fit.cell_id).set_index('term')
+        for term in model_terms(model):
+            beta, se = float(t.at[term, 'beta']), float(t.at[term, 'se'])
+            p = TERM_PREFIX[term]
+            rec.update({f'{p}_beta': beta, f'{p}_se': se, f'{p}_z': beta / se,
+                        f'{p}_p': float(2 * stats.norm.sf(abs(beta / se)))})
+        has_pair = 'pair_id' in MODELS[model].random
+        ratios = variance_ratios(fit.var_subj_int, fit.var_subj_dpain, fit.var_resid, df,
+                                 fit.var_pair if has_pair else None)
+        status, boundary = fit_status(bool(fit.converged), ratios, warn)
+        rec.update({'var_subj_int': fit.var_subj_int, 'var_subj_dpain': fit.var_subj_dpain,
+                    'var_resid': fit.var_resid, 'int_var_ratio': ratios['subj_int'],
+                    'slope_var_ratio': ratios['subj_dpain'],
+                    'var_pair': fit.var_pair if has_pair else np.nan,
+                    'pair_var_ratio': ratios.get('pair', np.nan),
+                    'converged': bool(fit.converged), 'lme4_singular': bool(fit.singular),
+                    'n_warnings': len(warn), 'warnings': ' | '.join(warn),
+                    'fit_status': status, 'boundary_component': boundary,
+                    'error': '', 'fit_seconds': fit.fit_seconds})
+        records.append(rec)
+    return records
 
 
 def random_effects_text(vc):
@@ -257,40 +541,98 @@ def random_effects_text(vc):
     return ' + '.join(f'({v} | subject)' for v in vc.values())
 
 
-def write_methods(run_dir, cells, params, n_pairs, cohort):
+def fit_summary_text(summary):
+    """The fit-status table as markdown."""
+    lines = ['| Status | Cells | % of fitted |', '|---|---|---|']
+    for status, r in summary.iterrows():
+        pct = '' if pd.isna(r['pct_of_fitted']) else f"{r['pct_of_fitted']:g}"
+        lines.append(f"| `{status}` | {int(r['n_cells'])} | {pct} |")
+    return '\n'.join(lines)
+
+
+def estimation_text(engine):
+    """How `engine` fits a cell, for provenance and METHODS.md."""
+    if engine == 'sm':
+        fit = inspect.signature(mm.fit_cell).parameters
+        return (f"statsmodels `MixedLM`, REML, maxiter={fit['maxiter'].default}, default "
+                "optimizer, Wald z p-values, likelihood-ratio test of the random `d_pain` slope")
+    return (f"`lme4::lmer`, REML, optimizer {LME4_OPTIMIZER} (maxfun 2e5), Wald z p-values "
+            "as in statsmodels, no likelihood-ratio test. `lme4_singular` is lme4's "
+            "`isSingular(tol = 1e-4)`")
+
+
+def write_methods(run_dir, cells, params, n_pairs, cohort, summary):
     """METHODS.md built from the constants the fit used, so the text cannot drift from the code."""
-    fit = inspect.signature(mm.fit_cell).parameters
     bands = params['bands']
     freq_text = (', '.join(f'{b} {lo}-{hi} Hz' for b, (lo, hi) in bands.items())
                  if bands else 'every native 0.5 Hz frequency as its own cell')
-    n_conv = int(cells['converged'].sum())
-    text = f"""# pain_change mixed-effects grid
+    model = params['model']
+    reported = ', '.join(f'`{t}`' for t in model_terms(model))
+    fdr = ', '.join(f'`{t}`' for t in FDR_TERMS if t in model_terms(model))
+    pr = params['pair_report']
+    pair_text = ("- `(1 | pair_id)`: one shift per pair, shared by its channels, so the\n"
+                 "  pair-level predictors are tested against the number of pairs rather\n"
+                 "  than of pair x channel rows (`var_pair`, `pair_var_ratio`).\n"
+                 if 'pair_id' in MODELS[model].random else '')
+    exposure_vars = f"""- `dC`: C_2 - C_1, where C is the mean of the {params['exposure_version']}
+  active-MME curve (`med_analysis/mme_curve.py`) over the 5-min epoch before the
+  assessment, in typical doses of {params['typical_dose_mme']:g} MME (the median
+  opioid dose of the discovery cohort, `config/opioid_mme.py`). Not centred.
+""" if uses_exposure(model) else ''
+    if 'Cbar' in model_terms(model):
+        exposure_vars += f"""- `Cbar`: the mean of the same curve over [t1, t2), in typical doses, centred on
+  the cohort mean over pairs ({params['cbar_center']:.4f} typical doses). The
+  `d_pain` term is therefore the slope at average exposure.
+"""
+    elif 'd_pain:dC' in model_terms(model):
+        exposure_vars += ("- `d_pain:dC`: the change in the pain slope per typical dose of exposure\n"
+                          "  change. dC = 0 means steady exposure, so `d_pain` is the slope there.\n")
+    medication = ("- Doses before `session_start` (the OR) are not in the MAR export, so\n"
+                  "  exposure early in a session is a lower bound. Non-opioid analgesics\n"
+                  "  are not modelled." if uses_exposure(model)
+                  else '- No medication term: a dose between the two assessments is not modelled.')
+    early = (f"Pairs whose first epoch starts within {pr['exclude_first_h']:g} h of "
+             f"`session_start` are dropped ({pr['n_pairs_early']} pairs). "
+             if pr['exclude_first_h'] else '')
+    text = f"""# pain_change mixed-effects grid: `{params['run_name']}`
 
 EXPLORATORY, discovery cohort. NOMINATIONS, NOT FINDINGS.
 
 ## Model
 
 One linear mixed model per ROI x frequency cell. Rows are pair x channel.
+Model `{model}`:
 
 ```
-{FORMULA} + {random_effects_text(mm.VC_CHANGE)}
+{MODELS[model].formula}
 ```
 
-- Random effects: `{mm.VC_CHANGE}` as statsmodels `vc_formula` components grouped by
-  subject, with `re_formula='0'`. The intercept and `d_pain` slope are independent
-  variance components, so they are uncorrelated (lme4 `(d_pain || subject)`).
+- Random effects: subject intercept and subject `d_pain` slope, uncorrelated
+  (lme4 `(d_pain || subject)`, statsmodels `vc_formula` `{mm.VC_CHANGE}`).
   No channel component: a channel's level cancels in the pair difference.
-- Estimation: statsmodels `MixedLM`, REML={fit['reml'].default}, maxiter={fit['maxiter'].default},
-  default optimizer. A cell that raises or returns non-finite fixed effects is
-  recorded with `converged=False` and its error.
-- Reported term: `d_pain`, the change in z per point of NRS change. Also reported:
-  `pain_1_within`, `gap_h`, the variance components, and a likelihood-ratio test of
-  the random `d_pain` slope against `{random_effects_text(mm.VC_CHANGE_REDUCED)}`
-  on the 50:50 chi2(0)/chi2(1) mixture (`p_lrt_mixture`).
-- Multiple comparisons: Benjamini-Hochberg at q={FDR_Q} on `dpain_p` across all
-  fitted cells (`dpain_bh`) and within each region (`dpain_bh_within_region`).
+{pair_text}- Estimation (engine `{params['engine']}`): {params['estimation']}.
+- Reported terms: {reported} and the variance components. The statsmodels LRT
+  tests the random slope against `{random_effects_text(mm.VC_CHANGE_REDUCED)}` on the
+  50:50 chi2(0)/chi2(1) mixture (`p_lrt_mixture`).
+- Multiple comparisons: Benjamini-Hochberg at q={FDR_Q}, one family per term
+  ({fdr}), across all fitted cells (`<term>_bh`) and within each region
+  (`<term>_bh_within_region`).
 - Inclusion floors per cell: at least {mm.MIN_ROWS} rows, at least
   {params['min_subjects']} subjects, and non-zero `d_pain` variance.
+
+## Fit status
+
+{fit_summary_text(summary)}
+
+`boundary`: the subject intercept or the random `d_pain` slope contributes under
+{mm.BOUNDARY_TOL:g} of the residual variance (`boundary_component`), so the fit is
+in effect without that component and its fixed effects still hold. `warn`:
+converged with a warning that makes the standard errors suspect
+({', '.join(f'"{s}"' for s in SERIOUS_WARNINGS)}, column `warnings`). statsmodels'
+"MLE may be on the boundary" does not count: it fires on any variance under an
+absolute 0.01. `failed`: raised, non-finite, or not converged, drawn grey on the
+heatmaps. `floor`: below the coverage floor, never fitted. Percentages are of the
+cells above the floor.
 
 ## Variables
 
@@ -301,22 +643,24 @@ One linear mixed model per ROI x frequency cell. Rows are pair x channel.
 - Frequency cells (`{params['band_set']}`): {freq_text}. Bands average d_z arithmetically over the native
   frequencies inside them after removing {len(params['notch_bins_removed'])} line-noise bins.
 - `d_pain`: NRS of the later assessment minus the earlier one.
-- `pain_1_within`: NRS of the earlier assessment, centred on the subject's mean
+{exposure_vars}- `pain_1_within`: NRS of the earlier assessment, centred on the subject's mean
   over the cell's rows.
 - `gap_h`: hours between the two assessments.
 
 ## Data
 
 Consecutive assessment pairs within a session, {params['min_gap_min']:g}-{params['max_gap_min']:g} min apart
-(`change_score.build_pairs`). ROI scheme `{params['roi_scheme']}`. {len(cohort)} subjects,
-{n_pairs} pairs, {len(cells)} cells, {n_conv} converged.
+(`change_score.build_pairs`). Sessions with no MAR export are dropped
+({pr['n_pairs_no_mar']} pairs of {', '.join(pr['no_mar_subjects']) or 'no subject'}). {early}ROI scheme
+`{params['roi_scheme']}`, insula cut {params['insula_threshold']}. {len(cohort)} subjects,
+{n_pairs} pairs, {len(cells)} cells.
 
 ## Limitations
 
 - Consecutive pairs share an assessment, so neighbouring rows are correlated
   beyond what the subject random effects absorb.
 - Pairs with `d_pain == 0` inform the intercept and covariates only.
-- No medication term: a dose between the two assessments is not modelled.
+{medication}
 - p-values are parametric (Wald z), not permutation-based.
 """
     (run_dir / 'METHODS.md').write_text(text)
@@ -327,60 +671,99 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--model', required=True, choices=list(MODELS))
+    ap.add_argument('--engine', choices=ENGINES, default='sm')
+    ap.add_argument('--exclude-first-h', type=float, default=None,
+                    help='drop pairs whose first epoch starts within this many hours '
+                         'of session_start')
+    ap.add_argument('--insula-from-run', default=None,
+                    help='pin the insula cut to this pain_change run\'s threshold')
     ap.add_argument('--min-gap-min', type=float, default=change_score.DEFAULT_MIN_GAP_MIN)
     ap.add_argument('--max-gap-min', type=float, default=change_score.DEFAULT_MAX_GAP_MIN)
     ap.add_argument('--min-subjects', type=int, default=mm.MIN_SUBJECTS)
     ap.add_argument('--notch-half-width-hz', type=float, default=None)
     ap.add_argument('--n-jobs', type=int,
                     default=int(os.environ.get('SLURM_CPUS_PER_TASK', 1)))
-    ap.add_argument('--run-name', default=RUN_NAME)
     view_config.add_view_arguments(ap)
     ap.add_argument('--band-set', choices=list(BAND_SETS) + ['fullres'],
                     default='paper_bands_6_hg200')
     ap.set_defaults(baseline='all_pain_epochs', freq='fullres', region='none')
     args = ap.parse_args(argv)
+    if args.engine == 'sm' and MODELS[args.model].random != RE_SUBJECT:
+        ap.error(f'--model {args.model} needs --engine lme4')
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     io.warn_if_dirty()
 
+    insula_threshold = None
+    if args.insula_from_run:
+        prov = json.loads((Path(args.insula_from_run) / 'provenance.json').read_text())
+        insula_threshold = prov['insula_split']['thresholds']
     vc = view_config.from_args(args)
     zdir = zview.zscore_dir(vc)
     rows = load_rows(discovery_paths(zdir), args.roi_scheme, args.band_set,
-                     args.min_gap_min, args.max_gap_min, args.notch_half_width_hz)
-    index, pairs, bands, notch = rows.index, rows.pairs, rows.bands, rows.notch
-    no_roi, split_report = rows.no_roi, rows.split_report
-    logger.info('fitting up to %d cells on %d worker(s)', len(rows.regions) * len(rows.cols),
-                args.n_jobs)
-    records = Parallel(n_jobs=args.n_jobs, verbose=5)(cell_jobs(rows, args.min_subjects))
-    cells = add_fdr(pd.DataFrame(records), 'dpain_p', 'dpain')
+                     args.min_gap_min, args.max_gap_min, args.notch_half_width_hz,
+                     insula_threshold=insula_threshold,
+                     exclude_first_h=args.exclude_first_h)
+    index, pairs, bands = rows.index, rows.pairs, rows.bands
+    logger.info('fitting model %s with %s, up to %d cells on %d worker(s)', args.model,
+                args.engine, len(rows.regions) * len(rows.cols), args.n_jobs)
+    if args.engine == 'sm':
+        records = Parallel(n_jobs=args.n_jobs, verbose=5)(
+            cell_jobs(rows, args.min_subjects, args.model))
+    else:
+        records = lme4_records(rows, args.min_subjects, args.model, args.n_jobs)
+    cells = pd.DataFrame(records)
+    # A failed fit is not a test: its p leaves the BH family (statsmodels still
+    # returns estimates for a fit that did not converge).
+    failed = cells['fit_status'].eq('failed')
+    for term in FDR_TERMS:
+        if term in model_terms(args.model):
+            p_col = f'{TERM_PREFIX[term]}_p'
+            cells = add_fdr(cells.assign(**{p_col: cells[p_col].mask(failed)}),
+                            p_col, TERM_PREFIX[term])
+    summary = fit_summary(cells)
 
+    run_name = run_token(args.model, args.engine)
     run_dir = config.analysis_run_dir(
         question=config.PAIN_CHANGE_QUESTION,
-        output_type=OUTPUT_TYPE['fullres' if bands is None else 'bands'], run_name=args.run_name)
+        output_type=OUTPUT_TYPE['fullres' if bands is None else 'bands'],
+        view_scheme=data_token(vc, args.band_set, args.exclude_first_h), run_name=run_name)
     cohort = sorted(index['subject'].unique())
-    params = {'formula': FORMULA, 'vc': mm.VC_CHANGE, 'band_set': args.band_set,
+    params = {'model': args.model, 'run_name': run_name, 'formula': MODELS[args.model].formula,
+              'vc': mm.VC_CHANGE, 'engine': args.engine, 'reml': True,
+              'estimation': estimation_text(args.engine), 'band_set': args.band_set,
               'bands': bands, 'roi_scheme': args.roi_scheme,
+              'insula_threshold': rows.split_report.get('insula_split', {}).get('thresholds'),
+              'insula_from_run': args.insula_from_run,
               'min_gap_min': args.min_gap_min, 'max_gap_min': args.max_gap_min,
-              'min_subjects': args.min_subjects, 'notch_bins_removed': notch,
+              'min_subjects': args.min_subjects, 'notch_bins_removed': rows.notch,
+              'exclude_first_h': args.exclude_first_h, 'pair_report': rows.pair_report,
+              'exposure_version': opioid_mme.EXPOSURE_VERSION,
+              'typical_dose_mme': opioid_mme.TYPICAL_DOSE_MME,
+              'cbar_center': rows.cbar_center,
               'zscore_dir': str(zdir), 'view_config': vc.provenance()}
-    io.write_table(pairs[pairs['subject_id'].isin(cohort)], run_dir / 'pair_index.csv',
+    cohort_pairs = pairs[pairs['subject_id'].isin(cohort)]
+    io.write_table(cohort_pairs, run_dir / 'pair_index.csv',
                    params=params, parents=[str(med_state.ADMIN_TABLE)],
                    subjects=cohort, script=SCRIPT)
     io.write_table(cells, run_dir / 'cells.csv', params=params,
                    parents=[str(zdir)], subjects=cohort, script=SCRIPT)
-    write_methods(run_dir, cells, params, int(pairs['subject_id'].isin(cohort).sum()), cohort)
+    write_methods(run_dir, cells, params, len(cohort_pairs), cohort, summary)
     io.write_run_provenance(
         run_dir, script=SCRIPT, params=params,
         parents=[str(zdir), str(med_state.ADMIN_TABLE)], subjects=cohort,
         extra={'status': 'EXPLORATORY mixed-model grid, NOT a finding',
-               'n_cells': len(cells), 'n_converged': int(cells['converged'].sum()),
-               'subjects_without_roi': sorted(no_roi), **split_report})
-    io.log_analysis(f'pain_change mixed model, {args.band_set}, {args.roi_scheme}, '
+               'n_cells': len(cells), 'fit_status': summary['n_cells'].to_dict(),
+               'subjects_without_roi': sorted(rows.no_roi), **rows.split_report})
+    io.log_analysis(f'pain_change {run_name}, {args.band_set}, {args.roi_scheme}, '
                     f'{len(cohort)} subjects, {len(cells)} cells', run_dir)
-    logger.info('%d/%d cells converged; %d pass BH q<%.2f on d_pain',
-                int(cells['converged'].sum()), len(cells),
-                int(cells['dpain_bh_reject'].eq(True).sum()), 0.05)
+    n = summary['n_cells']
+    logger.info('FIT STATUS (%d cells, %d above the floor):\n%s', len(cells),
+                int(n.drop('floor').sum()), summary.to_string())
+    logger.info('%d of %d fitted cells failed to converge, %d more converged with a '
+                'warning', int(n['failed']), int(n.drop('floor').sum()), int(n['warn']))
     print(run_dir)
     return 0
 

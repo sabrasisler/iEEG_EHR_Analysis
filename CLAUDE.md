@@ -15,6 +15,9 @@ area:
   pyarrow install recipe. Read before writing ANY script that produces output.
 - `docs/WORKFLOW.md` — where every kind of record goes, and the commands that
   write them. Read before logging anything.
+- `docs/run_tokens.md` — how a `pain_change` path names what produced it: data
+  tokens, run tokens, figure tokens, model IDs and exposure versions. Read before
+  adding a model, a covariate or a figure, or changing the MME recipe.
 - `docs/view_registry.md` — the seven view axes and their order. Read before
   writing or changing any view/normalization/averaging/binning code.
 - `docs/region_levels.md` — the four region levels (Channel → Anatomical Parcel

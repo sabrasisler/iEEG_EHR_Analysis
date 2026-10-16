@@ -1143,3 +1143,54 @@ come from a cohort that no longer exists. A run's `provenance.json` `subjects[]`
 remains the record of who was in it.
 
 *Reverses if:* their coordinates are re-registered and pass the coordinate QC.
+
+---
+
+## 2026-10-15 — `pain_change` opioid model: covariates, exposure recipe `mme1`, first 24 h out
+
+One mixed model per ROI x band cell, `pain_change.MODELS['opioid']`:
+
+```
+d_z ~ d_pain + dC + Cbar + d_pain:Cbar + pain_1_within + gap_h + (1 | subject) + (0 + d_pain | subject)
+```
+
+The user made each call below.
+
+- **Cbar, not C(t1),** in the main effects and in the interaction. Cbar is the
+  time-average of the active-MME curve over [t1, t2), so a dose given mid-interval
+  enters it.
+- **Cbar centred on the cohort mean over pairs,** so the `d_pain` term is the
+  slope at average exposure rather than at zero opioid.
+- **C at an assessment = mean curve over the 5-min epoch before it.** A dose
+  charted at t1 falls after epoch 1, which matches the [t1, t2) rule above.
+  `dC = C_2 - C_1`.
+- **Typical-dose units:** divide by 10.0 MME, the median over all 624 opioid doses
+  of the discovery cohort (`config/opioid_mme.py` `TYPICAL_DOSE_MME`).
+- **Pairs whose first epoch starts within 24 h of `session_start` are out,**
+  TEMPORARILY: doses before `session_start` (the OR) are missing from the MAR
+  export, so early exposure is a lower bound. Measured: 471 of 1,756 pairs, no
+  subject loses all its pairs.
+- **Non-opioid analgesics are not modelled,** for now.
+- **ROI scheme `roi_v2_ofc_ins`** (insula split, OFC fused), for now. The insula cut
+  stays pinned to the 2026-10-06 grid (y > -1.550, `--insula-from-run`).
+- **Figures:** `d_pain` heatmap and glass brain, plus a separate `d_pain:Cbar`
+  heatmap.
+
+**Sessions with no MAR export leave every `pain_change` model,** so all models of
+one level-4 folder fit the same rows. Their exposure is unknown, not zero. Six
+discovery subjects have no export (039, 122, 138, 212, 235, 259). None was in the
+2026-10-06 fit.
+
+**Naming.** Runs follow `docs/run_tokens.md`: a data token for the level-4 folder,
+then model, exposure version and engine in the run name. The whole recipe for dC
+and Cbar is one versioned token, `mme1`, and any change to it, a fix included,
+takes a new version.
+
+**Fit status.** Every cell gets one of `ok`, `boundary`, `warn`, `failed`, `floor`
+(`pain_change.FIT_STATUSES`). statsmodels' "MLE may be on the boundary" does not
+count as a warning: it fires on any variance under an absolute 0.01, which the
+`d_pain` slope variance always is. `boundary` uses each component's share of the
+residual variance instead.
+
+*Reverses if:* the pre-session doses arrive (then `mme2`, and the 24 h exclusion
+goes), or the user adds non-opioid exposure.

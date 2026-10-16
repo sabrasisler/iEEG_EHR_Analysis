@@ -116,3 +116,33 @@ def test_fentanyl_between_grid_points_keeps_its_peak():
     assert mme_curve.exposure_curve(doses, t).max() == pytest.approx(10.0)
     area, expected = mme_curve.integral_check(doses, START, END)
     assert area == pytest.approx(expected, rel=1e-3)
+
+
+def _oxy_and_fentanyl():
+    return mme_curve.opioid_doses(admin([
+        {'drug': 'OXYCODONE', 'medication': 'OXYCODONE 5 MG PO TABS',
+         'route': 'Oral', 'dose': 5.0, 'unit': 'mg', 'h': 1.0},
+        {'drug': 'FENTANYL', 'medication': 'FENTANYL (PF) 50 MCG/ML INJECTION',
+         'route': 'Intravenous', 'dose': 50.0, 'unit': 'mcg', 'h': 2.0}]))
+
+
+def test_window_mean_matches_numeric_average():
+    doses = _oxy_and_fentanyl()
+    lo, hi = np.array([0.5, 1.9, 2.0, 3.0]), np.array([1.5, 2.1, 2.5, 8.0])
+    exact = mme_curve.window_mean(doses, lo, hi)
+    for value, a, b in zip(exact, lo, hi):
+        t = np.linspace(a, b, 200001)
+        numeric = np.trapezoid(mme_curve.exposure_curve(doses, t), t) / (b - a)
+        assert value == pytest.approx(numeric, rel=1e-4)
+
+
+def test_window_mean_takes_a_dose_at_its_start_not_at_its_end():
+    """[lo, hi): a dose charted at hi belongs to the next window."""
+    doses = _oxy_and_fentanyl().iloc[[1]]            # fentanyl at 2.0 h
+    assert mme_curve.window_mean(doses, [1.9], [2.0])[0] == 0.0
+    assert mme_curve.window_mean(doses, [2.0], [2.1])[0] > 0.0
+
+
+def test_window_mean_refuses_an_empty_window():
+    with pytest.raises(ValueError):
+        mme_curve.window_mean(_oxy_and_fentanyl(), [1.0], [1.0])

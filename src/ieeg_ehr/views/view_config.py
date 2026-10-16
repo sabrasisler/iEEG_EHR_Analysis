@@ -62,6 +62,7 @@ BASELINE_CODES = {'zero_pain_epochs': '', 'all_pain_epochs': 'allep'}
 # default is spelled as '' so existing paths are unchanged and remain valid.
 ROI_SCHEME_CODES = {'default': '', 'roi_v2': 'roiv2', 'roi_v2_ofc': 'roiv2ofc',
                     'roi_v2_ins': 'roiv2ins', 'roi_v2_ofc_ins': 'roiv2ofcins',
+                    'roi_v3': 'roiv3', 'roi_v3_ins': 'roiv3ins',
                     'pain_domains': 'paindomains',
                     'pain_domains_v2': 'paindomainsv2',
                     'pain_domains_v3': 'paindomainsv3'}

@@ -5,10 +5,12 @@
         --mask-label std10_rv-gross-std3_satmargin15_sw_logz4
 
 For each held-out subject, every ROI x band cell of the reference run is refitted
-on the same pair x channel rows minus that subject's: same formula, random
-effects, floors, gap window and pinned insula cut (`pain_change.load_rows`,
+on the same pair x channel rows minus that subject's: same model, random
+effects, floors, gap window, first-hours exclusion and pinned insula cut (`pain_change.load_rows`,
 `pain_change.cell_jobs`). The likelihood-ratio test is skipped, since scoring
 needs only the fixed effects and the residual variance.
+Each fold uses the reference run's engine: statsmodels (`pain_change.cell_jobs`) or
+lme4 (`pain_change.lme4_records`, one `pain_change_lmer.R` call per fold).
 
 The training subjects are the reference run's `subjects[]`, so a fold differs from
 the reference fit by exactly one subject. The folds are the training subjects that
@@ -18,7 +20,7 @@ GATE. A `none` fold refits every subject first and must reproduce the reference
 `cells.csv` (d_pain beta and var_resid to REPRODUCE_TOL, converged exactly) before
 any fold runs.
 
-Output: `analysis/pain/pain_change/bandpower/painchange_loo_<timestamp>/`
+Output: beside the reference run, `<reference run token>_loo_<timestamp>/`
 `cells_loo.csv`, one row per fold x cell with `heldout_subject` (`none` for the
 gate fold), plus METHODS.md and provenance.json. Export the folds as weights with
 `pain_change_prediction weights --source-run <this run>`.
@@ -27,7 +29,6 @@ EXPLORATORY. Discovery cohort only. Nominations, not findings.
 """
 
 import argparse
-import itertools
 import json
 import logging
 import os
@@ -45,7 +46,6 @@ from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
 logger = logging.getLogger(__name__)
 
 SCRIPT = 'ieeg_ehr/analysis/pain_change_loo.py'
-RUN_NAME = 'painchange_loo'
 NO_HOLDOUT = 'none'
 REPRODUCE_TOL = 1e-8
 CELL_KEY = ['region', 'freq']
@@ -66,17 +66,18 @@ def reproduce_reference(records, reference_cells):
     return diffs
 
 
-def write_methods(run_dir, reference_run, folds, n_train, diffs, cells):
+def write_methods(run_dir, reference_run, model, engine, folds, n_train, diffs, cells):
     loo = cells[cells['heldout_subject'] != NO_HOLDOUT]
     per_fold = loo.groupby('heldout_subject')['converged'].sum()
     text = f"""# pain_change leave-one-subject-out refits
 
 EXPLORATORY, discovery cohort. NOMINATIONS, NOT FINDINGS.
 
-The model of `{Path(reference_run).name}`, refitted once per held-out subject:
+The model of `{Path(reference_run).name}`, refitted once per held-out subject
+with its engine, `{engine}`:
 
 ```
-{pain_change.FORMULA} + {pain_change.random_effects_text(pain_change.mm.VC_CHANGE)}
+{pain_change.MODELS[model].formula}
 ```
 
 - Training subjects: the reference run's {n_train}. {len(folds)} folds, one per
@@ -100,7 +101,6 @@ def main(argv=None):
     ap.add_argument('--reference-run', required=True)
     ap.add_argument('--n-jobs', type=int,
                     default=int(os.environ.get('SLURM_CPUS_PER_TASK', 1)))
-    ap.add_argument('--run-name', default=RUN_NAME)
     view_config.add_view_arguments(ap)
     ap.set_defaults(baseline='all_pain_epochs', freq='fullres', region='none')
     args = ap.parse_args(argv)
@@ -128,39 +128,51 @@ def main(argv=None):
              if f'sub-{fullres_cells.subject_session_of(p)[0]}' in train]
     rows = pain_change.load_rows(paths, params['roi_scheme'], params['band_set'],
                                  params['min_gap_min'], params['max_gap_min'],
-                                 insula_threshold=prov['insula_split']['thresholds'])
+                                 insula_threshold=prov['insula_split']['thresholds'],
+                                 exclude_first_h=params['exclude_first_h'])
     if rows.notch != params['notch_bins_removed']:
         raise ValueError('the notch differs from the reference run')
     if set(rows.index['subject']) != train:
         raise ValueError(f'rows cover {sorted(set(rows.index["subject"]) ^ train)} '
                          'differently from the reference run')
 
-    min_subjects = params['min_subjects']
-    full = Parallel(n_jobs=args.n_jobs, verbose=2)(
-        pain_change.cell_jobs(rows, min_subjects, with_lrt=False))
+    min_subjects, model, engine = params['min_subjects'], params['model'], params['engine']
+
+    def fit(holdout=None):
+        if engine == 'lme4':
+            return pain_change.lme4_records(rows, min_subjects, model, args.n_jobs, holdout)
+        return Parallel(n_jobs=args.n_jobs, verbose=2)(
+            pain_change.cell_jobs(rows, min_subjects, model, holdout, with_lrt=False))
+
+    full = fit()
     diffs = reproduce_reference(full, io.read_table(reference_run / 'cells.csv',
                                                     on_stale='warn'))
     logger.info('refitting %d folds x up to %d cells on %d worker(s)', len(folds),
                 len(rows.regions) * len(rows.cols), args.n_jobs)
-    loo = Parallel(n_jobs=args.n_jobs, verbose=2)(itertools.chain.from_iterable(
-        pain_change.cell_jobs(rows, min_subjects, holdout=s, with_lrt=False) for s in folds))
+    loo = []
+    for i, s in enumerate(folds, 1):
+        logger.info('fold %d/%d: %s held out', i, len(folds), s)
+        loo.extend(fit(s))
     cells = pd.concat([pd.DataFrame(full).assign(heldout_subject=NO_HOLDOUT),
                        pd.DataFrame(loo)], ignore_index=True)
 
     run_dir = config.analysis_run_dir(question=config.PAIN_CHANGE_QUESTION,
-                                      output_type=pain_change.OUTPUT_TYPE['bands'],
-                                      run_name=args.run_name)
-    run_params = {'reference_run': str(reference_run), 'formula': pain_change.FORMULA,
+                                      output_type=reference_run.parent.parent.name,
+                                      view_scheme=reference_run.parent.name,
+                                      run_name=f"{params['run_name']}_loo")
+    run_params = {'reference_run': str(reference_run), 'model': model, 'engine': engine,
+                  'formula': pain_change.MODELS[model].formula,
                   'vc': pain_change.mm.VC_CHANGE, 'band_set': params['band_set'],
                   'roi_scheme': params['roi_scheme'], 'min_subjects': min_subjects,
                   'min_gap_min': params['min_gap_min'], 'max_gap_min': params['max_gap_min'],
                   'insula_threshold': prov['insula_split']['thresholds'],
+                  'exclude_first_h': params['exclude_first_h'],
                   'with_lrt': False, 'folds': folds}
     subjects = sorted(train)
     io.write_table(cells, run_dir / 'cells_loo.csv', params=run_params,
                    parents=[str(zdir), str(reference_run / 'cells.csv')],
                    subjects=subjects, script=SCRIPT)
-    write_methods(run_dir, reference_run, folds, len(train), diffs, cells)
+    write_methods(run_dir, reference_run, model, engine, folds, len(train), diffs, cells)
     io.write_run_provenance(
         run_dir, script=SCRIPT, params=run_params,
         parents=[str(zdir), str(reference_run)], subjects=subjects,

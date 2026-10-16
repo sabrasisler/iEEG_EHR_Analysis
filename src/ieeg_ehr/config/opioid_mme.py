@@ -171,3 +171,24 @@ UNIT_DOSE = {
         v1=12.1, v2=35.7, v3=224.0, cl1=0.632, cl2=2.8, cl3=1.55,
         source='stanpumpR drugs_fentanyl.R, 70 kg (Shafer)'),
 }
+
+
+# ---------------------------------------------------------------------------
+# EXPOSURE VERSION: the pair covariates of the `pain_change` opioid model
+# ---------------------------------------------------------------------------
+# One name for one complete recipe of dC and Cbar (docs/run_tokens.md): the dose
+# source, the drug set, the MME factors and unit-dose curves above, the typical
+# dose below, and the windows the curve is averaged over. ANY change to the
+# recipe, a fix included, takes a new version, so a version always names one
+# set of curves.
+#
+# mme1 (2026-10-15): MAR doses only, so doses before session_start (the OR) are
+# missing and early curves are lower bounds. Opioids only, buprenorphine
+# excluded. C at an assessment = mean curve over the 5-min epoch before it;
+# Cbar = mean curve over [t1, t2). Units: typical doses.
+EXPOSURE_VERSION = 'mme1'
+
+#: One typical dose, the divisor that puts exposure in typical-dose units: the
+#: median MME over every opioid dose of the 63 discovery subjects (624 doses,
+#: 54 subjects), measured 2026-10-15. The median of subject medians is 7.5.
+TYPICAL_DOSE_MME = 10.0

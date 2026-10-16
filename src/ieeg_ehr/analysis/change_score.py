@@ -88,7 +88,8 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
     positive; the reverse is not, and only the reverse is corrected here.
 
     Returns one row per pair with `subject_id` in the prefixed form the view
-    tables use, so it joins to a cell frame without further translation.
+    tables use, so it joins to a cell frame without further translation. `t1` and
+    `t2` are the two assessments' `pain_time`.
     """
     rows = []
     for (subject, session), g in defs.groupby(['subject', 'session'], sort=False):
@@ -143,6 +144,7 @@ def build_pairs(defs, admin, min_gap_min=DEFAULT_MIN_GAP_MIN,
                 'h_since_prior': float(h_prior),
                 'subject': subject, 'subject_id': f'sub-{subject}',
                 'session': session, 'e1': int(e[i]), 'e2': int(e[i + 1]),
+                't1': t[i], 't2': t[i + 1],
                 'gap_m': float(gap), 'gap_h': float(gap) / 60.0,
                 'pain_1': float(p[i]), 'pain_2': float(p[i + 1]),
                 'd_pain': float(p[i + 1] - p[i]),

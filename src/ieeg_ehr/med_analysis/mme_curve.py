@@ -140,6 +140,29 @@ def exposure_curve(doses, t_h, left_limit=False):
     return total
 
 
+def window_mean(doses, lo_h, hi_h):
+    """Mean active MME over each window [lo_h, hi_h), exactly.
+
+    Each dose adds the integral of its curve over the part of the window after
+    it, sum_i c_i / rate_i * (exp(-rate_i a) - exp(-rate_i b)) with a and b the
+    window edges in hours since the dose, clipped at 0. A dose at `hi_h` adds
+    nothing and a dose at `lo_h` adds its whole curve, which is the [t1, t2)
+    rule of DECISIONS 2026-10-06.
+    """
+    lo_h = np.asarray(lo_h, dtype=np.float64)
+    hi_h = np.asarray(hi_h, dtype=np.float64)
+    if (hi_h <= lo_h).any():
+        raise ValueError('every window needs hi_h > lo_h')
+    area = np.zeros_like(lo_h)
+    for d in doses.itertuples():
+        curve = opioid_mme.UNIT_DOSE[(d.ingredient, d.route_class)]
+        a = np.clip(lo_h - d.t_h, 0.0, None)
+        b = np.clip(hi_h - d.t_h, 0.0, None)
+        area += d.mme * sum(c / rate * (np.exp(-rate * a) - np.exp(-rate * b))
+                            for c, rate in zip(curve.coefs, curve.rates))
+    return area / (hi_h - lo_h)
+
+
 def early_opioid_sessions(doses, within_h=EARLY_DOSE_H):
     """(subject, session) -> hours to the first opioid dose, for sessions whose
     first dose comes within `within_h` of session start."""

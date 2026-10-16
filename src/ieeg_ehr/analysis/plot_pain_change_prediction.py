@@ -18,6 +18,10 @@ marks.
                          report before t1 + 3 h
     coverage             pairs and subjects contributing per step and bin
     subject_detail       per subject: each pair, and the bin means
+    dc_groups_hours      top: predicted Δpain, bottom: ΔC(t) = C(t) - C(t1), from t1 to
+                         each pair's t2, one line per whole-interval ΔC bin (DC_BINS),
+                         first-day pairs out
+    dc_groups_fraction   the same on the fraction of the interval, t1 = 0, t2 = 1
 
 Written to `<run>/figures/` as PNG, suffixed with the weighting.
 """
@@ -35,10 +39,12 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from ieeg_ehr import io  # noqa: E402
-from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR  # noqa: E402
+from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR, load_exposure  # noqa: E402
 from ieeg_ehr.analysis.pain_change_prediction import (DPAIN_BINS, assign_bins,  # noqa: E402
                                                       load_trajectory)
+from ieeg_ehr.config import opioid_mme  # noqa: E402
 from ieeg_ehr.features.build_pain_change_trajectory import WINDOW_MIN  # noqa: E402
+from ieeg_ehr.med_analysis import mme_curve  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +58,18 @@ NEUTRAL = '#5f5e5a'
 TERCILE_COLOURS = ('#86b6ef', '#2a78d6', '#104281')
 INK, MUTED, GRID, SHADE = '#2b2b29', '#6b6a66', '#e4e3df', '#f0efec'
 DOSE_WINDOW_MIN = 10
+#: Whole-interval dC (C_2 - C_1, typical doses) bins: |dC| < DC_SMALL is no change,
+#: DC_SMALL to DC_LARGE small, above DC_LARGE large. Set by the user 2026-10-15.
+DC_SMALL, DC_LARGE = 0.10, 0.35
+DC_BINS = ('large fall', 'small fall', 'no change', 'small rise', 'large rise')
+#: Diverging brown <-> teal with a gray midpoint: colour encodes dC, apart from the
+#: blue <-> red of the delta-pain bins.
+DC_COLOURS = ('#8c510a', '#d8b365', '#8c8b86', '#5ab4ac', '#01665e')
+#: Pairs whose first epoch starts this soon after session_start leave the dC figures:
+#: mme1 misses the OR doses, so first-day dC reads washout as no change.
+DC_FIRST_HOURS_OUT = 24
+#: Steps of the t1 -> t2 fraction axis.
+FRACTION_BINS = 20
 
 
 # ============================================================================
@@ -70,9 +88,9 @@ def subject_first(df, value, keys):
             .agg(mean='mean', sem=_sem, n_subjects='count').reset_index())
 
 
-def group_sizes(df, group):
-    """{group: (n_subjects, n_pairs)} over pairs with any finite value."""
-    g = df.dropna(subset=['value']).groupby(group, observed=True)
+def group_sizes(df, group, value='value'):
+    """{group: (n_subjects, n_pairs)} over pairs with any finite `value`."""
+    g = df.dropna(subset=[value]).groupby(group, observed=True)
     return {k: (v['subject'].nunique(), v['pair_id'].nunique()) for k, v in g}
 
 
@@ -99,10 +117,13 @@ def _time_axis(ax):
 
 
 def _trajectory_lines(ax, df, group, groups, colours, min_subjects, styles=None,
-                      label_fmt='{g}'):
-    """One mean +/- SEM line per group; returns the groups drawn."""
-    sizes = group_sizes(df, group)
-    stats = subject_first(df, 'value', [group, 't_min'])
+                      label_fmt='{g}', x='t_min', value='value'):
+    """One mean +/- SEM line per group; returns the groups drawn.
+
+    `x` = 't_min' plots in hours. Any other column plots as it is.
+    """
+    sizes = group_sizes(df, group, value)
+    stats = subject_first(df, value, [group, x])
     drawn = []
     for g, colour in zip(groups, colours):
         n_subj, n_pairs = sizes.get(g, (0, 0))
@@ -110,7 +131,7 @@ def _trajectory_lines(ax, df, group, groups, colours, min_subjects, styles=None,
             logger.info('%s: %d subject(s), below %d, dropped', g, n_subj, min_subjects)
             continue
         s = stats[(stats[group] == g) & (stats['n_subjects'] >= 1)]
-        h = s['t_min'] / 60
+        h = s[x] / 60 if x == 't_min' else s[x]
         ls = (styles or {}).get(g, '-')
         ax.plot(h, s['mean'], color=colour, lw=1.6, ls=ls,
                 label=f'{label_fmt.format(g=g)} ({n_subj} subj, {n_pairs} pairs)')
@@ -313,6 +334,99 @@ def fig_subject_detail(df, out_dir, name, title, bins):
 
 
 # ============================================================================
+# Figures by opioid exposure change
+# ============================================================================
+
+def dc_bin(dc):
+    """The DC_BINS label of each whole-interval dC, an ordered categorical."""
+    mag = dc.abs()
+    label = np.select([mag < DC_SMALL, (mag <= DC_LARGE) & (dc < 0), mag <= DC_LARGE, dc < 0],
+                      ['no change', 'small fall', 'small rise', 'large fall'], 'large rise')
+    return pd.Categorical(label, categories=list(DC_BINS), ordered=True)
+
+
+def exposure_steps(pairs):
+    """(pair_id, t_min, dc) for t = 0 ... t2, and per pair `dc_interval` and `e1_start_h`.
+
+    dc(t) = C(t) - C(t1) in typical doses, C(t) the mean mme1 curve over the 5-min
+    window ending at t (`mme_curve.window_mean`), the rule of `pain_change.add_exposure`,
+    so dc at t2 is that pair's model dC. Pairs of a session with no MAR export go.
+    """
+    starts, doses = load_exposure()
+    subject = pairs['subject'].str.replace('sub-', '', regex=False)
+    has_mar = pd.MultiIndex.from_arrays([subject, pairs['session']]).isin(starts.index)
+    if (~has_mar).any():
+        logger.warning('NO MAR EXPORT: %d pairs of %s dropped', int((~has_mar).sum()),
+                       sorted(pairs.loc[~has_mar, 'subject'].unique()))
+    pairs, subject = pairs[has_mar], subject[has_mar]
+    start = starts.reindex(pd.MultiIndex.from_arrays([subject, pairs['session']])).to_numpy()
+    t1_h = (pairs['t1'].to_numpy() - start) / np.timedelta64(1, 'h')
+    steps = []
+    for (s, session), idx in pairs.groupby([subject, pairs['session']]).indices.items():
+        g = pairs.iloc[idx]
+        d = doses[(doses['subject'] == s) & (doses['session'] == session)]
+        n = g['gap_min'].round().astype(int).to_numpy() + 1
+        t_min = np.concatenate([np.arange(k) for k in n])
+        end_h = np.repeat(t1_h[idx], n) + t_min / 60
+        c = mme_curve.window_mean(d, end_h - WINDOW_MIN / 60, end_h) / opioid_mme.TYPICAL_DOSE_MME
+        c1 = np.repeat(c[np.r_[0, np.cumsum(n)[:-1]]], n)
+        steps.append(pd.DataFrame({'pair_id': np.repeat(g['pair_id'].to_numpy(), n),
+                                   't_min': t_min, 'dc': c - c1}))
+    steps = pd.concat(steps, ignore_index=True)
+    at_t2 = steps.groupby('pair_id')['dc'].last().rename('dc_interval')
+    per_pair = pd.DataFrame({'pair_id': pairs['pair_id'].to_numpy(),
+                             'e1_start_h': t1_h - WINDOW_MIN / 60}).join(at_t2, on='pair_id')
+    return steps, per_pair
+
+
+def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
+    """Predicted Δpain (top) and ΔC(t) (bottom) from t1 to t2, one line per ΔC bin.
+
+    `axis` 'hours' plots hours since t1. 'fraction' plots (t - t1) / (t2 - t1) in
+    FRACTION_BINS steps, each pair averaged within a step first.
+    """
+    if axis == 'fraction':
+        step = np.minimum(np.floor(df['t_min'] / df['gap_min'] * FRACTION_BINS),
+                          FRACTION_BINS - 1)
+        df = (df.assign(x=(step + 0.5) / FRACTION_BINS)
+              .groupby(['pair_id', 'subject', 'dc_group', 'x'], observed=True)[['value', 'dc']]
+              .mean().reset_index())
+        x = 'x'
+    else:
+        x = 't_min'
+    fig, (top, bottom) = plt.subplots(2, 1, figsize=(7, 6.6), sharex=True,
+                                      gridspec_kw={'height_ratios': (3, 2)})
+    for ax in (top, bottom):
+        _style(ax)
+        ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
+    drawn = _trajectory_lines(top, df, 'dc_group', list(DC_BINS), DC_COLOURS, min_subjects, x=x)
+    _trajectory_lines(bottom, df, 'dc_group', list(DC_BINS), DC_COLOURS, min_subjects,
+                      x=x, value='dc')
+    if axis == 'fraction':
+        bottom.set_xlim(0, 1)
+        bottom.set_xticks([0, 0.25, 0.5, 0.75, 1])
+        bottom.set_xticklabels(['t1', '25%', '50%', '75%', 't2'])
+        bottom.set_xlabel('Fraction of the interval from report 1 to report 2', color=INK)
+    else:
+        for ax in (top, bottom):
+            ax.axvspan(0, WINDOW_MIN / 60, color=SHADE, zorder=0, lw=0)
+        bottom.set_xlim(0, 3)
+        bottom.set_xticks([0, 0.5, 1, 1.5, 2, 2.5, 3])
+        bottom.set_xlabel('Hours since first report (each pair ends at its t2)', color=INK)
+    top.set_ylabel('Predicted Δpain (NRS)', color=INK)
+    bottom.set_ylabel('ΔC since t1 (typical doses)', color=INK)
+    top.set_title(title, fontsize=10, color=INK)
+    _legend(top, loc='upper left', bbox_to_anchor=(1.01, 1), title='ΔC, t1 to t2')
+    _footer(fig, f'{df["subject"].nunique()} subjects, {df["pair_id"].nunique()} pairs. '
+                 f'ΔC bins: |ΔC| < {DC_SMALL:g} no change, {DC_SMALL:g}-{DC_LARGE:g} small, '
+                 f'> {DC_LARGE:g} large (1 typical dose = {opioid_mme.TYPICAL_DOSE_MME:g} MME, '
+                 f'{opioid_mme.EXPOSURE_VERSION}). Pairs starting within '
+                 f'{DC_FIRST_HOURS_OUT} h of session start left out. Groups under '
+                 f'{min_subjects} subjects dropped ({len(DC_BINS) - len(drawn)}).')
+    _save(fig, out_dir, name)
+
+
+# ============================================================================
 # Entry points
 # ============================================================================
 
@@ -350,6 +464,14 @@ def render_all(run_dir, weights_name, weighting='uniform', min_subjects=3, bins=
                      f'{title}\nno other report in (t2, t1 + 3 h]', min_subjects, bins)
     fig_coverage(df, out_dir, f'coverage_{tag}', list(bins))
     fig_subject_detail(df, out_dir, f'subject_detail_{tag}', title, list(bins))
+
+    steps, per_pair = exposure_steps(pairs)
+    late = per_pair[per_pair['e1_start_h'] >= DC_FIRST_HOURS_OUT]
+    groups = late.assign(dc_group=dc_bin(late['dc_interval']))[['pair_id', 'dc_group']]
+    dc_df = df.merge(steps, on=['pair_id', 't_min']).merge(groups, on='pair_id')
+    logger.info('dC groups (pairs): %s', groups['dc_group'].value_counts().to_dict())
+    for axis in ('hours', 'fraction'):
+        fig_dc_groups(dc_df, out_dir, f'dc_groups_{axis}_{tag}', title, min_subjects, axis)
 
 
 def main(argv=None):
