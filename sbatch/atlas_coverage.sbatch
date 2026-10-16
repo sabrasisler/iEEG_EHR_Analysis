@@ -20,6 +20,8 @@
 #               through HCPex's Glasser areas, subcortex through CAB-NP's voxels
 #   ATLAS=yeo7 / ATLAS=yeo17  the same midpoint in the Yeo 2011 LiberalMask
 #               volumes; no-network pairs split by FreeSurfer template tissue
+#   ATLAS=hcpex_paper HCPex parcels grouped into paper ROIs (config/hcpex_rois.py,
+#               or EXTRA="--roi-map <json>"); add --no-figure for tables only
 #
 #   ATLAS=hcpex sbatch sbatch/atlas_coverage.sbatch
 #   ATLAS=cabnp sbatch sbatch/atlas_coverage.sbatch

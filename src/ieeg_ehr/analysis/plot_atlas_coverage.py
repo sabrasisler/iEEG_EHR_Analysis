@@ -70,6 +70,15 @@ Hemispheres are merged in every atlas.
     subcortex/cerebellum, ventricle/CSF, cortex the mask misses, or outside the
     brain.
 
+`--atlas hcpex_paper`
+    The `hcpex` midpoint labels grouped into the paper's ROIs by
+    `config/hcpex_rois.py`, which lists every parcel under its ROI (and
+    explains the judgment calls). The hippocampus splits at MNI y = -21 into
+    anterior and posterior. Pairs in no HCPex parcel are split by FreeSurfer
+    template tissue, as for Yeo. Every ROI appears, in paper order, even at
+    zero (STN has no HCPex parcel), and `roi_parcels.csv` gives the count for
+    every (ROI, parcel) the mapping defines.
+
 THE COHORT is the reference run's `subjects[]` (reference_run.CONTPAIN_HEATMAP
 by default), so the counts describe the subjects the models saw.
 
@@ -90,6 +99,7 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import config, io
+from ieeg_ehr.config import hcpex_rois
 from ieeg_ehr.analysis import reference_run
 from ieeg_ehr.med_analysis import style
 
@@ -110,8 +120,10 @@ OUTSIDE_GRID = 'Outside atlas grid'
 TISSUES = ('white matter', 'subcortex/cerebellum', 'ventricle/CSF', 'cortex',
            'outside brain')
 NO_NETWORK = {t: f'No network: {t}' for t in TISSUES}
+NO_PARCEL_TISSUE = {t: f'No parcel: {t}' for t in TISSUES}
 #: Rows that name the ABSENCE of an atlas label rather than a label.
-NO_LABEL = (UNLABELED, NO_COORDINATE, NO_PARCEL, OUTSIDE_GRID, *NO_NETWORK.values())
+NO_LABEL = (UNLABELED, NO_COORDINATE, NO_PARCEL, OUTSIDE_GRID, hcpex_rois.NO_ROI,
+            *NO_NETWORK.values(), *NO_PARCEL_TISSUE.values())
 
 HCPEX_DIR = config.DERIVATIVES_BASE / 'atlases' / 'HCPex_v1.1'
 #: HCPex values 1-360 are the Glasser cortical areas (left 1-180, right
@@ -138,6 +150,7 @@ TITLES = {
     'cabnp': 'CAB-NP v1.1 networks at the pair midpoint: {n} networks',
     'yeo7': 'Yeo 2011 7 networks at the pair midpoint: {n} networks',
     'yeo17': 'Yeo 2011 17 networks at the pair midpoint: {n} networks',
+    'hcpex_paper': 'HCPex v1.1 parcels at the pair midpoint, grouped into {n} paper ROIs',
 }
 FOOTNOTES = {
     'dk': 'one electrode = one bipolar pair, by anode label',
@@ -148,6 +161,9 @@ FOOTNOTES = {
               'cortex via HCPex Glasser areas, subcortex via CAB-NP 2 mm voxels'),
     'yeo7': ('one electrode = one bipolar pair, at the anode-cathode MNI midpoint; '
              'Yeo LiberalMask; no-network pairs split by FreeSurfer template tissue'),
+    'hcpex_paper': ('one electrode = one bipolar pair, at the anode-cathode MNI midpoint; '
+                    'ROIs from config/hcpex_rois.py; hippocampus split at y = -21; '
+                    'no-parcel pairs split by FreeSurfer template tissue'),
     'yeo17': ('one electrode = one bipolar pair, at the anode-cathode MNI midpoint; '
               'Yeo LiberalMask; no-network pairs split by FreeSurfer template tissue'),
 }
@@ -456,12 +472,75 @@ def label_yeo(pairs, n_networks):
     return pairs, sources + [volume, names_csv, FS_MNI_DIR / 'aparc+aseg.mgz']
 
 
+# ============================================================================
+# HCPex grouped into the paper's ROIs
+# ============================================================================
+
+def check_paper_roi_mapping(mapping):
+    """Refuse a mapping that misses or invents an HCPex parcel name."""
+    short, _, _ = hcpex_names()
+    atlas = set(short.values()) - {UNLABELED}
+    mapped = set(hcpex_rois.roi_by_parcel(mapping))
+    if atlas != mapped:
+        raise SystemExit(f'ROI mapping does not match HCPex: unmapped '
+                         f'{sorted(atlas - mapped)}, not in HCPex {sorted(mapped - atlas)}')
+
+
+def label_hcpex_paper(pairs, mapping):
+    pairs, sources = label_hcpex(pairs)
+    check_paper_roi_mapping(mapping)
+    tissue = fs_tissue(pairs[['vx', 'vy', 'vz']].to_numpy())
+    pairs = pairs.rename(columns={'label': 'hcpex_label', 'label_name': 'hcpex_name'})
+
+    roi = pairs['hcpex_label'].map(hcpex_rois.roi_by_parcel(mapping))
+    hipp = (roi == hcpex_rois.HIPPOCAMPUS).to_numpy()
+    roi[hipp] = np.where(pairs.loc[hipp, 'vy'] > hcpex_rois.HIPPOCAMPUS_SPLIT_Y,
+                         hcpex_rois.ANTERIOR_HIPPOCAMPUS,
+                         hcpex_rois.POSTERIOR_HIPPOCAMPUS)
+    unlabeled = (pairs['hcpex_label'] == UNLABELED).to_numpy()
+    roi[unlabeled] = [NO_PARCEL_TISSUE[t] for t in tissue[unlabeled]]
+    roi[(pairs['hcpex_label'] == NO_COORDINATE).to_numpy()] = NO_COORDINATE
+    pairs['fs_tissue'] = tissue
+    pairs['label'] = roi
+    return pairs, sources + [FS_MNI_DIR / 'aparc+aseg.mgz']
+
+
+def paper_roi_counts(counts, mapping):
+    """Every paper ROI in mapping order, zero-filled, then the no-label rows."""
+    order = hcpex_rois.roi_order(mapping)
+    by_label = counts.set_index('label')
+    rois = by_label.reindex(order, fill_value=0)
+    rest = by_label.drop(index=order, errors='ignore')
+    return pd.concat([rois, rest]).rename_axis('label').reset_index()
+
+
+def roi_parcel_table(pairs, mapping):
+    """Every (ROI, parcel) pair the mapping defines, with counts; zero rows kept."""
+    _, long, _ = hcpex_names()
+    rows = []
+    for key, parcels in mapping.items():
+        for roi in hcpex_rois.rois_of(key):
+            rows += ([(roi, p, long[p]) for p in parcels] if parcels
+                     else [(roi, None, 'no HCPex parcel')])
+    table = pd.DataFrame(rows, columns=['roi', 'hcpex_parcel', 'hcpex_name'])
+    observed = (pairs.groupby(['label', 'hcpex_label'])
+                .agg(n_subjects=('subject_id', 'nunique'),
+                     n_electrodes=('channel', 'size'))
+                .rename_axis(['roi', 'hcpex_parcel']).reset_index())
+    out = table.merge(observed, on=['roi', 'hcpex_parcel'], how='left')
+    return out.fillna({'n_subjects': 0, 'n_electrodes': 0}).astype(
+        {'n_subjects': int, 'n_electrodes': int})
+
+
 LABELERS = {'dk': label_dk, 'dk_midpoint': label_dk_midpoint,
             'hcpex': label_hcpex, 'cabnp': label_cabnp,
             'yeo7': partial(label_yeo, n_networks=7),
-            'yeo17': partial(label_yeo, n_networks=17)}
+            'yeo17': partial(label_yeo, n_networks=17),
+            'hcpex_paper': label_hcpex_paper}
+#: Labelers that take the --roi-map mapping.
+TAKES_ROI_MAP = ('hcpex_paper',)
 #: Atlases whose no-label rows stay in the bars (see plot_counts).
-SHOW_NO_LABEL = ('dk_midpoint', 'cabnp', 'yeo7', 'yeo17')
+SHOW_NO_LABEL = ('dk_midpoint', 'cabnp', 'yeo7', 'yeo17', 'hcpex_paper')
 
 
 # ============================================================================
@@ -547,6 +626,11 @@ def main():
     ap.add_argument('--reference-run', default=str(reference_run.CONTPAIN_HEATMAP))
     ap.add_argument('--epoch-minutes', type=float, default=None)
     ap.add_argument('--run-name', default='contpain_ref')
+    ap.add_argument('--roi-map', default=None,
+                    help='hcpex_paper only: a JSON {ROI: [HCPex parcels]} file on Oak '
+                         'in place of config/hcpex_rois.PARCELS.')
+    ap.add_argument('--no-figure', action='store_true',
+                    help='Write the tables only.')
     ap.add_argument('--exclude-subjects', nargs='+', default=[],
                     help='Drop these subjects from the reference cohort, e.g. ones '
                          'whose MNI coordinates fall outside the brain.')
@@ -563,8 +647,14 @@ def main():
                 len(subjects), len(args.exclude_subjects), args.exclude_subjects)
 
     pairs, meta_paths = load_pairs(subjects, args.epoch_minutes)
-    pairs, label_sources = LABELERS[args.atlas](pairs)
+    if args.atlas in TAKES_ROI_MAP:
+        mapping = hcpex_rois.load(args.roi_map)
+        pairs, label_sources = LABELERS[args.atlas](pairs, mapping)
+    else:
+        pairs, label_sources = LABELERS[args.atlas](pairs)
     counts = label_counts(pairs)
+    if args.atlas == 'hcpex_paper':
+        counts = paper_roi_counts(counts, mapping)
     n_subjects, n_pairs = pairs['subject_id'].nunique(), len(pairs)
     logger.info('%d row(s) over %d pair(s), %d subject(s):\n%s',
                 len(counts), n_pairs, n_subjects, counts.to_string())
@@ -587,6 +677,12 @@ def main():
         params['hemisphere_prefixes_stripped'] = list(HEMISPHERE_PREFIXES)
     if args.atlas == 'cabnp':
         params['hcpex_to_glasser'] = HCPEX_TO_GLASSER
+    if args.atlas == 'hcpex_paper':
+        params.update(roi_map=args.roi_map, paper_roi_parcels=mapping,
+                      hippocampus_split_y=hcpex_rois.HIPPOCAMPUS_SPLIT_Y)
+        io.write_table(roi_parcel_table(pairs, mapping), run_dir / 'roi_parcels.csv',
+                       script=SCRIPT, params=params, parents=parents,
+                       subjects=subjects)
 
     io.write_table(pairs, run_dir / 'pair_labels.csv', script=SCRIPT,
                    params=params, parents=parents, subjects=subjects)
@@ -597,9 +693,10 @@ def main():
                             extra={'n_labels': int(len(counts)),
                                    'n_electrodes': int(n_pairs),
                                    'n_subjects': int(n_subjects)})
-    plot_counts(counts, n_subjects, n_pairs, TITLES[args.atlas],
-                FOOTNOTES[args.atlas], run_dir / 'label_counts.png',
-                show_no_label=args.atlas in SHOW_NO_LABEL)
+    if not args.no_figure:
+        plot_counts(counts, n_subjects, n_pairs, TITLES[args.atlas],
+                    FOOTNOTES[args.atlas], run_dir / 'label_counts.png',
+                    show_no_label=args.atlas in SHOW_NO_LABEL)
 
     io.log_analysis(f'{args.atlas} label coverage, hemispheres merged, '
                     f'{len(counts)} labels, {n_pairs} pairs, n={n_subjects}', run_dir)
