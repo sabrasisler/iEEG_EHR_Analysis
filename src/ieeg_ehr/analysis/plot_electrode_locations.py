@@ -155,13 +155,17 @@ def region_palette(regions):
     return {r: matplotlib.colors.to_hex(c) for r, c in zip(regions, colours)}
 
 
-def plot_glass_brain(contacts, regions, colours, title, out_path, node_size=22):
+def plot_glass_brain(contacts, regions, colours, title, out_path, node_size=22,
+                     legend_title='ROI (bipolar pairs, midpoint)', edge_color=None):
     """Static glass brain, one plot_markers call per region so each gets its colour.
 
     plot_markers takes a colormap, not per-point colours, so a single call cannot
     give 21 regions 21 colours. Drawing region by region into the same figure is the
     way round it, and it also fixes the legend order to the scheme's display order
     rather than to whatever order the contacts happened to arrive in.
+
+    `edge_color` draws a thin rim on every marker, for palettes with a fill too
+    pale to see on the white background.
     """
     from nilearn import plotting
 
@@ -177,6 +181,8 @@ def plot_glass_brain(contacts, regions, colours, title, out_path, node_size=22):
             node_size=node_size, display_mode='lyrz', colorbar=False, figure=fig,
             node_cmap=matplotlib.colors.ListedColormap([colours[region]]),
             node_vmin=0, node_vmax=2, alpha=0.85,
+            node_kwargs={'edgecolors': edge_color, 'linewidths': 0.3}
+            if edge_color else None,
         )
 
     handles = []
@@ -188,7 +194,7 @@ def plot_glass_brain(contacts, regions, colours, title, out_path, node_size=22):
             facecolor=colours[region], edgecolor='black',
             label=f'{region} ({len(rows)} elec, {rows["subject_id"].nunique()} subj)'))
     fig.legend(handles=handles, loc='center left', bbox_to_anchor=(1.0, 0.5),
-               fontsize=9, title='ROI (bipolar pairs, midpoint)', title_fontsize=10,
+               fontsize=9, title=legend_title, title_fontsize=10,
                frameon=True)
     fig.suptitle(title, fontsize=13)
 
