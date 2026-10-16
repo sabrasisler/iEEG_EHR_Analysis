@@ -16,4 +16,4 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export PATH="$HOME/bin:$PATH"
 export PYTHONPATH="${SLURM_SUBMIT_DIR}/src:${PYTHONPATH:-}"
 python -m ieeg_ehr.analysis.pain_change_prediction score \
-  --trajectory-dir "$TRAJECTORY_DIR" --weights "$WEIGHTS" --run-name "${RUN_NAME:-painpred}"
+  --trajectory-dir "$TRAJECTORY_DIR" --weights "$WEIGHTS"
