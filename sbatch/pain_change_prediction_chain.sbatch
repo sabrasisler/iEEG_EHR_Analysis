@@ -27,11 +27,9 @@ OAK=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler
 INSULA_RUN=$OAK/analysis/pain/pain_change/bandpower/painchange_20261006-211218
 TRAJECTORY_DIR=${TRAJECTORY_DIR:-$OAK/features/pain/pain_change_trajectory/dz-w5m-s1m-h180m_5d6156e6a827}
 VIEW=(--mask-level bipolar --mask-label "std10_rv-gross-std3_satmargin15_sw_logz4")
-EXCLUDE=()
-if [ -n "${EXCLUDE_FIRST_H:-}" ]; then EXCLUDE=(--exclude-first-h "$EXCLUDE_FIRST_H"); fi
 
 FIT_DIR=$(python -m ieeg_ehr.analysis.pain_change --model "$MODEL" --engine "$ENGINE" \
-  --roi-scheme "$ROI" "${EXCLUDE[@]}" --insula-from-run "$INSULA_RUN" "${VIEW[@]}" | tail -1)
+  --roi-scheme "$ROI" ${EXCLUDE_FIRST_H:+--exclude-first-h "$EXCLUDE_FIRST_H"} --insula-from-run "$INSULA_RUN" "${VIEW[@]}" | tail -1)
 echo "FIT_DIR=$FIT_DIR"
 for TERM in dpain dc dpain_x_dc; do
   if grep -q "^${TERM}_beta\|,${TERM}_beta," "$FIT_DIR/cells.csv"; then
