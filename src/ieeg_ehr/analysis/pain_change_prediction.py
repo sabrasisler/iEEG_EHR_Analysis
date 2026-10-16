@@ -16,17 +16,27 @@ From a `pain_change_loo` run it exports the same schema plus `heldout_subject`, 
 set of rows per fold, and `predict` scores each subject with the fold that
 excluded it.
 
+A fit that records its intercept (`pain_change_loo`) also exports `alpha`, `gamma`
+and `delta` (intercept, `pain_1_within` and `gap_h` effects), and its centering,
+the per-subject pain_1 mean of each cell, beside the weights as
+`<name>_centering.csv`.
+
 `score` computes, per pair and window end t, over the cells the subject has
 (a NaN cell drops out of both sums):
 
-    uniform   dpain_hat(t) = sum_c beta_c dz_c(t) / sum_c beta_c^2
-    ivw       the same with each term divided by var_resid_c
+    raw   dpain_hat(t) = sum_c beta_c dz_c(t) / sum_c beta_c^2
+    adj   the same on r_c(t) = dz_c(t) - alpha_c - gamma_c pain_1_within_c
+                               - delta_c (t - t1) in hours
 
-the least-squares inversion of dz_c = beta_c * dpain. The adjusted prediction
-(intercept, pain_1_within and gap_h removed first) is out for now: the fit did not
-export its intercept. Output lands in
-`analysis/pain/pain_change/prediction/<run_name>_<timestamp>/` with the figures of
-`plot_pain_change_prediction`.
+the least-squares inversion of the model with d_pain unknown. `pain_1_within_c` is
+pain1 minus the subject's centering mean for that cell, the one the fit used.
+Each comes `uniform` and `ivw` (every term divided by var_resid_c). The adjusted
+prediction needs alpha and the centering, and below EXTRAPOLATE_BELOW_MIN it is
+`extrapolated`, as the fit saw no shorter gap. Output lands in
+`analysis/pain/pain_change/prediction/<data token>/<run token>_<timestamp>/`, the
+tokens of the fit the weights came from (docs/run_tokens.md), with the raw uniform
+figures of `plot_pain_change_prediction`. A weights file is named
+`<data token>_<source run>` unless `--name` says otherwise.
 
 EXPLORATORY and descriptive: no significance testing. Discovery cohort only.
 """
@@ -41,14 +51,17 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import config, io
+from ieeg_ehr.analysis.change_score import DEFAULT_MIN_GAP_MIN
 from ieeg_ehr.features.build_pain_change_trajectory import cell_column
 
 logger = logging.getLogger(__name__)
 
 SCRIPT = 'ieeg_ehr/analysis/pain_change_prediction.py'
-RUN_NAME = 'painpred'
 WEIGHT_COLUMNS = ['roi', 'band', 'beta', 'var_resid', 'n_subjects', 'n_pairs']
-PREDICTIONS = ('uniform', 'ivw')
+#: Fit columns the adjusted prediction needs, and their weights-file names.
+ADJUST_TERMS = {'intercept_beta': 'alpha', 'baseline_beta': 'gamma', 'gap_beta': 'delta'}
+#: The pain_change fit's shortest gap: an adjusted step before it is extrapolated.
+EXTRAPOLATE_BELOW_MIN = DEFAULT_MIN_GAP_MIN
 
 #: Default delta-pain bins, inclusive at both ends, in display order.
 DPAIN_BINS = {'large decrease': (-10, -3), 'small decrease': (-2, -1),
@@ -103,26 +116,54 @@ def export_weights(source_run):
     if 'heldout_subject' in cells.columns:
         cells = cells[cells['heldout_subject'] != NO_HOLDOUT]
         columns.append('heldout_subject')
+    if set(ADJUST_TERMS) <= set(cells.columns):
+        columns += list(ADJUST_TERMS.values())
     keep = (cells['converged'].astype(bool) & np.isfinite(cells['dpain_beta'])
             & np.isfinite(cells['var_resid']))
-    w = cells[keep].rename(columns={'region': 'roi', 'freq': 'band', 'dpain_beta': 'beta'})
+    w = cells[keep].rename(columns={'region': 'roi', 'freq': 'band', 'dpain_beta': 'beta',
+                                    **ADJUST_TERMS})
     logger.info('%d of %d cells converged and exported', len(w), len(cells))
     return w[columns].reset_index(drop=True)
+
+
+def export_centering(source_run):
+    """`roi, band, subject, pain_1_mean` from a `pain_change_loo` run, or None."""
+    path = Path(source_run) / 'centering.csv'
+    if not path.exists():
+        return None
+    return (io.read_table(path, on_stale='warn')
+            .rename(columns={'region': 'roi', 'freq': 'band'}))
+
+
+def centering_path(weights_name):
+    return config.pain_change_prediction_weights_path(f'{weights_name}_centering')
 
 
 # ============================================================================
 # Scoring
 # ============================================================================
 
-def predict(dz_cells, pairs, weights):
-    """(pair_id, t_min) x the uniform and inverse-variance predictions.
+def _invert(x, beta, inv_var):
+    """(uniform, ivw) least-squares d_pain per row, over the finite cells of x."""
+    finite = np.isfinite(x)
+    b = np.where(finite, beta, 0.0)
+    x = np.where(finite, x, 0.0)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return ((b * x).sum(axis=1) / (b ** 2).sum(axis=1),
+                (b * x * inv_var).sum(axis=1) / (b ** 2 * inv_var).sum(axis=1))
 
-    Also `n_cells_used` and `sum_beta2` (uniform) per step. Weights with a
-    `heldout_subject` column score each subject with its own fold.
+
+def predict(dz_cells, pairs, weights, centering=None):
+    """(pair_id, t_min) x the raw and, given alpha and centering, adjusted predictions.
+
+    Also `n_cells_used` and `sum_beta2` of the raw uniform prediction per step.
+    Weights with a `heldout_subject` column score each subject with its own fold.
     """
-    subject_of = pairs.set_index('pair_id')['subject']
+    adjusted = centering is not None and 'alpha' in weights.columns
+    meta = pairs.set_index('pair_id')
     parts = []
-    for subject, rows in dz_cells.groupby(dz_cells['pair_id'].map(subject_of), sort=False):
+    for subject, rows in dz_cells.groupby(dz_cells['pair_id'].map(meta['subject']),
+                                          sort=False):
         w = (weights[weights['heldout_subject'] == subject]
              if 'heldout_subject' in weights.columns else weights)
         if w.empty:
@@ -132,23 +173,30 @@ def predict(dz_cells, pairs, weights):
         if missing:
             raise ValueError(f'weights name cells absent from dz_cells: {missing}')
         x = rows[cols].to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE)
-        finite = np.isfinite(x)
-        beta = np.where(finite, w['beta'].to_numpy(), 0.0)
-        x = np.where(finite, x, 0.0)
-        inv_var = 1.0 / w['var_resid'].to_numpy()
+        beta, inv_var = w['beta'].to_numpy(), 1.0 / w['var_resid'].to_numpy()
         out = rows[['pair_id', 't_min']].copy()
-        out['n_cells_used'] = finite.sum(axis=1)
-        out['sum_beta2'] = (beta ** 2).sum(axis=1)
-        with np.errstate(invalid='ignore', divide='ignore'):
-            out['pred_uniform'] = (beta * x).sum(axis=1) / out['sum_beta2']
-            out['pred_ivw'] = ((beta * x * inv_var).sum(axis=1)
-                               / (beta ** 2 * inv_var).sum(axis=1))
+        out['n_cells_used'] = np.isfinite(x).sum(axis=1)
+        out['sum_beta2'] = (np.where(np.isfinite(x), beta, 0.0) ** 2).sum(axis=1)
+        out['pred_raw_uniform'], out['pred_raw_ivw'] = _invert(x, beta, inv_var)
+        if adjusted:
+            mean = (centering[centering['subject'] == subject]
+                    .set_index(['roi', 'band'])['pain_1_mean']
+                    .reindex(list(zip(w['roi'], w['band']))).to_numpy())
+            pain_1_within = rows['pair_id'].map(meta['pain1']).to_numpy()[:, None] - mean
+            gap_h = rows['t_min'].to_numpy()[:, None] / 60.0
+            r = (x - w['alpha'].to_numpy() - w['gamma'].to_numpy() * pain_1_within
+                 - w['delta'].to_numpy() * gap_h)
+            out['pred_adj_uniform'], out['pred_adj_ivw'] = _invert(r, beta, inv_var)
+            out['extrapolated'] = out['t_min'] < EXTRAPOLATE_BELOW_MIN
         parts.append(out)
     return pd.concat(parts, ignore_index=True)
 
 
-def load_trajectory(trajectory_dir):
-    """(pairs, dz_cells) for every discovery subject in an extraction directory."""
+def load_trajectory(trajectory_dir, with_dz=True):
+    """(pairs, dz_cells) for every discovery subject in an extraction directory.
+
+    `with_dz=False` skips the dz files and returns None in their place.
+    """
     trajectory_dir = Path(trajectory_dir)
     discovery = {f'sub-{s}' for s in config.discovery_subjects()}
     pairs, dz = [], []
@@ -158,10 +206,12 @@ def load_trajectory(trajectory_dir):
             logger.warning('SPLIT GATE: %s is not discovery, skipped', sid)
             continue
         pairs.append(io.read_table(path, on_stale='warn'))
-        dz.append(io.read_table(trajectory_dir / f'dz_{sid}.parquet', on_stale='warn'))
+        if with_dz:
+            dz.append(io.read_table(trajectory_dir / f'dz_{sid}.parquet', on_stale='warn'))
     if not pairs:
         raise SystemExit(f'no discovery pairs_sub-*.parquet in {trajectory_dir}')
-    return pd.concat(pairs, ignore_index=True), pd.concat(dz, ignore_index=True)
+    return (pd.concat(pairs, ignore_index=True),
+            pd.concat(dz, ignore_index=True) if with_dz else None)
 
 
 def storage_report(trajectory_dir, n_pairs, reference_run):
@@ -191,12 +241,14 @@ t = t1 ... t1 + 3 h in 1-min steps (`{params['trajectory_dir']}`). The predicted
 change in pain inverts the `d_pain` fixed effects of `{params['weights']}`:
 
 ```
-uniform  dpain_hat(t) = sum_c beta_c d_z_c(t) / sum_c beta_c^2
-ivw      the same with each term divided by var_resid_c
+raw  dpain_hat(t) = sum_c beta_c d_z_c(t) / sum_c beta_c^2
+adj  the same on d_z_c(t) - alpha_c - gamma_c pain_1_within_c - delta_c (t - t1) in h
 ```
 
-over the converged cells the subject has. The adjusted prediction is not computed:
-the fit did not export its intercept.
+over the converged cells the subject has, each `uniform` and `ivw` (every term
+divided by var_resid_c). Adjusted prediction: {'yes' if params['adjusted'] else
+'no, the weights carry no intercept or centering'}. Below {EXTRAPOLATE_BELOW_MIN:g}
+min the adjusted prediction is extrapolated: the fit saw no shorter gap.
 
 ## Data
 
@@ -213,23 +265,35 @@ Subject means first, then mean +/- SEM across subjects. Groups under
     (run_dir / 'METHODS.md').write_text(text)
 
 
-def score(trajectory_dir, weights_name, run_name=RUN_NAME):
-    """Write one scoring run; returns its directory."""
+def source_tokens(weights_name):
+    """(data token, run token) of the fit a weights file came from."""
+    path = config.pain_change_prediction_weights_path(weights_name)
+    source = Path(io.read_sidecar(path)['params']['source_run'])
+    return source.parent.name, source.name.rsplit('_', 1)[0]
+
+
+def score(trajectory_dir, weights_name):
+    """Write one scoring run beside its fit's tokens; returns its directory."""
     weights_path = config.pain_change_prediction_weights_path(weights_name)
     weights = io.read_table(weights_path, on_stale='warn')
+    centering = (io.read_table(centering_path(weights_name), on_stale='warn')
+                 if centering_path(weights_name).exists() else None)
     pairs, dz = load_trajectory(trajectory_dir)
-    preds = predict(dz, pairs, weights)
+    preds = predict(dz, pairs, weights, centering)
     traj_manifest = json.loads((Path(trajectory_dir) / io.MANIFEST_NAME).read_text())
     reference_run = next(p['path'] for p in traj_manifest['parents']
                          if Path(p['path']).name == traj_manifest['params']['reference_run'])
 
+    data_token, run_token = source_tokens(weights_name)
     run_dir = config.analysis_run_dir(question=config.PAIN_CHANGE_QUESTION,
                                       output_type=config.PAIN_CHANGE_PREDICTION_OUTPUT,
-                                      run_name=run_name)
+                                      view_scheme=data_token, run_name=run_token)
     subjects = sorted(pairs['subject'].unique())
     params = {'trajectory_dir': str(trajectory_dir), 'weights': weights_name,
-              'n_weight_cells': len(weights), 'bins': DPAIN_BINS}
-    parents = [str(trajectory_dir), str(weights_path)]
+              'n_weight_cells': len(weights), 'bins': DPAIN_BINS,
+              'adjusted': 'pred_adj_uniform' in preds.columns}
+    parents = [str(trajectory_dir), str(weights_path)] + (
+        [str(centering_path(weights_name))] if centering is not None else [])
     counts = count_table(pairs)
     print(counts.to_string(index=False))
     io.write_table(preds, run_dir / f'predictions_{weights_name}.csv', params=params,
@@ -252,17 +316,19 @@ def main(argv=None):
     sub = ap.add_subparsers(dest='command', required=True)
     w = sub.add_parser('weights', help='export a pain_change fit as a weights file')
     w.add_argument('--source-run', required=True)
-    w.add_argument('--name', required=True)
+    w.add_argument('--name', default=None,
+                   help='weights file name; default <data token>_<source run>')
     s = sub.add_parser('score', help='score an extraction with a weights file, then plot')
     s.add_argument('--trajectory-dir', required=True)
     s.add_argument('--weights', required=True, help='weights file name')
-    s.add_argument('--run-name', default=RUN_NAME)
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     io.warn_if_dirty()
 
     if args.command == 'weights':
+        source = Path(args.source_run)
+        args.name = args.name or f'{source.parent.name}_{source.name}'
         weights = export_weights(args.source_run)
         path = io.write_table(weights, config.pain_change_prediction_weights_path(args.name),
                               params={'source_run': str(args.source_run),
@@ -270,12 +336,17 @@ def main(argv=None):
                               parents=[str(weights_source(args.source_run))],
                               script=SCRIPT)
         print(path)
+        centering = export_centering(args.source_run)
+        if centering is not None:
+            print(io.write_table(centering, centering_path(args.name),
+                                 params={'source_run': str(args.source_run)},
+                                 parents=[str(Path(args.source_run) / 'centering.csv')],
+                                 script=SCRIPT))
         return 0
 
     from ieeg_ehr.analysis import plot_pain_change_prediction as plots
-    run_dir = score(args.trajectory_dir, args.weights, args.run_name)
-    for weighting in PREDICTIONS:
-        plots.render_all(run_dir, weights_name=args.weights, weighting=weighting)
+    run_dir = score(args.trajectory_dir, args.weights)
+    plots.render_all(run_dir, args.weights)
     print(run_dir)
     return 0
 

@@ -24,4 +24,4 @@ RUN_DIR=$(python -m ieeg_ehr.analysis.pain_change_loo --reference-run "$REFERENC
   --mask-label "std10_rv-gross-std3_satmargin15_sw_logz4" | tail -1)
 echo "RUN_DIR=$RUN_DIR"
 python -m ieeg_ehr.analysis.pain_change_prediction weights --source-run "$RUN_DIR" \
-  --name "loo_$(basename "$REFERENCE_RUN")"
+  --name "${WEIGHTS_NAME:-loo_$(basename "$REFERENCE_RUN")}"
