@@ -36,6 +36,7 @@ them. Joined with `-`, in this order.
 | band set | AXIS 5 | `paperbands6hg200`, `fullres` (the `--band-set` name without underscores) | `run_bandpower_mixed.BAND_SETS` |
 | ROI scheme | AXIS 6 | `roiv2ofcins`, `roiv3ins`, ... (DK schemes). `hcpexv5` = paper ROIs from an `hcpex_paper` coverage run, version of its mapping file | `views/view_config.py` `ROI_SCHEME_CODES` and `roi_code`, decoded in `docs/view_registry.md` |
 | first-hours exclusion | pair filter | `nofirst24h` = pairs whose first epoch starts within 24 h of `session_start` dropped. Absent = none dropped | `pain_change.data_token`, `--exclude-first-h` |
+| second-epoch window | pairing | `e2pre10to5` = each pair's later epoch is [t2 - 10, t2 - 5) min (shifted tables, `features/build_pain_change_shifted_z.py`), the earlier stays [t1 - 5, t1). Absent = [t2 - 5, t2) | `pain_change.data_token`, `--second-epoch-shift-min` |
 
 `scheme_code` also carries the pain-bin code (`relpain`). `pain_change` never
 bins pain, so its data token leaves that code out.
@@ -79,6 +80,7 @@ always names one set of curves.
 | Version | Recipe | Since |
 |---|---|---|
 | `mme1` | MAR doses only (doses before `session_start` missing, so early curves are lower bounds). Opioids only, buprenorphine excluded. CDC 2022 oral and Nielsen 2014 IV MME factors. One-compartment PO and IV bolus, three-compartment IV fentanyl. C at an assessment = mean curve over the 5-min epoch before it. `Cbar` = mean curve over [t1, t2), centred on the cohort mean over pairs. Units: typical doses of 10.0 MME (median discovery opioid dose). | 2026-10-15 |
+| `mme2` | `mme1`, but C at an assessment = mean curve over the epoch its d_z uses, so a shifted second epoch (`e2pre10to5`) moves C_2 to [t2 - 10, t2 - 5). Used only by shifted runs: equal to `mme1` without a shift (`opioid_mme.exposure_version`). | 2026-10-19 |
 
 ## Figure tokens: file names in `figures/`
 
@@ -102,7 +104,7 @@ Recorded in provenance, constant across runs so far.
 
 | Group | Parameter | Current value |
 |---|---|---|
-| neural | cache | native 0.5 Hz FFT, 5-min pre-score epoch, 2 s windows with 1 s hop |
+| neural | cache | native 0.5 Hz FFT, 5-min pre-score epoch (the second epoch can move, see `e2pre10to5`), 2 s windows with 1 s hop |
 | neural | QC mask | `std10_rv-gross-std3_satmargin15_sw_logz4`, bipolar |
 | neural | domain, epoch average | log, mean |
 | neural | line-noise notch | +-2.0 Hz (`PSD_NOTCH_HALF_WIDTH_HZ`), removed before the band mean |
