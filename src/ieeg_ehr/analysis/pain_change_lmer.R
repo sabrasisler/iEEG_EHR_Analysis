@@ -98,7 +98,10 @@ fit_one <- function(dc) {
 fits <- mclapply(split(d, by = "cell_id"), fit_one, mc.cores = cores)
 bad <- vapply(fits, inherits, logical(1), "try-error")
 if (any(bad)) stop("worker error: ", as.character(fits[[which(bad)[1]]]))
-fwrite(rbindlist(lapply(fits, `[[`, "cell")), file.path(out_dir, "lmer_cells.csv"))
+# na = "NA": the reader keeps empty strings for warnings/error and parses only "NA"
+# as missing, so a variance absent from the model must be written as NA.
+fwrite(rbindlist(lapply(fits, `[[`, "cell")), file.path(out_dir, "lmer_cells.csv"),
+       na = "NA")
 fwrite(rbindlist(lapply(fits, `[[`, "terms")), file.path(out_dir, "lmer_terms.csv"))
 cat(sprintf("fitted %d cells, %d converged, %d singular\n", length(fits),
             sum(vapply(fits, function(f) isTRUE(f$cell$converged), logical(1))),
