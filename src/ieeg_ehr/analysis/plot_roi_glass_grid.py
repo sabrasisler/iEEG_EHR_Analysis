@@ -148,7 +148,7 @@ def main():
     fig.suptitle(f'Paper ROIs on HCPex v1.1: territory (blue outline) and bipolar pairs at '
                  f'the pair midpoint (orange), {len(subjects)} subjects. Red title = fewer '
                  f'than {args.min_subjects} subjects.', fontsize=13, x=0.01, ha='left',
-                 y=1 - 0.15 / (n_rows * panel_h + 0.6))
+                 va='bottom', y=1.0)
     out = run_dir / 'roi_glass_grid.png'
     fig.savefig(out, dpi=style.DPI, facecolor='white', bbox_inches='tight')
     plt.close(fig)
