@@ -30,9 +30,11 @@ The calls that are judgment, not lookup:
     nuclei, LP, the geniculates and L-Sg; pulvinar = PuA, PuI, PuL, PuM.
 
 HIPPOCAMPUS is one HCPex parcel (Glasser's H, named `Hipp`), plus the
-presubiculum. It is split into anterior and posterior by the virtual
-electrode's MNI y at HIPPOCAMPUS_SPLIT_Y, the uncal apex (Poppenk et al. 2013,
-doi 10.1016/j.tics.2013.03.005): y > -21 is anterior.
+presubiculum. Under the key HIPPOCAMPUS (an explicit opt-in name) it is split
+into anterior and posterior by the virtual electrode's MNI y at
+HIPPOCAMPUS_SPLIT_Y, the uncal apex (Poppenk et al. 2013,
+doi 10.1016/j.tics.2013.03.005): y > -21 is anterior. Under any other key,
+e.g. plain `Hippocampus`, it stays whole.
 
 STN has no HCPex parcel, so it is listed with none and always counts zero.
 Parcels with no paper ROI (piriform, VTA, mammillary bodies, septum, nucleus
@@ -40,15 +42,14 @@ basalis) sit under NO_ROI.
 
 ITERATING WITHOUT A COMMIT: `load(path)` reads the same {ROI: [parcels]} shape
 from a JSON file on Oak, so a regrouping is a file edit, and a run records the
-mapping's full contents in its provenance. The key named HIPPOCAMPUS is the one
-split by y; name a key differently to keep the hippocampus whole. NO_ROI must
-keep its exact name.
+mapping's full contents in its provenance. Only the key named HIPPOCAMPUS is
+split by y. NO_ROI must keep its exact name.
 """
 
 import json
 
 #: The key whose pairs are split into ANTERIOR_/POSTERIOR_HIPPOCAMPUS by y.
-HIPPOCAMPUS = 'Hippocampus'
+HIPPOCAMPUS = 'Hippocampus (split at y = -21)'
 ANTERIOR_HIPPOCAMPUS = 'Anterior hippocampus'
 POSTERIOR_HIPPOCAMPUS = 'Posterior hippocampus'
 HIPPOCAMPUS_SPLIT_Y = -21.0

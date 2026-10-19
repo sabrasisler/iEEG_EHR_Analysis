@@ -89,6 +89,24 @@ def project(xyz, direction):
     return xyz[:, 'xyz'.index(h)], xyz[:, 'xyz'.index(v)]
 
 
+def draw_territory(ax, xyz, direction, window, colour, alpha=0.12, linewidth=1.3):
+    """Translucent fill and outline of a voxel cloud's projection in one glass-brain view.
+
+    An outline, not the voxels themselves, so a territory drawn behind another
+    stays visible.
+    """
+    h_ax, v_ax = VIEW_AXES[direction]
+    h_edges = np.arange(window[h_ax][0] - 1, window[h_ax][1] + 2)
+    v_edges = np.arange(window[v_ax][0] - 1, window[v_ax][1] + 2)
+    centres = ((h_edges[:-1] + h_edges[1:]) / 2, (v_edges[:-1] + v_edges[1:]) / 2)
+    occupied, _, _ = np.histogram2d(*project(xyz, direction), bins=[h_edges, v_edges])
+    occupied = (occupied > 0).astype(float).T
+    ax.contourf(*centres, occupied, levels=[0.5, 1.5], colors=[colour], alpha=alpha,
+                zorder=900)
+    ax.contour(*centres, occupied, levels=[0.5], colors=[colour], linewidths=linewidth,
+               zorder=901)
+
+
 def shades(groups, members, colours):
     """{nucleus: colour}: each group's hue, lightened step by step across its nuclei."""
     out = {}
@@ -162,18 +180,9 @@ def glass_figure(thal, voxels, groups, members, colours, n_subjects, out_path):
     display = plotting.plot_glass_brain(None, display_mode='ortho', figure=fig,
                                         axes=(0.0, 0.0, 0.72, 0.9), annotate=False)
     for direction, gax in display.axes.items():
-        h_ax, v_ax = VIEW_AXES[direction]
-        h_edges = np.arange(WINDOW[h_ax][0] - 1, WINDOW[h_ax][1] + 2)
-        v_edges = np.arange(WINDOW[v_ax][0] - 1, WINDOW[v_ax][1] + 2)
-        centres = ((h_edges[:-1] + h_edges[1:]) / 2, (v_edges[:-1] + v_edges[1:]) / 2)
         for g in groups:
             xyz = np.vstack([voxels[(n, hemi)] for n in members[g] for hemi in ('L', 'R')])
-            occupied, _, _ = np.histogram2d(*project(xyz, direction), bins=[h_edges, v_edges])
-            occupied = (occupied > 0).astype(float).T
-            gax.ax.contourf(*centres, occupied, levels=[0.5, 1.5], colors=[colours[g]],
-                            alpha=0.12, zorder=900)
-            gax.ax.contour(*centres, occupied, levels=[0.5], colors=[colours[g]],
-                           linewidths=1.3, zorder=901)
+            draw_territory(gax.ax, xyz, direction, WINDOW, colours[g])
     for g in groups:
         pts = thal.loc[thal['group'] == g, ['mni_x', 'mni_y', 'mni_z']].to_numpy(float)
         if len(pts):
