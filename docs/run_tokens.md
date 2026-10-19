@@ -34,7 +34,7 @@ them. Joined with `-`, in this order.
 |---|---|---|---|
 | normalization + baseline | AXIS 3 + AXIS 2 | `zscoreallep` = z-score against all of the session's pain-epoch windows | `views/view_config.py` `NORMALIZATION_CODES`, `BASELINE_CODES` |
 | band set | AXIS 5 | `paperbands6hg200`, `fullres` (the `--band-set` name without underscores) | `run_bandpower_mixed.BAND_SETS` |
-| ROI scheme | AXIS 6 | `roiv2ofcins`, `roiv3ins`, ... | `views/view_config.py` `ROI_SCHEME_CODES`, decoded in `docs/view_registry.md` |
+| ROI scheme | AXIS 6 | `roiv2ofcins`, `roiv3ins`, ... (DK schemes). `hcpexv5` = paper ROIs from an `hcpex_paper` coverage run, version of its mapping file | `views/view_config.py` `ROI_SCHEME_CODES` and `roi_code`, decoded in `docs/view_registry.md` |
 | first-hours exclusion | pair filter | `nofirst24h` = pairs whose first epoch starts within 24 h of `session_start` dropped. Absent = none dropped | `pain_change.data_token`, `--exclude-first-h` |
 
 `scheme_code` also carries the pain-bin code (`relpain`). `pain_change` never
@@ -65,9 +65,11 @@ Each ID is written out in full in `MODELS`, and nothing parses the name.
 | `opioid` | `d_z ~ d_pain + dC + Cbar + d_pain:Cbar + pain_1_within + gap_h` | 2026-10-15 |
 | `opioid-pairint` | `opioid` + `(1 \| pair_id)`, one shift shared by a pair's channels. lme4 only | 2026-10-15 |
 | `opioid-dc-pairint` | `d_z ~ d_pain + dC + d_pain:dC + pain_1_within + gap_h` + `(1 \| pair_id)`. dC in place of Cbar, not centred. lme4 only | 2026-10-15 |
+| `opioid-dc-pairint-nosubjint` | `opioid-dc-pairint` without `(1 \| subject)`: random effects `(0 + d_pain \| subject) + (1 \| pair_id)`. The intercept fitted to zero in all 132 cells of the 2026-10-15 run (a subject offset cancels in d_z). lme4 only | 2026-10-19 |
 
-Every model takes the random effects `(1 \| subject) + (0 + d_pain \| subject)`
-(`pain_change.RE_SUBJECT`). A model ID names the fixed AND the random effects.
+Every model except a `-nosubjint` one takes the random effects
+`(1 \| subject) + (0 + d_pain \| subject)` (`pain_change.RE_SUBJECT`). A model ID
+names the fixed AND the random effects.
 
 ### Exposure versions
 
@@ -105,7 +107,7 @@ Recorded in provenance, constant across runs so far.
 | neural | domain, epoch average | log, mean |
 | neural | line-noise notch | +-2.0 Hz (`PSD_NOTCH_HALF_WIDTH_HZ`), removed before the band mean |
 | neural | band weighting | plain mean over native bins |
-| neural | insula cut | pinned with `--insula-from-run` (2026-10-06 run: y > -1.550) |
+| neural | insula cut | pinned with `--insula-from-run` (2026-10-06 run: y > -1.550). DK schemes only: an `hcpex` scheme defines aIns and pIns by parcel |
 | rows | cohort | `config.discovery_subjects()`, minus sessions with no MAR export |
 | rows | pairs | consecutive assessments, 30-240 min apart |
 | rows | coverage floors | 8 subjects, 20 rows per cell |

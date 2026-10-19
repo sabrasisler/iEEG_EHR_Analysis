@@ -69,7 +69,7 @@ from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS
 from ieeg_ehr.analysis.run_domain_lmer import check_r, r_environment
 from ieeg_ehr.analysis.run_mixed_model_grid import FDR_Q, add_fdr
 from ieeg_ehr.analysis.run_mixed_model_pilot import roi_maps
-from ieeg_ehr.config import opioid_mme
+from ieeg_ehr.config import opioid_mme, roi_schemes
 from ieeg_ehr.med_analysis import load, mme_curve
 from ieeg_ehr.views import axes, fullres_reader, view_config
 from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
@@ -102,6 +102,11 @@ _OPIOID = 'd_z ~ d_pain + dC + Cbar + d_pain:Cbar + pain_1_within + gap_h'
 #: 0 already means no exposure change, so `d_pain` is the slope at steady exposure.
 _OPIOID_DC = 'd_z ~ d_pain + dC + d_pain:dC + pain_1_within + gap_h'
 _PAIR = f'{RE_SUBJECT} + (1 | pair_id)'
+#: `_PAIR` without the subject intercept. d_z is a within-subject difference of two
+#: epochs z-scored against the same session baseline, so a subject offset cancels
+#: and `(1 | pair_id)` takes up what is left: the intercept variance fitted to zero
+#: in every cell of the 2026-10-15 `opioid-dc-pairint` run.
+_PAIR_NOSUBJINT = '(0 + d_pain | subject) + (1 | pair_id)'
 #: Model ID -> model (docs/run_tokens.md). One ID always means one formula; a new
 #: formula takes a new ID. `(1 | pair_id)` gives each pair one shift shared by its
 #: channels, so pair-level predictors are tested against the number of pairs, not
@@ -113,6 +118,7 @@ MODELS = {
     'opioid': Model(_OPIOID),
     'opioid-pairint': Model(_OPIOID, _PAIR),
     'opioid-dc-pairint': Model(_OPIOID_DC, _PAIR),
+    'opioid-dc-pairint-nosubjint': Model(_OPIOID_DC, _PAIR_NOSUBJINT),
 }
 #: Fixed-effect term -> column prefix in cells.csv.
 TERM_PREFIX = {'d_pain': 'dpain', 'pain_1_within': 'baseline', 'gap_h': 'gap',
@@ -157,7 +163,7 @@ def data_token(vc, band_set, exclude_first_h):
     """The level-4 folder: which rows go in and what their d_z is (docs/run_tokens.md)."""
     norm = (view_config.NORMALIZATION_CODES[vc.normalization]
             + view_config.BASELINE_CODES[vc.baseline])
-    tokens = [norm, band_set.replace('_', ''), view_config.ROI_SCHEME_CODES[vc.roi_scheme]]
+    tokens = [norm, band_set.replace('_', ''), view_config.roi_code(vc.roi_scheme)]
     if exclude_first_h:
         tokens.append(f'nofirst{exclude_first_h:g}h')
     return '-'.join(tokens)
@@ -587,6 +593,12 @@ def write_methods(run_dir, cells, params, n_pairs, cohort, summary):
     elif 'd_pain:dC' in model_terms(model):
         exposure_vars += ("- `d_pain:dC`: the change in the pain slope per typical dose of exposure\n"
                           "  change. dC = 0 means steady exposure, so `d_pain` is the slope there.\n")
+    subject_text = (
+        'subject intercept and subject `d_pain` slope, uncorrelated (lme4 '
+        f'`(d_pain || subject)`, statsmodels `vc_formula` `{mm.VC_CHANGE}`)'
+        if RE_SUBJECT in MODELS[model].random else
+        'subject `d_pain` slope only, no subject intercept: a subject offset cancels '
+        'in the pair difference')
     medication = ("- Doses before `session_start` (the OR) are not in the MAR export, so\n"
                   "  exposure early in a session is a lower bound. Non-opioid analgesics\n"
                   "  are not modelled." if uses_exposure(model)
@@ -607,8 +619,7 @@ Model `{model}`:
 {MODELS[model].formula}
 ```
 
-- Random effects: subject intercept and subject `d_pain` slope, uncorrelated
-  (lme4 `(d_pain || subject)`, statsmodels `vc_formula` `{mm.VC_CHANGE}`).
+- Random effects: {subject_text}.
   No channel component: a channel's level cancels in the pair difference.
 {pair_text}- Estimation (engine `{params['engine']}`): {params['estimation']}.
 - Reported terms: {reported} and the variance components. The statsmodels LRT
@@ -624,7 +635,7 @@ Model `{model}`:
 
 {fit_summary_text(summary)}
 
-`boundary`: the subject intercept or the random `d_pain` slope contributes under
+`boundary`: a subject random-effect variance (intercept or `d_pain` slope) contributes under
 {mm.BOUNDARY_TOL:g} of the residual variance (`boundary_component`), so the fit is
 in effect without that component and its fixed effects still hold. `warn`:
 converged with a warning that makes the standard errors suspect
@@ -697,6 +708,8 @@ def main(argv=None):
     io.warn_if_dirty()
 
     insula_threshold = None
+    if args.insula_from_run and not roi_schemes.coordinate_regions(args.roi_scheme):
+        ap.error(f'--insula-from-run: {args.roi_scheme} has no coordinate insula split')
     if args.insula_from_run:
         prov = json.loads((Path(args.insula_from_run) / 'provenance.json').read_text())
         insula_threshold = prov['insula_split']['thresholds']
@@ -732,7 +745,8 @@ def main(argv=None):
         view_scheme=data_token(vc, args.band_set, args.exclude_first_h), run_name=run_name)
     cohort = sorted(index['subject'].unique())
     params = {'model': args.model, 'run_name': run_name, 'formula': MODELS[args.model].formula,
-              'vc': mm.VC_CHANGE, 'engine': args.engine, 'reml': True,
+              'vc': mm.VC_CHANGE if RE_SUBJECT in MODELS[args.model].random else None,
+              'engine': args.engine, 'reml': True,
               'estimation': estimation_text(args.engine), 'band_set': args.band_set,
               'bands': bands, 'roi_scheme': args.roi_scheme,
               'insula_threshold': rows.split_report.get('insula_split', {}).get('thresholds'),

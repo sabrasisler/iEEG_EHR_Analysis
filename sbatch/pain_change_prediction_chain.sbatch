@@ -15,6 +15,10 @@
 #
 #   sbatch --export=ALL,MODEL=opioid-dc-pairint,ENGINE=lme4,ROI=roi_v3_ins sbatch/pain_change_prediction_chain.sbatch
 # EXCLUDE_FIRST_H=24 adds the first-hours exclusion. TRAJECTORY_DIR must carry the ROI scheme.
+# FIT_DIR=<pain_change run> skips step 1 and continues from that fit (e.g. after building
+# its trajectory). INSULA_RUN= (empty) drops --insula-from-run, for a ROI scheme with no
+# insula split (an hcpex_paper coverage run). DOMAIN_SCHEME=none draws ungrouped heatmaps.
+# STOP_AFTER_FIT=1 ends after step 1, when the trajectory must first be built from the new fit.
 set -euo pipefail
 module load math R/4.4.2
 module load python/3.12
@@ -24,18 +28,24 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export PATH="$HOME/bin:$PATH"
 export PYTHONPATH="${SLURM_SUBMIT_DIR}/src:${PYTHONPATH:-}"
 OAK=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler
-INSULA_RUN=$OAK/analysis/pain/pain_change/bandpower/painchange_20261006-211218
+INSULA_RUN=${INSULA_RUN-$OAK/analysis/pain/pain_change/bandpower/painchange_20261006-211218}
+DOMAIN_SCHEME=${DOMAIN_SCHEME:-pain_domains_v4}
 TRAJECTORY_DIR=${TRAJECTORY_DIR:-$OAK/features/pain/pain_change_trajectory/dz-w5m-s1m-h180m_5d6156e6a827}
 VIEW=(--mask-level bipolar --mask-label "std10_rv-gross-std3_satmargin15_sw_logz4")
 
-FIT_DIR=$(python -m ieeg_ehr.analysis.pain_change --model "$MODEL" --engine "$ENGINE" \
-  --roi-scheme "$ROI" ${EXCLUDE_FIRST_H:+--exclude-first-h "$EXCLUDE_FIRST_H"} --insula-from-run "$INSULA_RUN" "${VIEW[@]}" | tail -1)
+if [ -z "${FIT_DIR:-}" ]; then
+  FIT_DIR=$(python -m ieeg_ehr.analysis.pain_change --model "$MODEL" --engine "$ENGINE" \
+    --roi-scheme "$ROI" ${EXCLUDE_FIRST_H:+--exclude-first-h "$EXCLUDE_FIRST_H"} \
+    ${INSULA_RUN:+--insula-from-run "$INSULA_RUN"} "${VIEW[@]}" | tail -1)
+  for TERM in dpain dc dpain_x_dc; do
+    if grep -q "^${TERM}_beta\|,${TERM}_beta," "$FIT_DIR/cells.csv"; then
+      python -m ieeg_ehr.analysis.plot_pain_change_heatmap --run-dir "$FIT_DIR" --term "$TERM" \
+        --domain-scheme "$DOMAIN_SCHEME"
+    fi
+  done
+fi
 echo "FIT_DIR=$FIT_DIR"
-for TERM in dpain dc dpain_x_dc; do
-  if grep -q "^${TERM}_beta\|,${TERM}_beta," "$FIT_DIR/cells.csv"; then
-    python -m ieeg_ehr.analysis.plot_pain_change_heatmap --run-dir "$FIT_DIR" --term "$TERM"
-  fi
-done
+if [ -n "${STOP_AFTER_FIT:-}" ]; then exit 0; fi
 
 LOO_DIR=$(python -m ieeg_ehr.analysis.pain_change_loo --reference-run "$FIT_DIR" \
   --roi-scheme "$ROI" "${VIEW[@]}" | tail -1)

@@ -612,6 +612,8 @@ def resolve_roi_scheme(scheme=None):
         return _validated(ROI_SCHEMES[scheme], f'built-in {scheme!r}')
 
     path = Path(scheme)
+    if (path / 'pair_labels.csv').exists():
+        return _coverage_run_scheme(path)
     if path.suffix == '.json' or path.exists():
         if not path.exists():
             raise FileNotFoundError(f'ROI scheme file not found: {path}')
@@ -622,6 +624,29 @@ def resolve_roi_scheme(scheme=None):
         f'Unknown ROI scheme {scheme!r}. Built-ins: {sorted(ROI_SCHEMES)}; '
         'otherwise pass a path to a .json scheme file.'
     )
+
+
+def _coverage_run_scheme(run_dir):
+    """A scheme whose channels an `hcpex_paper` coverage run already labelled.
+
+    The run's `pair_labels.csv` holds each bipolar pair's paper ROI at its virtual
+    electrode (HCPex parcel at the anode-cathode MNI midpoint), so channels are
+    looked up there (`run_mixed_model_pilot.roi_maps`), not matched by DK pattern.
+    Display order is the run's ROI mapping order. `token` is the folder code:
+    `hcpex` plus the mapping file's version, e.g. `hcpexv5` for
+    `hcpex_paper_rois_v5.json`.
+    """
+    from ieeg_ehr.config import hcpex_rois
+    params = json.loads((run_dir / 'provenance.json').read_text())['params']
+    if params.get('atlas') != 'hcpex_paper':
+        raise ValueError(f'{run_dir} is not an hcpex_paper coverage run')
+    mapping = params['paper_roi_parcels']
+    roi_map = params.get('roi_map')
+    version = Path(roi_map).stem.removeprefix('hcpex_paper_rois_') if roi_map else 'paper'
+    return {'patterns': {}, 'display': hcpex_rois.roi_order(mapping),
+            'origin': f'hcpex_paper coverage run {run_dir}', 'coordinate_regions': {},
+            'labels': run_dir / 'pair_labels.csv', 'paper_roi_parcels': mapping,
+            'token': f'hcpex{version}'}
 
 
 def _validated(scheme, origin):
@@ -684,6 +709,9 @@ def scheme_provenance(scheme=None):
     if resolved.get('coordinate_regions'):
         out['coordinate_regions'] = {k: list(v) for k, v
                                      in resolved['coordinate_regions'].items()}
+    if resolved.get('labels'):
+        out['labels'] = str(resolved['labels'])
+        out['paper_roi_parcels'] = resolved['paper_roi_parcels']
     return out
 
 

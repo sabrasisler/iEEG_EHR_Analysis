@@ -68,6 +68,23 @@ ROI_SCHEME_CODES = {'default': '', 'roi_v2': 'roiv2', 'roi_v2_ofc': 'roiv2ofc',
                     'pain_domains_v3': 'paindomainsv3'}
 
 
+def roi_code(roi_scheme):
+    """The ROI part of a folder name.
+
+    A built-in scheme's ROI_SCHEME_CODES entry; an hcpex_paper coverage run's
+    token (`hcpexv5`, `roi_schemes._coverage_run_scheme`); otherwise a JSON
+    scheme file's stem, so a scheme on Oak still gets a stable folder name
+    rather than colliding with the default's.
+    """
+    code = ROI_SCHEME_CODES.get(roi_scheme)
+    if code is not None:
+        return code
+    from pathlib import Path
+    from ieeg_ehr.config import roi_schemes
+    token = roi_schemes.resolve_roi_scheme(roi_scheme).get('token')
+    return token or Path(roi_scheme).stem.replace('_', '').replace('-', '')
+
+
 @dataclass(frozen=True)
 class ViewConfig:
     """Frozen so a config cannot be mutated after it has been hashed into a
@@ -173,13 +190,7 @@ class ViewConfig:
         self-decoding the way 'delta' is -- the table in docs/view_registry.md is
         what decodes it, and provenance.json carries the scheme's full contents.
         """
-        roi = ROI_SCHEME_CODES.get(self.roi_scheme)
-        if roi is None:
-            # A JSON scheme path: use its filename stem, so a scheme that lives on
-            # Oak still gets a stable folder name rather than colliding with the
-            # default's.
-            from pathlib import Path
-            roi = Path(self.roi_scheme).stem.replace('_', '').replace('-', '')
+        roi = roi_code(self.roi_scheme)
         norm = NORMALIZATION_CODES[self.normalization]
         if self.normalization != 'none' and BASELINE_CODES[self.baseline]:
             norm = f'{norm}{BASELINE_CODES[self.baseline]}'

@@ -12,6 +12,8 @@ for `d_pain`, `heatmap_dpain-x-cbar.png` for `d_pain:Cbar`,
 band-power poster map: rows grouped by domain, colour = the term's fixed effect,
 outlines = BH across all fitted cells, stars = uncorrected p. A star without an
 outline is not BH-significant. Region names take `roi_schemes.ROI_RENAMES`.
+`--domain-scheme none` draws the rows ungrouped, in the run's own region order,
+for a region set no domain scheme covers (an hcpex_paper ROI mapping).
 """
 
 import argparse
@@ -40,6 +42,8 @@ TERMS = {
 #: The domain colours of the band-power poster map (Sensory, Affective,
 #: Cognitive, Modulatory, Other).
 POSTER_COLOURS = ('#d95f02', '#1b9e77', '#7570b3', '#447eae', '0.55')
+#: The one block's label under `--domain-scheme none`.
+UNGROUPED = 'ROIs'
 
 
 def main(argv=None):
@@ -47,7 +51,8 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run-dir', required=True)
     ap.add_argument('--term', choices=list(TERMS), default='dpain')
-    ap.add_argument('--domain-scheme', default='pain_domains_v4')
+    ap.add_argument('--domain-scheme', default='pain_domains_v4',
+                    help="a domain scheme, or 'none' for one ungrouped block")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -57,9 +62,14 @@ def main(argv=None):
     bands = BAND_SETS[params['band_set']]
     cells = io.read_table(run_dir / 'cells.csv', on_stale='warn')
     cells = cells.assign(region=cells['region'].replace(roi_schemes.ROI_RENAMES))
-    groups = domain_rows(list(dict.fromkeys(cells['region'])), args.domain_scheme)
-    display = roi_schemes.domain_scheme(args.domain_scheme)['display']
-    colours = dict(zip(display + [UNASSIGNED], POSTER_COLOURS))
+    regions = list(dict.fromkeys(cells['region']))
+    if args.domain_scheme == 'none':
+        groups = [(UNGROUPED, regions)]
+        colours = {UNGROUPED: POSTER_COLOURS[-1]}
+    else:
+        groups = domain_rows(regions, args.domain_scheme)
+        display = roi_schemes.domain_scheme(args.domain_scheme)['display']
+        colours = dict(zip(display + [UNASSIGNED], POSTER_COLOURS))
 
     token, title, cb_label = TERMS[args.term]
     out = run_dir / FIGURES_SUBDIR / f'heatmap_{token}.png'

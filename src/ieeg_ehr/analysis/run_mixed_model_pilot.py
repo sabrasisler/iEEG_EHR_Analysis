@@ -148,6 +148,32 @@ def load_epoch_scores(paths):
     return pd.concat(frames, ignore_index=True)
 
 
+def labelled_roi_maps(paths, subjects, labels, display):
+    """roi_maps for a scheme whose channels a coverage run labelled (`pair_labels.csv`).
+
+    Looked up per (subject, session), then merged per subject, which is the shape
+    every caller takes. A channel that falls in two different ROIs in two sessions
+    raises: a subject-keyed map cannot hold both.
+    """
+    table = io.read_table(labels, on_stale='warn')
+    table = table[table['label'].isin(display)].assign(
+        session=lambda t: t['session'].astype(str).str.zfill(2))
+    out = {}
+    for p in paths:
+        subject, session = subject_session_of(p)
+        sid = f'sub-{subject}'
+        if sid not in subjects:
+            continue
+        rows = table[(table['subject_id'] == sid) & (table['session'] == session)]
+        mapping = out.setdefault(sid, {})
+        for channel, roi in zip(rows['channel'], rows['label']):
+            if mapping.setdefault(channel, roi) != roi:
+                raise ValueError(f'{sid}: channel {channel} is {mapping[channel]} in one '
+                                 f'session and {roi} in another ({labels})')
+    missing = sorted(sid for sid, m in out.items() if not m)
+    return {sid: m for sid, m in out.items() if m}, missing
+
+
 def roi_maps(paths, subjects, roi_scheme, *, insula_threshold=None, report=None):
     """{subject_id: {channel: ROI}} from the CACHED channel_meta tables.
 
@@ -169,6 +195,15 @@ def roi_maps(paths, subjects, roi_scheme, *, insula_threshold=None, report=None)
     """
     from ieeg_ehr.analysis import insula_ap
     from ieeg_ehr.config import roi_schemes
+
+    resolved = roi_schemes.resolve_roi_scheme(roi_scheme)
+    if resolved.get('labels') is not None:
+        out, missing = labelled_roi_maps(paths, subjects, resolved['labels'],
+                                         resolved['display'])
+        if missing:
+            logger.warning('%d subject(s) contribute NO ROI-labelled channel and cannot '
+                           'enter any cell: %s', len(missing), missing)
+        return out, missing
 
     split_parents = roi_schemes.coordinate_regions(roi_scheme)
     out, missing = {}, []

@@ -146,12 +146,13 @@ def main(argv=None):
         raise ValueError(f'reference subjects outside the locked discovery set: {outside}')
     folds = sorted(s for s in train if s.replace('sub-', '') in config.discovery_subjects())
 
+    insula_threshold = (prov.get('insula_split') or {}).get('thresholds')
     zdir = zview.zscore_dir(vc)
     paths = [p for p in sorted(zdir.glob('zmean_sub-*_ses-*.parquet'))
              if f'sub-{fullres_cells.subject_session_of(p)[0]}' in train]
     rows = pain_change.load_rows(paths, params['roi_scheme'], params['band_set'],
                                  params['min_gap_min'], params['max_gap_min'],
-                                 insula_threshold=prov['insula_split']['thresholds'],
+                                 insula_threshold=insula_threshold,
                                  exclude_first_h=params['exclude_first_h'])
     if rows.notch != params['notch_bins_removed']:
         raise ValueError('the notch differs from the reference run')
@@ -185,10 +186,10 @@ def main(argv=None):
                                       run_name=f"{params['run_name']}_loo")
     run_params = {'reference_run': str(reference_run), 'model': model, 'engine': engine,
                   'formula': pain_change.MODELS[model].formula,
-                  'vc': pain_change.mm.VC_CHANGE, 'band_set': params['band_set'],
+                  'vc': params['vc'], 'band_set': params['band_set'],
                   'roi_scheme': params['roi_scheme'], 'min_subjects': min_subjects,
                   'min_gap_min': params['min_gap_min'], 'max_gap_min': params['max_gap_min'],
-                  'insula_threshold': prov['insula_split']['thresholds'],
+                  'insula_threshold': insula_threshold,
                   'exclude_first_h': params['exclude_first_h'],
                   'with_lrt': False, 'folds': folds}
     subjects = sorted(train)

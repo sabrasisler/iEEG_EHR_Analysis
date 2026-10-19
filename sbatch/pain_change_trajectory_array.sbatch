@@ -9,6 +9,7 @@
 # reference run's subjects that are still discovery (53):
 #   sbatch --array=0-3 --export=ALL,SUBJECTS="183 196 210 143" sbatch/pain_change_trajectory_array.sbatch
 #   sbatch --array=0-52 --export=ALL,SUBJECTS=all sbatch/pain_change_trajectory_array.sbatch
+# ROI must be the reference run's --roi-scheme (default roi_v3_ins).
 set -euo pipefail
 module load python/3.12
 source $GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate
@@ -19,5 +20,5 @@ OAK=/oak/stanford/groups/ckeller1/data/iEEG_EHR/derivatives/sisler
 REFERENCE_RUN=${REFERENCE_RUN:-$OAK/analysis/pain/pain_change/bandpower/painchange_20261006-211218}
 python -m ieeg_ehr.features.build_pain_change_trajectory \
   --subjects ${SUBJECTS:-all} --task-index "$SLURM_ARRAY_TASK_ID" \
-  --reference-run "$REFERENCE_RUN" --roi-scheme roi_v3_ins \
+  --reference-run "$REFERENCE_RUN" --roi-scheme "${ROI:-roi_v3_ins}" \
   --mask-level bipolar --mask-label "std10_rv-gross-std3_satmargin15_sw_logz4"

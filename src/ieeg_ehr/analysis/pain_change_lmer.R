@@ -45,6 +45,10 @@ var_of <- function(vc, group) {
   v <- vc[grp == group, vcov]
   if (length(v)) v else NA_real_
 }
+var_subject <- function(vc, term) {
+  v <- vc[var1 == term & grepl("^subject", grp), vcov]
+  if (length(v)) v else NA_real_
+}
 
 fit_one <- function(dc) {
   id <- dc$cell_id[1]
@@ -81,8 +85,8 @@ fit_one <- function(dc) {
       cell_id = id,
       converged = m@optinfo$conv$opt == 0 && !any(failed),
       singular = isSingular(m, tol = 1e-4),
-      var_subj_int = vc[var1 == "(Intercept)" & grepl("^subject", grp), vcov],
-      var_subj_dpain = vc[var1 == "d_pain" & grepl("^subject", grp), vcov],
+      var_subj_int = var_subject(vc, "(Intercept)"),
+      var_subj_dpain = var_subject(vc, "d_pain"),
       var_pair = var_of(vc, "pair_id"),
       var_resid = vc[grp == "Residual", vcov],
       warnings = paste(notes, collapse = " | "),

@@ -242,11 +242,13 @@ analysis/pain/psd_physiology/region_spectrum/delta-relpain/<run>_<timestamp>/
 | `abspain` | AXIS 7 | `absolute` -- fixed 0 / 1-3 / 4-6 / 7-10 across subjects |
 | *(no suffix)* | AXIS 6 | `roi_scheme: default` -- the original 15 regions |
 | `roiv2` | AXIS 6 | `roi_scheme: roi_v2` -- 21 regions (2026-07-29). Splits ACC into rACC/dACC, OFC into mOFC/lOFC, and the `Frontal (other)`/`Temporal` catch-alls into M1, dmPFC/SMA, IFG/vlPFC, MTL (other), Lateral Temporal, Auditory, Parietal (other). Occipital becomes a real ROI (a quasi-control). Frontopolar and Cerebellum are absent -- measured at 2 and 0 subjects of 60 |
+| `hcpexv5` | AXIS 6 | `roi_scheme: <hcpex_paper coverage run dir>` -- paper ROIs from HCPex v1.1 at each bipolar pair's virtual electrode (anode-cathode MNI midpoint), read from the run's `pair_labels.csv`. `v5` is the mapping file `atlases/HCPex_v1.1_paper_roi_maps/hcpex_paper_rois_v5.json` (28 ROIs, 2026-10-19). No DK patterns, no coordinate insula split |
 
 `roiv2` is a VERSION label, not a description, so unlike `delta` it does not
 decode itself -- this table is what decodes it. The ROI code is appended only for
 non-default schemes, so every pre-2026-07-29 path stays valid. A scheme given as a
-JSON path contributes its filename stem instead.
+JSON path contributes its filename stem instead, and an `hcpex_paper` coverage run
+contributes `hcpex` plus its mapping file's version (`view_config.roi_code`).
 
 **Which regions a run actually used comes from `provenance.json`**, which records
 the scheme's entire contents under `roi_scheme_contents` (patterns and display
