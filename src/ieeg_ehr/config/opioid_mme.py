@@ -187,6 +187,18 @@ UNIT_DOSE = {
 # excluded. C at an assessment = mean curve over the 5-min epoch before it;
 # Cbar = mean curve over [t1, t2). Units: typical doses.
 EXPOSURE_VERSION = 'mme1'
+#
+# mme2 (2026-10-19): mme1, but C at an assessment = mean curve over the neural
+# epoch the pair's d_z uses for it, so a second epoch moved to
+# [t2 - shift - 5, t2 - shift) (`pain_change --second-epoch-shift-min`) moves C_2
+# with it. The window itself is the run's data token (`e2pre10to5`). Equal to mme1
+# when no epoch is shifted, so an unshifted run keeps the mme1 name.
+SHIFTED_EXPOSURE_VERSION = 'mme2'
+
+
+def exposure_version(shift_min):
+    """The version a pain_change run's exposure follows for its second-epoch shift."""
+    return SHIFTED_EXPOSURE_VERSION if shift_min else EXPOSURE_VERSION
 
 #: One typical dose, the divisor that puts exposure in typical-dose units: the
 #: median MME over every opioid dose of the 63 discovery subjects (624 doses,

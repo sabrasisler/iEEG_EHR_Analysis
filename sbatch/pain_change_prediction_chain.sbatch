@@ -19,6 +19,8 @@
 # its trajectory). INSULA_RUN= (empty) drops --insula-from-run, for a ROI scheme with no
 # insula split (an hcpex_paper coverage run). DOMAIN_SCHEME=none draws ungrouped heatmaps.
 # STOP_AFTER_FIT=1 ends after step 1, when the trajectory must first be built from the new fit.
+# SHIFT=5 takes each pair's later epoch from [t2 - 10, t2 - 5) min
+# (pain_change --second-epoch-shift-min; build the shifted tables first).
 set -euo pipefail
 module load math R/4.4.2
 module load python/3.12
@@ -36,7 +38,8 @@ VIEW=(--mask-level bipolar --mask-label "std10_rv-gross-std3_satmargin15_sw_logz
 if [ -z "${FIT_DIR:-}" ]; then
   FIT_DIR=$(python -m ieeg_ehr.analysis.pain_change --model "$MODEL" --engine "$ENGINE" \
     --roi-scheme "$ROI" ${EXCLUDE_FIRST_H:+--exclude-first-h "$EXCLUDE_FIRST_H"} \
-    ${INSULA_RUN:+--insula-from-run "$INSULA_RUN"} "${VIEW[@]}" | tail -1)
+    ${INSULA_RUN:+--insula-from-run "$INSULA_RUN"} ${SHIFT:+--second-epoch-shift-min "$SHIFT"} \
+    "${VIEW[@]}" | tail -1)
   for TERM in dpain dc dpain_x_dc; do
     if grep -q "^${TERM}_beta\|,${TERM}_beta," "$FIT_DIR/cells.csv"; then
       python -m ieeg_ehr.analysis.plot_pain_change_heatmap --run-dir "$FIT_DIR" --term "$TERM" \

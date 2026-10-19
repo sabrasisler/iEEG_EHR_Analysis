@@ -147,13 +147,16 @@ def main(argv=None):
     folds = sorted(s for s in train if s.replace('sub-', '') in config.discovery_subjects())
 
     insula_threshold = (prov.get('insula_split') or {}).get('thresholds')
+    shift = params.get('second_epoch_shift_min') or 0
+    second_dir = params.get('second_zscore_dir')
     zdir = zview.zscore_dir(vc)
     paths = [p for p in sorted(zdir.glob('zmean_sub-*_ses-*.parquet'))
              if f'sub-{fullres_cells.subject_session_of(p)[0]}' in train]
     rows = pain_change.load_rows(paths, params['roi_scheme'], params['band_set'],
                                  params['min_gap_min'], params['max_gap_min'],
                                  insula_threshold=insula_threshold,
-                                 exclude_first_h=params['exclude_first_h'])
+                                 exclude_first_h=params['exclude_first_h'],
+                                 shift_min=shift, second_dir=second_dir)
     if rows.notch != params['notch_bins_removed']:
         raise ValueError('the notch differs from the reference run')
     if set(rows.index['subject']) != train:
@@ -191,6 +194,7 @@ def main(argv=None):
                   'min_gap_min': params['min_gap_min'], 'max_gap_min': params['max_gap_min'],
                   'insula_threshold': insula_threshold,
                   'exclude_first_h': params['exclude_first_h'],
+                  'second_epoch_shift_min': shift, 'second_zscore_dir': second_dir,
                   'with_lrt': False, 'folds': folds}
     subjects = sorted(train)
     io.write_table(cells, run_dir / 'cells_loo.csv', params=run_params,
