@@ -109,6 +109,7 @@ always names one set of curves.
 | `scatter_dpain-raw-vs-adj.png` | `d_pain` beta per cell, base model (x) vs adjusted for the run's autonomic term (y), identity line, one panel per band, main-heatmap BH cells outlined. In a `-dhr` or `-dhrv` run | `plot_pain_change_autonomic` |
 | `scatter_dpain-vs-dhr.png`, `scatter_dpain-vs-dhrv.png` | `d_pain` beta (x) vs the autonomic term's beta (y) per cell, one panel per band | `plot_pain_change_autonomic` |
 | `summary_dpain-dhr.png`, `summary_dpain-dhrv.png` | the two scatters above as panels A and B, every band in one panel coloured delta (light green) to high gamma (dark green), main-heatmap BH cells outlined | `plot_pain_change_autonomic` |
+| `pairs_dpain-dhr.png`, `pairs_dpain-dhrv.png` | no neural data: A, every pair's autonomic change against its pain change, with the mean per pain change and the within-subject r; B, each subject's own slope with its 95% CI | `plot_pain_change_autonomic` |
 
 Overwrite a figure when only its look changes (layout, colour, fonts, labels).
 Give it a new name when what it shows changes (term, statistic, correction,

@@ -16,6 +16,10 @@ into `<run-dir>/figures/` (docs/run_tokens.md):
   that the term fails to explain the pain slope.
 - `summary_dpain-<term>.png`: both scatters as two panels, every band in one
   panel, coloured delta (light green) to high gamma (dark green).
+- `pairs_dpain-<term>.png`: no neural data. A: every pair of `--run-dir`'s
+  `pair_index.csv`, the term's change against the change in pain, with the mean
+  per pain change and the within-subject correlation. B: each subject's own slope
+  of the term's change on the pain change, with its 95% CI.
 
 The scatters take one panel per band, shared axes. Cells outlined are BH-significant for `d_pain`
 in `--main-run` (`dpain_bh_reject`), the cells of the main heatmap. Both fits
@@ -46,9 +50,13 @@ INK = '#1a1a19'
 MUTED = '#6b6a64'
 GRID = '#e4e3dd'
 SURFACE = '#fcfcfb'
-#: Autonomic term -> (name in titles, axis label of its slope, short name).
-TERM_LABELS = {'dHR': ('heart-rate change', 'Heart-rate slope (Δz per bpm)', 'HR'),
-               'dHRV': ('HRV change', 'HRV slope (Δz per Δ ln RMSSD)', 'HRV')}
+#: Autonomic term -> (name in titles, axis label of its slope, short name, unit).
+TERM_LABELS = {'dHR': ('heart-rate change', 'Heart-rate slope (Δz per bpm)', 'HR', 'bpm'),
+               'dHRV': ('HRV change', 'HRV slope (Δz per Δ ln RMSSD)', 'HRV', 'ln RMSSD')}
+#: A subject's own slope in `pairs_dpain-<term>.png` needs this many pairs.
+MIN_SUBJECT_PAIRS = 5
+#: Pain changes with fewer pairs get no mean in panel A.
+MIN_BIN_PAIRS = 10
 BAND_LABELS = {'delta': 'Delta', 'theta': 'Theta', 'alpha': 'Alpha', 'beta': 'Beta',
                'gamma': 'Gamma', 'high_gamma': 'High gamma'}
 #: The summary figure's band ramp: `BAND_CMAP` sampled over BAND_CMAP_RANGE, delta at
@@ -143,7 +151,7 @@ def summary_figure(df, bands, stats, term, out):
     """Panel A: raw vs adjusted pain slope, identity line. Panel B: pain vs autonomic slope.
     Every band in one panel, delta to high gamma light to dark green; main-heatmap cells
     outlined."""
-    _, auto_label, short = TERM_LABELS[term]
+    _, auto_label, short, _ = TERM_LABELS[term]
     colours = dict(zip(bands, plt.get_cmap(BAND_CMAP)(np.linspace(*BAND_CMAP_RANGE,
                                                                    len(bands)))))
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(9.4, 5.2))
@@ -193,6 +201,89 @@ def summary_figure(df, bands, stats, term, out):
     plt.close(fig)
 
 
+def subject_slopes(pairs, term):
+    """Per subject with MIN_SUBJECT_PAIRS pairs and varying pain: OLS slope of `term` on
+    d_pain, its SE and the pair count."""
+    rows = []
+    for subject, g in pairs.groupby('subject_id'):
+        x, y = g['d_pain'].to_numpy(float), g[term].to_numpy(float)
+        if len(g) < MIN_SUBJECT_PAIRS or x.std() == 0:
+            continue
+        xc = x - x.mean()
+        slope = (xc * (y - y.mean())).sum() / (xc ** 2).sum()
+        resid = y - y.mean() - slope * xc
+        se = np.sqrt((resid ** 2).sum() / (len(g) - 2) / (xc ** 2).sum())
+        rows.append({'subject_id': subject, 'slope': slope, 'se': se, 'n_pairs': len(g)})
+    return pd.DataFrame(rows).sort_values('slope').reset_index(drop=True)
+
+
+def pair_figure(pairs, term, out):
+    """Panel A: the term's change against the pain change, one dot per pair. Panel B: each
+    subject's own slope. Returns the numbers it prints."""
+    _, _, short, unit = TERM_LABELS[term]
+    green = plt.get_cmap(BAND_CMAP)
+    light, dark = green(0.55), green(0.95)
+    within = pairs.assign(**{c: pairs[c] - pairs.groupby('subject_id')[c].transform('mean')
+                             for c in ('d_pain', term)})
+    slopes = subject_slopes(pairs, term)
+    stats = {'n_pairs': len(pairs), 'n_subjects': int(pairs['subject_id'].nunique()),
+             'r_within_subject': float(within['d_pain'].corr(within[term])),
+             'n_subjects_with_slope': len(slopes),
+             'median_subject_slope': float(slopes['slope'].median()),
+             'n_subject_slopes_positive': int((slopes['slope'] > 0).sum()),
+             'n_subject_cis_excluding_zero': int(
+                 (np.abs(slopes['slope']) > 1.96 * slopes['se']).sum())}
+
+    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(10.4, 4.9),
+                                     gridspec_kw={'width_ratios': [1.15, 1]})
+    rng = np.random.default_rng(0)
+    ax_a.scatter(pairs['d_pain'] + rng.uniform(-0.25, 0.25, len(pairs)), pairs[term], s=12,
+                 color=light, alpha=0.45, edgecolors='none', zorder=2)
+    bins = pairs.groupby('d_pain')[term].agg(['mean', 'sem', 'size'])
+    bins = bins[bins['size'] >= MIN_BIN_PAIRS]
+    ax_a.errorbar(bins.index, bins['mean'], yerr=1.96 * bins['sem'], fmt='o', color=dark,
+                  markersize=6, capsize=0, linewidth=1.6, zorder=4)
+    ax_a.axhline(0, color=GRID, linewidth=1, zorder=1)
+    ax_a.axvline(0, color=GRID, linewidth=1, zorder=1)
+    ax_a.set_xticks(np.arange(-10, 11, 2))
+    ax_a.set_xlabel('Δ pain (NRS points)')
+    ax_a.set_ylabel(f'Δ {short} ({unit})')
+    ax_a.set_title(f'A  {short} change against pain change', loc='left', fontweight='bold')
+    ax_a.text(0.03, 0.97, f"within-subject r = {stats['r_within_subject']:.2f}\n"
+              f"{stats['n_pairs']} pairs, {stats['n_subjects']} subjects\n"
+              f"dark: mean ± 95% CI (≥ {MIN_BIN_PAIRS} pairs)",
+              transform=ax_a.transAxes, va='top', fontsize=10,
+              bbox={'facecolor': 'white', 'edgecolor': 'none', 'alpha': 0.85, 'pad': 2}, zorder=5)
+
+    y = np.arange(len(slopes))
+    ax_b.errorbar(slopes['slope'], y, xerr=1.96 * slopes['se'], fmt='o', color=dark,
+                  ecolor=light, markersize=4, linewidth=1.4, capsize=0, zorder=3)
+    ax_b.axvline(0, color=MUTED, linewidth=1, zorder=1)
+    ax_b.axvline(stats['median_subject_slope'], color=dark, linestyle='--', linewidth=1.2,
+                 zorder=2)
+    # The axis fits the slopes: a subject with little pain variance has a CI wide enough
+    # to flatten every other one, so long CIs run off the edge.
+    reach = 1.35 * np.abs(slopes['slope']).max()
+    ax_b.set_xlim(-reach, reach)
+    ax_b.set_yticks([])
+    ax_b.set_ylabel('Subjects, sorted by slope')
+    ax_b.set_xlabel(f'Δ {short} per pain point ({unit})')
+    ax_b.set_title(f'B  Each subject\'s {short}-pain slope', loc='left', fontweight='bold')
+    ax_b.text(0.97, 0.03, f"median {stats['median_subject_slope']:+.2f} (dashed)\n"
+              f"{stats['n_subject_slopes_positive']} of {stats['n_subjects_with_slope']} positive\n"
+              f"{stats['n_subject_cis_excluding_zero']} CIs exclude 0",
+              transform=ax_b.transAxes, va='bottom', ha='right', fontsize=10,
+              bbox={'facecolor': 'white', 'edgecolor': 'none', 'alpha': 0.85, 'pad': 2}, zorder=5)
+    for ax in (ax_a, ax_b):
+        for side in ('top', 'right'):
+            ax.spines[side].set_visible(False)
+    fig.tight_layout()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=200, facecolor='white')
+    plt.close(fig)
+    return stats
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -213,7 +304,7 @@ def main(argv=None):
     if set(model_terms(base_params['model'])) & set(AUTONOMIC_TERMS):
         raise SystemExit(f'--base-run has an autonomic term: {base_params["formula"]}')
     prefix = TERM_PREFIX[term]
-    name, auto_label, _ = TERM_LABELS[term]
+    name, auto_label, _, _ = TERM_LABELS[term]
 
     pairs = {d: pd.read_csv(d / 'pair_index.csv', usecols=['subject_id', 't1', 't2'])
              for d in (run_dir, base_dir)}
@@ -260,6 +351,13 @@ def main(argv=None):
     for out in (raw_adj, pain_auto, combined):
         io.write_sidecar(out, kind='figure', script=SCRIPT, params=vars(args),
                          parents=parents, extra={'summary': stats})
+    pairs_out = figures / f'pairs_dpain-{prefix}.png'
+    pair_stats = pair_figure(
+        pd.read_csv(run_dir / 'pair_index.csv', usecols=['subject_id', 'd_pain', term]),
+        term, pairs_out)
+    logger.info('pairs: %s', pair_stats)
+    io.write_sidecar(pairs_out, kind='figure', script=SCRIPT, params=vars(args),
+                     parents=[str(run_dir / 'pair_index.csv')], extra={'summary': pair_stats})
     io.log_analysis(f'pain_change autonomic scatters (raw vs {term}-adjusted d_pain, '
                     f'd_pain vs {term})', figures)
     return 0
