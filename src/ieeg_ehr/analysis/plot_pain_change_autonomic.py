@@ -1,0 +1,195 @@
+"""Does heart rate explain the pain-change slopes? Two scatters over the region x band cells.
+
+    python -m ieeg_ehr.analysis.plot_pain_change_autonomic \\
+        --run-dir <pain_change -dhr run> --base-run <same model without dHR, same rows> \\
+        --main-run <the run whose heatmap marks the significant cells>
+
+Writes into `<run-dir>/figures/` (docs/run_tokens.md):
+
+- `scatter_dpain-raw-vs-adj.png`: one dot per cell, x = `d_pain` beta of
+  `--base-run`, y = `d_pain` beta of `--run-dir` (adjusted for dHR), with the
+  identity line. Dots on the diagonal mean heart rate explains none of the slope.
+- `scatter_dpain-vs-dhr.png`: the same cells, x = `d_pain` beta and y = `dHR`
+  beta, both of `--run-dir`. Cells spread along x with a near-zero correlation
+  mean the two effects dissociate. It shows dissociation only, not that heart
+  rate fails to explain the pain slope.
+
+One panel per band, shared axes. Cells outlined are BH-significant for `d_pain`
+in `--main-run` (`dpain_bh_reject`), the cells of the main heatmap. Both fits
+must come from one `--heart-rate` folder, so they share rows. The per-cell table
+and the attenuation numbers go to `<run-dir>/autonomic_compare.csv`.
+"""
+
+import argparse
+import json
+import logging
+from pathlib import Path
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+from ieeg_ehr import io
+from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR
+
+logger = logging.getLogger(__name__)
+
+SCRIPT = 'ieeg_ehr/analysis/plot_pain_change_autonomic.py'
+DOT = '#2a78d6'
+INK = '#1a1a19'
+MUTED = '#6b6a64'
+GRID = '#e4e3dd'
+SURFACE = '#fcfcfb'
+BAND_LABELS = {'delta': 'Delta', 'theta': 'Theta', 'alpha': 'Alpha', 'beta': 'Beta',
+               'gamma': 'Gamma', 'high_gamma': 'High gamma'}
+
+
+def compare_cells(base, adjusted, main):
+    """One row per cell: raw and adjusted d_pain beta, dHR beta, main-heatmap significance."""
+    keep = ['region', 'freq', 'dpain_beta', 'dpain_se']
+    df = base[keep].merge(adjusted[keep + ['dhr_beta', 'dhr_se', 'dhr_bh_reject']],
+                          on=['region', 'freq'], suffixes=('_raw', '_adj'))
+    df = df.merge(main[['region', 'freq', 'dpain_bh_reject']].rename(
+        columns={'dpain_bh_reject': 'main_significant'}), on=['region', 'freq'], how='left')
+    df['main_significant'] = df['main_significant'].fillna(False).astype(bool)
+    df['shift_in_se'] = (df['dpain_beta_adj'] - df['dpain_beta_raw']) / df['dpain_se_raw']
+    df['pct_change'] = 100 * (df['dpain_beta_adj'] - df['dpain_beta_raw']) / df['dpain_beta_raw']
+    return df
+
+
+def summary(df):
+    """The attenuation and dissociation numbers the figures print."""
+    raw, adj = df['dpain_beta_raw'].to_numpy(), df['dpain_beta_adj'].to_numpy()
+    sig = df['main_significant']
+    return {
+        'n_cells': len(df), 'n_main_significant': int(sig.sum()),
+        # A percent change is unstable where the raw slope is near zero, so the
+        # median is over the cells the main heatmap marks.
+        'median_pct_change_main_significant': float(df.loc[sig, 'pct_change'].median()),
+        # Least squares through the origin over every cell: 1 = no attenuation.
+        'slope_adj_on_raw': float((raw * adj).sum() / (raw ** 2).sum()),
+        'median_abs_shift_in_se': float(df['shift_in_se'].abs().median()),
+        'r_dpain_dhr': float(np.corrcoef(df['dpain_beta_adj'], df['dhr_beta'])[0, 1]),
+    }
+
+
+def facet_grid(df, bands, x, y, xlabel, ylabel, title, subtitle, out, identity):
+    lo = min(df[x].min(), df[y].min()) if identity else None
+    hi = max(df[x].max(), df[y].max()) if identity else None
+    fig, axes = plt.subplots(2, 3, figsize=(11, 7.4), sharex=True, sharey=True)
+    for ax, band in zip(axes.flat, bands):
+        cells = df[df['freq'] == band]
+        sig = cells['main_significant']
+        ax.grid(color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.axhline(0, color=GRID, linewidth=1.2, zorder=1)
+        ax.axvline(0, color=GRID, linewidth=1.2, zorder=1)
+        if identity:
+            pad = 0.05 * (hi - lo)
+            ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color=MUTED,
+                    linewidth=1.2, linestyle='--', zorder=2)
+        ax.scatter(cells.loc[~sig, x], cells.loc[~sig, y], s=40, color=DOT, alpha=0.75,
+                   edgecolors=SURFACE, linewidths=1.5, zorder=3)
+        ax.scatter(cells.loc[sig, x], cells.loc[sig, y], s=56, color=DOT,
+                   edgecolors=INK, linewidths=1.6, zorder=4)
+        name = BAND_LABELS.get(band, band)
+        r = np.corrcoef(cells[x], cells[y])[0, 1] if len(cells) > 2 else np.nan
+        ax.set_title(f'{name}   r = {r:.2f}' if not identity else name,
+                     fontsize=11, color=INK, loc='left')
+        for side in ('top', 'right'):
+            ax.spines[side].set_visible(False)
+        for side in ('left', 'bottom'):
+            ax.spines[side].set_color(MUTED)
+        ax.tick_params(colors=MUTED, labelsize=9)
+    for ax in axes[1]:
+        ax.set_xlabel(xlabel, color=INK, fontsize=10)
+    for ax in axes[:, 0]:
+        ax.set_ylabel(ylabel, color=INK, fontsize=10)
+    handles = [plt.Line2D([], [], marker='o', linestyle='', markersize=7, color=DOT,
+                          markeredgecolor=SURFACE, label='cell'),
+               plt.Line2D([], [], marker='o', linestyle='', markersize=8, color=DOT,
+                          markeredgecolor=INK, markeredgewidth=1.6,
+                          label='BH-significant in the main d_pain heatmap')]
+    if identity:
+        handles.append(plt.Line2D([], [], color=MUTED, linestyle='--', label='identity'))
+    fig.legend(handles=handles, loc='lower center', ncol=len(handles), frameon=False,
+               fontsize=9, bbox_to_anchor=(0.5, -0.01))
+    fig.suptitle(title, x=0.01, ha='left', fontsize=13, color=INK)
+    fig.text(0.01, 0.935, subtitle, ha='left', fontsize=9.5, color=MUTED)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.93))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=200, facecolor='white')
+    plt.close(fig)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--run-dir', required=True, help='the pain_change run with dHR')
+    ap.add_argument('--base-run', required=True, help='the same model without dHR')
+    ap.add_argument('--main-run', required=True,
+                    help='the run whose d_pain heatmap marks the significant cells')
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+
+    run_dir, base_dir, main_dir = Path(args.run_dir), Path(args.base_run), Path(args.main_run)
+    params = json.loads((run_dir / 'provenance.json').read_text())['params']
+    base_params = json.loads((base_dir / 'provenance.json').read_text())['params']
+    if run_dir.parent != base_dir.parent or not params.get('heart_rate'):
+        raise SystemExit('--run-dir and --base-run must sit in one --heart-rate folder, '
+                         'so both fit the same rows')
+    if 'dHR' in base_params['formula']:
+        raise SystemExit(f'--base-run already has dHR: {base_params["formula"]}')
+
+    pairs = {d: pd.read_csv(d / 'pair_index.csv', usecols=['subject_id', 't1', 't2'])
+             for d in (run_dir, base_dir)}
+    keys = {d: set(map(tuple, p.to_numpy())) for d, p in pairs.items()}
+    n_diff = len(keys[run_dir] ^ keys[base_dir])
+    logger.info('pairs: %d with dHR, %d without, %d in only one', len(keys[run_dir]),
+                len(keys[base_dir]), n_diff)
+
+    read = lambda d: io.read_table(d / 'cells.csv', on_stale='warn')
+    df = compare_cells(read(base_dir), read(run_dir), read(main_dir))
+    stats = {**summary(df), 'n_pairs_adjusted': len(keys[run_dir]),
+             'n_pairs_base': len(keys[base_dir]), 'n_pairs_in_one_only': n_diff}
+    for k, v in stats.items():
+        logger.info('%s: %s', k, f'{v:.4g}' if isinstance(v, float) else v)
+
+    bands = list(params['bands'])
+    figures = run_dir / FIGURES_SUBDIR
+    parents = [str(base_dir / 'cells.csv'), str(run_dir / 'cells.csv'),
+               str(main_dir / 'cells.csv')]
+    io.write_table(df, run_dir / 'autonomic_compare.csv', params=vars(args),
+                   parents=parents, script=SCRIPT, extra={'summary': stats})
+
+    raw_adj = figures / 'scatter_dpain-raw-vs-adj.png'
+    facet_grid(df, bands, 'dpain_beta_raw', 'dpain_beta_adj',
+               'Pain slope, original model (Δz per pain point)',
+               'Pain slope, adjusted for ΔHR',
+               'Pain slopes before and after adjusting for heart-rate change',
+               f"{stats['n_cells']} region x band cells. Slope of adjusted on original "
+               f"{stats['slope_adj_on_raw']:.2f} (1 = no attenuation). Median change in the "
+               f"{stats['n_main_significant']} main-heatmap cells "
+               f"{stats['median_pct_change_main_significant']:+.1f}%. Median shift "
+               f"{stats['median_abs_shift_in_se']:.2f} SE.",
+               raw_adj, identity=True)
+    pain_hr = figures / 'scatter_dpain-vs-dhr.png'
+    facet_grid(df, bands, 'dpain_beta_adj', 'dhr_beta',
+               'Pain slope (Δz per pain point)', 'Heart-rate slope (Δz per bpm)',
+               'Pain and heart-rate effects across cells',
+               f"Both from the dHR model. Correlation across all {stats['n_cells']} "
+               f"cells r = {stats['r_dpain_dhr']:.2f}. Dissociation only: this does not "
+               'test whether heart rate explains the pain slope.',
+               pain_hr, identity=False)
+    for out in (raw_adj, pain_hr):
+        io.write_sidecar(out, kind='figure', script=SCRIPT, params=vars(args),
+                         parents=parents, extra={'summary': stats})
+    io.log_analysis('pain_change autonomic scatters (raw vs dHR-adjusted d_pain, '
+                    'd_pain vs dHR)', figures)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
