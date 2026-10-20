@@ -106,9 +106,10 @@ _OPIOID = 'd_z ~ d_pain + dC + Cbar + d_pain:Cbar + pain_1_within + gap_h'
 #: ΔC in place of Cbar, in the main effects and the interaction. dC is not centred:
 #: 0 already means no exposure change, so `d_pain` is the slope at steady exposure.
 _OPIOID_DC = 'd_z ~ d_pain + dC + d_pain:dC + pain_1_within + gap_h'
-#: `_OPIOID_DC` plus the heart-rate change between the pair's two epochs, the
-#: autonomic-confound check. dHR is not centred: 0 means no change.
+#: `_OPIOID_DC` plus one autonomic change between the pair's two epochs, the
+#: autonomic-confound checks (`add_autonomic`). Neither is centred: 0 means no change.
 _OPIOID_DC_DHR = 'd_z ~ d_pain + dC + d_pain:dC + dHR + pain_1_within + gap_h'
+_OPIOID_DC_DHRV = 'd_z ~ d_pain + dC + d_pain:dC + dHRV + pain_1_within + gap_h'
 _PAIR =f'{RE_SUBJECT} + (1 | pair_id)'
 #: `_PAIR` without the subject intercept. d_z is a within-subject difference of two
 #: epochs z-scored against the same session baseline, so a subject offset cancels
@@ -128,30 +129,40 @@ MODELS = {
     'opioid-dc-pairint': Model(_OPIOID_DC, _PAIR),
     'opioid-dc-pairint-nosubjint': Model(_OPIOID_DC, _PAIR_NOSUBJINT),
     'opioid-dc-pairint-nosubjint-dhr': Model(_OPIOID_DC_DHR, _PAIR_NOSUBJINT),
+    'opioid-dc-pairint-nosubjint-dhrv': Model(_OPIOID_DC_DHRV, _PAIR_NOSUBJINT),
 }
 #: Fixed-effect term -> column prefix in cells.csv.
 TERM_PREFIX = {'d_pain': 'dpain', 'pain_1_within': 'baseline', 'gap_h': 'gap',
                'dC': 'dc', 'Cbar': 'cbar', 'd_pain:Cbar': 'dpain_x_cbar',
-               'd_pain:dC': 'dpain_x_dc', 'dHR': 'dhr'}
+               'd_pain:dC': 'dpain_x_dc', 'dHR': 'dhr', 'dHRV': 'dhrv'}
 #: Terms that each get their own BH family.
-FDR_TERMS = ('d_pain', 'd_pain:Cbar', 'd_pain:dC', 'dC', 'Cbar', 'dHR')
+FDR_TERMS = ('d_pain', 'd_pain:Cbar', 'd_pain:dC', 'dC', 'Cbar', 'dHR', 'dHRV')
 EXPOSURE_TERMS = ('dC', 'Cbar', 'd_pain:Cbar', 'd_pain:dC')
-#: Heart rate of a pair epoch (`add_heart_rate`): the mean `hr_bpm` of the epoch's
-#: seconds with `quality` >= HR_MIN_QUALITY (preprocessing/ekg_hr.py), defined only
-#: when those seconds cover at least HR_MIN_COVERAGE of the epoch. 0.8 is the
-#: quality the extractor picks its lead by: a lead with no ECG scored a median 0.19,
-#: clean leads 0.92-0.99.
+AUTONOMIC_TERMS = ('dHR', 'dHRV')
+#: Runs fitted on the `--autonomic` rows sit in this folder under their data token.
+AUTONOMIC_SUBDIR = 'autonomics'
+#: Heart rate and HRV of a pair epoch (`add_autonomic`), from preprocessing/ekg_hr.py.
+#: Only seconds and beats with template-match `quality` >= HR_MIN_QUALITY count, the
+#: quality the extractor picks its lead by (a lead with no ECG scored a median 0.19,
+#: clean leads 0.92-0.99). Either measure exists only when what it uses covers at
+#: least HR_MIN_COVERAGE of the epoch.
 HR_MIN_QUALITY = 0.8
 HR_MIN_COVERAGE = 0.5
+#: NN-interval filters for RMSSD: an interval outside [NN_MIN_S, NN_MAX_S] (30-200
+#: bpm), or a successive difference above NN_MAX_JUMP of the interval before it
+#: (the 20% rule), is an artifact and is skipped.
+NN_MIN_S = 0.3
+NN_MAX_S = 2.0
+NN_MAX_JUMP = 0.2
 #: Fitting-engine tokens (docs/run_tokens.md): statsmodels `MixedLM`, `lme4::lmer`.
 ENGINES = ('sm', 'lme4')
 LME4_SCRIPT = Path(__file__).with_name('pain_change_lmer.R')
 LME4_OPTIMIZER = 'bobyqa'
-#: Columns the lme4 frame carries besides cell_id, subject and d_z. dHR only
-#: under --heart-rate.
-LME4_COLUMNS = ['pair_id', 'd_pain', 'dC', 'Cbar', 'dHR', 'pain_1_within', 'gap_h']
+#: Columns the lme4 frame carries besides cell_id, subject and d_z. dHR and dHRV
+#: only under --autonomic.
+LME4_COLUMNS = ['pair_id', 'd_pain', 'dC', 'Cbar', 'dHR', 'dHRV', 'pain_1_within', 'gap_h']
 #: Pair columns a cell frame carries, of those the pairs have.
-PAIR_COLUMNS = ['pair_id', 'd_pain', 'pain_1', 'gap_h', 'dC', 'Cbar', 'dHR']
+PAIR_COLUMNS = ['pair_id', 'd_pain', 'pain_1', 'gap_h', 'dC', 'Cbar', 'dHR', 'dHRV']
 
 #: One per cell, in report order. `boundary`: a random-effect variance
 #: contributes under mm.BOUNDARY_TOL of the residual variance (`boundary_component`
@@ -176,11 +187,11 @@ def uses_exposure(model):
     return any(t in EXPOSURE_TERMS for t in model_terms(model))
 
 
-def uses_heart_rate(model):
-    return 'dHR' in model_terms(model)
+def uses_autonomic(model):
+    return any(t in AUTONOMIC_TERMS for t in model_terms(model))
 
 
-def data_token(vc, band_set, exclude_first_h, shift_min=0, heart_rate=False):
+def data_token(vc, band_set, exclude_first_h, shift_min=0):
     """The level-4 folder: which rows go in and what their d_z is (docs/run_tokens.md)."""
     norm = (view_config.NORMALIZATION_CODES[vc.normalization]
             + view_config.BASELINE_CODES[vc.baseline])
@@ -190,8 +201,6 @@ def data_token(vc, band_set, exclude_first_h, shift_min=0, heart_rate=False):
     if shift_min:
         from ieeg_ehr.features.build_pain_change_shifted_z import window_label
         tokens.append(f'e2{window_label(shift_min)}')
-    if heart_rate:
-        tokens.append('hr')
     return '-'.join(tokens)
 
 
@@ -272,62 +281,100 @@ def add_exposure(pairs, exclude_first_h=None, shift_min=0):
     return pairs, report
 
 
-def epoch_heart_rate(hr, starts, stops):
-    """(mean HR, fraction of the epoch covered) over each [start, stop).
-
-    `hr`: one session's `preprocessing/ekg_hr.py` table, already cut to the seconds
-    with quality >= HR_MIN_QUALITY. A second belongs to the epoch its start falls in.
-    """
-    hr = hr.sort_values('time')
-    t = hr['time'].to_numpy()
-    csum = np.concatenate([[0.0], np.cumsum(hr['hr_bpm'].to_numpy(dtype=np.float64))])
+def window_sums(t, values, starts, stops):
+    """(count, column sums of `values`) of the rows with `t` in each [start, stop). `t` sorted."""
     lo, hi = np.searchsorted(t, starts), np.searchsorted(t, stops)
-    n = hi - lo
+    csum = np.vstack([np.zeros(values.shape[1]), np.cumsum(values, axis=0)])
+    return hi - lo, csum[hi] - csum[lo]
+
+
+def successive_differences(beats):
+    """(time, squared successive NN difference in ms^2, NN in s) of every usable pair of
+    adjacent NN intervals in one session's R-peak table.
+
+    An NN interval needs both its beats at quality >= HR_MIN_QUALITY and a length in
+    [NN_MIN_S, NN_MAX_S]. A difference needs both its intervals and a jump of at most
+    NN_MAX_JUMP. Beats pair only within a run. Stamped at the later beat.
+    """
+    parts = []
+    for _, b in beats.sort_values('time').groupby('run', sort=False):
+        t = b['time'].to_numpy()
+        good = b['quality'].to_numpy() >= HR_MIN_QUALITY
+        nn = np.diff(t) / np.timedelta64(1, 's')
+        ok = good[1:] & good[:-1] & (nn >= NN_MIN_S) & (nn <= NN_MAX_S)
+        d = np.diff(nn)
+        keep = ok[1:] & ok[:-1] & (np.abs(d) <= NN_MAX_JUMP * nn[:-1])
+        parts.append(pd.DataFrame({'time': t[2:][keep], 'd2_ms2': (1000 * d[keep]) ** 2,
+                                   'nn_s': nn[1:][keep]}))
+    return pd.concat(parts, ignore_index=True).sort_values('time')
+
+
+def epoch_autonomic(hr, diffs, starts, stops):
+    """(mean HR in bpm, ln RMSSD in ms) over each [start, stop), NaN where either
+    covers under HR_MIN_COVERAGE of the epoch.
+
+    `hr`: the session's per-second table cut to quality >= HR_MIN_QUALITY, sorted by
+    time; a second belongs to the epoch its start falls in. `diffs`:
+    `successive_differences` of the session's R-peaks; coverage is the summed length
+    of the NN intervals used.
+    """
     seconds = (stops - starts) / np.timedelta64(1, 's')
+    n_hr, s_hr = window_sums(hr['time'].to_numpy(), hr[['hr_bpm']].to_numpy(np.float64),
+                             starts, stops)
+    n_d, s_d = window_sums(diffs['time'].to_numpy(),
+                           diffs[['d2_ms2', 'nn_s']].to_numpy(np.float64), starts, stops)
     with np.errstate(invalid='ignore', divide='ignore'):
-        return (csum[hi] - csum[lo]) / n, n / seconds
+        mean_hr = np.where(n_hr / seconds >= HR_MIN_COVERAGE, s_hr[:, 0] / n_hr, np.nan)
+        ln_rmssd = np.where(s_d[:, 1] / seconds >= HR_MIN_COVERAGE,
+                            0.5 * np.log(s_d[:, 0] / n_d), np.nan)
+    return mean_hr, ln_rmssd
 
 
-def add_heart_rate(pairs, shift_min=0):
-    """(pairs with heart rate, report). Drops pairs without heart rate in both epochs.
+def add_autonomic(pairs, shift_min=0):
+    """(pairs with HR and HRV, report). Drops pairs that lack either in either epoch.
 
-    `HR_1`, `HR_2`: mean bpm over each epoch of d_z, [t1 - 5, t1) and
-    [t2 - shift_min - 5, t2 - shift_min) min (`epoch_heart_rate`). `dHR = HR_2 - HR_1`.
-    An epoch whose good seconds cover under HR_MIN_COVERAGE of it has no HR, and a
-    session with no HR table has none at all.
+    Over each epoch of d_z, [t1 - 5, t1) and [t2 - shift_min - 5, t2 - shift_min) min
+    (`epoch_autonomic`): `HR_1`, `HR_2` the mean bpm, `lnRMSSD_1`, `lnRMSSD_2` the
+    natural log of RMSSD in ms. `dHR = HR_2 - HR_1`, `dHRV = lnRMSSD_2 - lnRMSSD_1`.
+    A session with no HR table has neither.
     """
     epoch = pd.Timedelta(minutes=config.EPOCH_MINUTES_BEFORE).to_timedelta64()
     shift = pd.Timedelta(minutes=shift_min).to_timedelta64()
     t1_all = pairs['t1'].to_numpy(dtype='datetime64[ns]')
     t2_all = pairs['t2'].to_numpy(dtype='datetime64[ns]') - shift
-    cols = {c: np.full(len(pairs), np.nan) for c in ('HR_1', 'HR_2', 'hr_cov_1', 'hr_cov_2')}
+    cols = {c: np.full(len(pairs), np.nan)
+            for c in ('HR_1', 'HR_2', 'lnRMSSD_1', 'lnRMSSD_2')}
     no_table = []
     for (subject, session), idx in pairs.groupby(['subject', 'session']).indices.items():
-        path = config.ekg_hr_path(subject, session)
-        if not path.exists():
+        hr_path = config.ekg_hr_path(subject, session)
+        if not hr_path.exists():
             no_table.append(f'sub-{subject}_ses-{session}')
             continue
-        hr = io.read_table(path, columns=['time', 'hr_bpm', 'quality'], on_stale='warn')
-        hr = hr[hr['quality'] >= HR_MIN_QUALITY]
-        t1, t2 = t1_all[idx], t2_all[idx]
-        cols['HR_1'][idx], cols['hr_cov_1'][idx] = epoch_heart_rate(hr, t1 - epoch, t1)
-        cols['HR_2'][idx], cols['hr_cov_2'][idx] = epoch_heart_rate(hr, t2 - epoch, t2)
+        hr = io.read_table(hr_path, columns=['time', 'hr_bpm', 'quality'], on_stale='warn')
+        hr = hr[hr['quality'] >= HR_MIN_QUALITY].sort_values('time')
+        diffs = successive_differences(io.read_table(
+            config.ekg_rpeaks_path(subject, session), columns=['run', 'time', 'quality'],
+            on_stale='warn'))
+        for k, t in (('1', t1_all[idx]), ('2', t2_all[idx])):
+            cols[f'HR_{k}'][idx], cols[f'lnRMSSD_{k}'][idx] = epoch_autonomic(
+                hr, diffs, t - epoch, t)
     pairs = pairs.assign(**cols)
-    for k in ('1', '2'):
-        pairs.loc[pairs[f'hr_cov_{k}'] < HR_MIN_COVERAGE, f'HR_{k}'] = np.nan
     pairs['dHR'] = pairs['HR_2'] - pairs['HR_1']
+    pairs['dHRV'] = pairs['lnRMSSD_2'] - pairs['lnRMSSD_1']
 
-    missing = pairs['dHR'].isna()
+    no_hr, no_hrv = pairs['dHR'].isna(), pairs['dHRV'].isna()
+    missing = no_hr | no_hrv
     lost = sorted(set(pairs['subject_id']) - set(pairs.loc[~missing, 'subject_id']))
     if no_table:
         logger.warning('NO HR TABLE: %s', no_table)
-    logger.info('HEART RATE: dropping %d of %d pairs without HR in both epochs '
-                '(quality >= %g over >= %g of the epoch); %d subjects lose all their pairs: %s',
-                int(missing.sum()), len(pairs), HR_MIN_QUALITY, HR_MIN_COVERAGE,
-                len(lost), lost)
+    logger.info('AUTONOMIC: dropping %d of %d pairs (%d without HR, %d without HRV in both '
+                'epochs); %d subjects lose all their pairs: %s', int(missing.sum()),
+                len(pairs), int(no_hr.sum()), int(no_hrv.sum()), len(lost), lost)
     report = {'min_quality': HR_MIN_QUALITY, 'min_coverage': HR_MIN_COVERAGE,
+              'nn_range_s': [NN_MIN_S, NN_MAX_S], 'nn_max_jump': NN_MAX_JUMP,
               'hr_root': str(config.EKG_HR_ROOT), 'sessions_without_table': no_table,
-              'n_pairs_without_hr': int(missing.sum()), 'subjects_without_hr': lost}
+              'n_pairs_dropped': int(missing.sum()), 'n_pairs_without_hr': int(no_hr.sum()),
+              'n_pairs_without_hrv': int(no_hrv.sum()), 'subjects_without_autonomic': lost}
     return pairs[~missing].reset_index(drop=True), report
 
 
@@ -493,18 +540,18 @@ class Rows:
     split_report: dict
     pair_report: dict
     cbar_center: float
-    hr_report: dict = None
+    autonomic_report: dict = None
 
 
 def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
               notch_half_width_hz=None, insula_threshold=None, exclude_first_h=None,
-              shift_min=0, second_dir=None, heart_rate=False):
+              shift_min=0, second_dir=None, autonomic=False):
     """The d_z rows of the z-score tables at `paths`, ROI-mapped channels only.
 
     `insula_threshold` pins the coordinate insula split to an earlier run's cut.
     `shift_min` with `second_dir` (the shifted tables) takes the later epoch from
-    [t2 - shift_min - 5, t2 - shift_min), and C_2 with it. `heart_rate` adds dHR
-    and keeps only the pairs that have it (`add_heart_rate`).
+    [t2 - shift_min - 5, t2 - shift_min), and C_2 with it. `autonomic` adds dHR and
+    dHRV and keeps only the pairs that have both (`add_autonomic`).
     """
     if bool(shift_min) != (second_dir is not None):
         raise ValueError('shift_min and second_dir go together')
@@ -520,9 +567,9 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
     pairs, pair_report = add_exposure(
         change_score.build_pairs(defs, admin, min_gap_min, max_gap_min), exclude_first_h,
         shift_min)
-    hr_report = None
-    if heart_rate:
-        pairs, hr_report = add_heart_rate(pairs, shift_min)
+    autonomic_report = None
+    if autonomic:
+        pairs, autonomic_report = add_autonomic(pairs, shift_min)
 
     freq_table, notch = fullres_cells.analysis_freq_table(notch_half_width_hz)
     bands = BAND_SETS.get(band_set)
@@ -561,7 +608,7 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
                 'Cbar centred on %.4f typical doses', len(index), index['subject'].nunique(),
                 len(regions), len(cols), band_set, cbar_center)
     return Rows(index, np.vstack(value_parts), pairs, regions, cols, col_hz, bands,
-                notch, no_roi, split_report, pair_report, cbar_center, hr_report)
+                notch, no_roi, split_report, pair_report, cbar_center, autonomic_report)
 
 
 def cell_frames(rows, holdout=None):
@@ -710,14 +757,21 @@ def write_methods(run_dir, cells, params, n_pairs, cohort, summary):
     elif 'd_pain:dC' in model_terms(model):
         exposure_vars += ("- `d_pain:dC`: the change in the pain slope per typical dose of exposure\n"
                           "  change. dC = 0 means steady exposure, so `d_pain` is the slope there.\n")
-    hr = params.get('heart_rate')
-    hr_var = (f"""- `dHR`: HR_2 - HR_1 in bpm, where HR is the mean heart rate over the windows
-  of `d_z` below, from the seconds of `preprocessing/ekg_hr.py` with template-match
-  quality >= {hr['min_quality']:g}. Not centred: 0 means no change.
-""" if uses_heart_rate(model) else '')
-    hr_rows = (f"Pairs without heart rate in both epochs (good seconds under "
-               f"{hr['min_coverage']:.0%} of an epoch, or no HR table) are dropped for every "
-               f"model of this folder ({hr['n_pairs_without_hr']} pairs). " if hr else '')
+    au = params.get('autonomic')
+    au_var = ''
+    if 'dHR' in model_terms(model):
+        au_var = (f"- `dHR`: HR_2 - HR_1 in bpm, HR the mean over the windows of `d_z` below of\n"
+                  f"  the seconds of `preprocessing/ekg_hr.py` with template-match quality >=\n"
+                  f"  {au['min_quality']:g}. Not centred: 0 means no change.\n")
+    if 'dHRV' in model_terms(model):
+        au_var = (f"- `dHRV`: ln RMSSD_2 - ln RMSSD_1, RMSSD in ms over the windows of `d_z`\n"
+                  f"  below, from adjacent R peaks both at quality >= {au['min_quality']:g}, NN intervals in\n"
+                  f"  {au['nn_range_s'][0]:g}-{au['nn_range_s'][1]:g} s, successive jumps under "
+                  f"{au['nn_max_jump']:.0%}. Not centred.\n")
+    au_rows = (f"Pairs without heart rate and HRV in both epochs (under "
+               f"{au['min_coverage']:.0%} of an epoch covered, or no HR table) are dropped for "
+               f"every model of `{AUTONOMIC_SUBDIR}/` ({au['n_pairs_dropped']} pairs). "
+               if au else '')
     if shift:
         dz_text = (f'epoch-mean z over [t2 - {shift + 5}, t2 - {shift}) min minus the '
                    'epoch-mean z over [t1 - 5, t1), t1 and t2 the two assessments.')
@@ -796,7 +850,7 @@ cells above the floor.
 - Frequency cells (`{params['band_set']}`): {freq_text}. Bands average d_z arithmetically over the native
   frequencies inside them after removing {len(params['notch_bins_removed'])} line-noise bins.
 - `d_pain`: NRS of the later assessment minus the earlier one.
-{exposure_vars}{hr_var}- `pain_1_within`: NRS of the earlier assessment, centred on the subject's mean
+{exposure_vars}{au_var}- `pain_1_within`: NRS of the earlier assessment, centred on the subject's mean
   over the cell's rows.
 - `gap_h`: hours between the two assessments.
 
@@ -804,7 +858,7 @@ cells above the floor.
 
 Consecutive assessment pairs within a session, {params['min_gap_min']:g}-{params['max_gap_min']:g} min apart
 (`change_score.build_pairs`). Sessions with no MAR export are dropped
-({pr['n_pairs_no_mar']} pairs of {', '.join(pr['no_mar_subjects']) or 'no subject'}). {early}{hr_rows}ROI scheme
+({pr['n_pairs_no_mar']} pairs of {', '.join(pr['no_mar_subjects']) or 'no subject'}). {early}{au_rows}ROI scheme
 `{params['roi_scheme']}`, insula cut {params['insula_threshold']}. {len(cohort)} subjects,
 {n_pairs} pairs, {len(cells)} cells.
 
@@ -836,9 +890,9 @@ def main(argv=None):
     ap.add_argument('--second-epoch-shift-min', type=int, default=0,
                     help='take each pair\'s later epoch from [t2 - S - 5, t2 - S) min '
                          '(features/build_pain_change_shifted_z.py)')
-    ap.add_argument('--heart-rate', action='store_true',
-                    help='add dHR to the pairs and keep only pairs that have it '
-                         '(add_heart_rate); the data token gains `hr`')
+    ap.add_argument('--autonomic', action='store_true',
+                    help='add dHR and dHRV to the pairs, keep only pairs that have both '
+                         f'(add_autonomic), and write under <data token>/{AUTONOMIC_SUBDIR}/')
     ap.add_argument('--notch-half-width-hz', type=float, default=None)
     ap.add_argument('--n-jobs', type=int,
                     default=int(os.environ.get('SLURM_CPUS_PER_TASK', 1)))
@@ -849,8 +903,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.engine == 'sm' and MODELS[args.model].random != RE_SUBJECT:
         ap.error(f'--model {args.model} needs --engine lme4')
-    if uses_heart_rate(args.model) and not args.heart_rate:
-        ap.error(f'--model {args.model} needs --heart-rate')
+    if uses_autonomic(args.model) and not args.autonomic:
+        ap.error(f'--model {args.model} needs --autonomic')
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -874,7 +928,7 @@ def main(argv=None):
                      insula_threshold=insula_threshold,
                      exclude_first_h=args.exclude_first_h,
                      shift_min=shift, second_dir=second_dir,
-                     heart_rate=args.heart_rate)
+                     autonomic=args.autonomic)
     index, pairs, bands = rows.index, rows.pairs, rows.bands
     logger.info('fitting model %s with %s, up to %d cells on %d worker(s)', args.model,
                 args.engine, len(rows.regions) * len(rows.cols), args.n_jobs)
@@ -898,8 +952,8 @@ def main(argv=None):
     run_dir = config.analysis_run_dir(
         question=config.PAIN_CHANGE_QUESTION,
         output_type=OUTPUT_TYPE['fullres' if bands is None else 'bands'],
-        view_scheme=data_token(vc, args.band_set, args.exclude_first_h, shift,
-                               args.heart_rate),
+        view_scheme=data_token(vc, args.band_set, args.exclude_first_h, shift)
+        + (f'/{AUTONOMIC_SUBDIR}' if args.autonomic else ''),
         run_name=run_name)
     cohort = sorted(index['subject'].unique())
     params = {'model': args.model, 'run_name': run_name, 'formula': MODELS[args.model].formula,
@@ -916,10 +970,10 @@ def main(argv=None):
               'second_epoch_shift_min': shift,
               'second_zscore_dir': str(second_dir) if second_dir else None,
               'typical_dose_mme': opioid_mme.TYPICAL_DOSE_MME,
-              'cbar_center': rows.cbar_center, 'heart_rate': rows.hr_report,
+              'cbar_center': rows.cbar_center, 'autonomic': rows.autonomic_report,
               'zscore_dir': str(zdir), 'view_config': vc.provenance()}
     cohort_pairs = pairs[pairs['subject_id'].isin(cohort)]
-    hr_parents = [str(config.EKG_HR_ROOT)] if args.heart_rate else []
+    hr_parents = [str(config.EKG_HR_ROOT)] if args.autonomic else []
     io.write_table(cohort_pairs, run_dir / 'pair_index.csv',
                    params=params, parents=[str(med_state.ADMIN_TABLE)] + hr_parents,
                    subjects=cohort, script=SCRIPT)

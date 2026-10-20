@@ -1194,3 +1194,30 @@ residual variance instead.
 
 *Reverses if:* the pre-session doses arrive (then `mme2`, and the 24 h exclusion
 goes), or the user adds non-opioid exposure.
+
+## 2026-10-20 — `pain_change` autonomic-confound runs live in `<data token>/autonomics/`
+
+The models that add an autonomic covariate (`-dhr`, `-dhrv`) and the base model
+they are compared against sit in one folder under the data token they extend:
+`analysis/pain/pain_change/bandpower/<data token>/autonomics/<run>_<timestamp>/`.
+That is a sixth level below level 4, beside the optional `<scope>` level the
+2026-09-08 entry allows for `decoding`. The user made this call, in place of a
+sibling data-token folder (`<data token>-hr`, used once for the 2026-10-20
+preliminary fits).
+
+**Why one folder.** The comparison only means something on identical rows.
+`pain_change --autonomic` keeps the pairs with heart rate AND HRV in both epochs
+(`add_autonomic`), so the base, `-dhr` and `-dhrv` fits in the folder share
+every pair, and the shift in `d_pain` between them comes from the covariate
+alone. Keeping them under the data token they extend says which main run they
+check.
+
+**Covariates.** `dHR`: change in mean HR (bpm) over the `d_z` epochs, seconds at
+template-match quality >= 0.8 (`preprocessing/ekg_hr.py`). `dHRV`: change in
+ln RMSSD (ms) over the same epochs, adjacent R peaks both at quality >= 0.8, NN
+intervals 0.3-2.0 s, successive jumps under 20%. Each epoch needs half its length
+covered. Neither is centred. LOO refuses `--autonomic` runs: the check needs the
+fits, not predictions.
+
+*Reverses if:* an autonomic covariate enters the main model, or a third
+autonomic measure needs rows the other two lack.

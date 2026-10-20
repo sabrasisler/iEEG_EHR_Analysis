@@ -146,6 +146,9 @@ def main(argv=None):
         raise ValueError(f'reference subjects outside the locked discovery set: {outside}')
     folds = sorted(s for s in train if s.replace('sub-', '') in config.discovery_subjects())
 
+    if params.get('autonomic'):
+        raise SystemExit(f'{reference_run} is an --autonomic run; LOO refits only '
+                         'the main runs')
     insula_threshold = (prov.get('insula_split') or {}).get('thresholds')
     shift = params.get('second_epoch_shift_min') or 0
     second_dir = params.get('second_zscore_dir')
@@ -156,8 +159,7 @@ def main(argv=None):
                                  params['min_gap_min'], params['max_gap_min'],
                                  insula_threshold=insula_threshold,
                                  exclude_first_h=params['exclude_first_h'],
-                                 shift_min=shift, second_dir=second_dir,
-                                 heart_rate=params.get('heart_rate') is not None)
+                                 shift_min=shift, second_dir=second_dir)
     if rows.notch != params['notch_bins_removed']:
         raise ValueError('the notch differs from the reference run')
     if set(rows.index['subject']) != train:
@@ -196,7 +198,6 @@ def main(argv=None):
                   'insula_threshold': insula_threshold,
                   'exclude_first_h': params['exclude_first_h'],
                   'second_epoch_shift_min': shift, 'second_zscore_dir': second_dir,
-                  'heart_rate': params.get('heart_rate'),
                   'with_lrt': False, 'folds': folds}
     subjects = sorted(train)
     io.write_table(cells, run_dir / 'cells_loo.csv', params=run_params,

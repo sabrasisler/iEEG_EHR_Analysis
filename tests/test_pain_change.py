@@ -140,8 +140,6 @@ def test_tokens():
             == 'zscoreallep-paperbands6hg200-roiv2ofcins-nofirst24h')
     assert (pain_change.data_token(vc, 'paper_bands_6_hg200', None)
             == 'zscoreallep-paperbands6hg200-roiv2ofcins')
-    assert (pain_change.data_token(vc, 'paper_bands_6_hg200', None, heart_rate=True)
-            == 'zscoreallep-paperbands6hg200-roiv2ofcins-hr')
     assert pain_change.run_token('opioid', 'sm') == 'opioid_mme1_sm'
     assert pain_change.run_token('opioid', 'lme4') == 'opioid_mme1_lme4'
     assert pain_change.run_token('painchange', 'sm') == 'painchange_sm'
@@ -236,15 +234,30 @@ def test_opioid_dc_model_swaps_cbar_for_dc():
     assert pain_change.run_token('opioid-dc-pairint', 'lme4') == 'opioid-dc-pairint_mme1_lme4'
 
 
-def test_epoch_heart_rate_means_good_seconds_in_window():
+def test_epoch_autonomic_mean_hr_and_ln_rmssd():
     t0 = np.datetime64('2000-01-01T00:00:00', 'ns')
-    times = t0 + np.arange(600).astype('timedelta64[s]')
-    hr = pd.DataFrame({'time': times, 'hr_bpm': np.r_[np.full(300, 60.), np.full(300, 90.)]})
-    hr = hr.drop(index=range(300, 450))           # half of the second epoch lost to quality
-    starts = np.array([t0, t0 + np.timedelta64(300, 's')])
-    mean, cov = pain_change.epoch_heart_rate(hr, starts, starts + np.timedelta64(300, 's'))
-    np.testing.assert_allclose(mean, [60, 90])
-    np.testing.assert_allclose(cov, [1.0, 0.5])
-    empty, cov0 = pain_change.epoch_heart_rate(hr, starts - np.timedelta64(900, 's'),
-                                               starts - np.timedelta64(600, 's'))
-    assert np.isnan(empty).all() and (cov0 == 0).all()
+    sec = np.timedelta64(1, 's')
+    hr = pd.DataFrame({'time': t0 + np.arange(600) * sec,
+                       'hr_bpm': np.r_[np.full(300, 60.), np.full(300, 90.)]})
+    hr = hr.drop(index=range(300, 450))            # half of the second epoch lost to quality
+    # NN alternating 0.8 / 0.9 s: every successive difference is 100 ms, so RMSSD = 100 ms.
+    nn = np.tile([0.8, 0.9], 400)
+    t = t0 + (np.r_[0, np.cumsum(nn)] * 1e9).astype('timedelta64[ns]')
+    beats = pd.DataFrame({'run': 'A', 'time': t, 'quality': 1.0})
+    diffs = pain_change.successive_differences(beats)
+    np.testing.assert_allclose(diffs['d2_ms2'], 100.0 ** 2)
+    starts = np.array([t0, t0 + 300 * sec])
+    mean_hr, ln_rmssd = pain_change.epoch_autonomic(hr, diffs, starts, starts + 300 * sec)
+    np.testing.assert_allclose(mean_hr, [60, 90])
+    np.testing.assert_allclose(ln_rmssd, np.log(100.0))
+    early = starts - 900 * sec
+    assert np.isnan(pain_change.epoch_autonomic(hr, diffs, early, early + 300 * sec)).all()
+
+
+def test_successive_differences_skip_bad_beats_and_jumps():
+    t0 = np.datetime64('2000-01-01T00:00:00', 'ns')
+    nn = [0.8, 0.8, 0.8, 1.2, 0.8, 0.8]            # 0.8 -> 1.2 jumps 50%: skipped
+    t = t0 + (np.r_[0, np.cumsum(nn)] * 1e9).astype('timedelta64[ns]')
+    q = np.ones(len(t)); q[-1] = 0.1               # the last beat fails quality
+    d = pain_change.successive_differences(pd.DataFrame({'run': 'A', 'time': t, 'quality': q}))
+    assert len(d) == 2 and (d['d2_ms2'] < 1e-6).all()

@@ -1,7 +1,7 @@
 """Region x band heatmap of one pain_change fixed effect, in the poster style.
 
     python -m ieeg_ehr.analysis.plot_pain_change_heatmap --run-dir <pain_change run> \\
-        [--term dpain | dpain_x_cbar | dpain_x_dc | dc | cbar | dhr]
+        [--term dpain | dpain_x_cbar | dpain_x_dc | dc | cbar | dhr | dhrv]
 
 Reads `cells.csv` and `provenance.json` from a `pain_change` run and writes
 `<run>/figures/heatmap_<term token>.png` (docs/run_tokens.md): `heatmap_dpain.png`
@@ -39,6 +39,7 @@ TERMS = {
     'dpain_x_dc': ('dpain-x-dc', 'Opioid exposure change and the pain-change slope',
                    'Δ slope per typical-dose change'),
     'dhr': ('dhr', 'Heart-rate change by region', 'Δ z per bpm'),
+    'dhrv': ('dhrv', 'HRV change by region', 'Δ z per Δ ln RMSSD'),
 }
 #: The domain colours of the band-power poster map (Sensory, Affective,
 #: Cognitive, Modulatory, Other).

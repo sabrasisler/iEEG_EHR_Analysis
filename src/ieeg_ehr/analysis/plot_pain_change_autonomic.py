@@ -1,22 +1,23 @@
-"""Does heart rate explain the pain-change slopes? Two scatters over the region x band cells.
+"""Does an autonomic measure explain the pain-change slopes? Two scatters over the cells.
 
     python -m ieeg_ehr.analysis.plot_pain_change_autonomic \\
-        --run-dir <pain_change -dhr run> --base-run <same model without dHR, same rows> \\
+        --run-dir <pain_change -dhr or -dhrv run> --base-run <same model without it> \\
         --main-run <the run whose heatmap marks the significant cells>
 
-Writes into `<run-dir>/figures/` (docs/run_tokens.md):
+The autonomic term (`dHR` or `dHRV`) is the one in `--run-dir`'s formula. Writes
+into `<run-dir>/figures/` (docs/run_tokens.md):
 
 - `scatter_dpain-raw-vs-adj.png`: one dot per cell, x = `d_pain` beta of
-  `--base-run`, y = `d_pain` beta of `--run-dir` (adjusted for dHR), with the
-  identity line. Dots on the diagonal mean heart rate explains none of the slope.
-- `scatter_dpain-vs-dhr.png`: the same cells, x = `d_pain` beta and y = `dHR`
-  beta, both of `--run-dir`. Cells spread along x with a near-zero correlation
-  mean the two effects dissociate. It shows dissociation only, not that heart
-  rate fails to explain the pain slope.
+  `--base-run`, y = `d_pain` beta of `--run-dir` (adjusted for the term), with
+  the identity line. Dots on the diagonal mean the term explains none of the slope.
+- `scatter_dpain-vs-<term>.png`: the same cells, x = `d_pain` beta and y = the
+  term's beta, both of `--run-dir`. Cells spread along x with a near-zero
+  correlation mean the two effects dissociate. It shows dissociation only, not
+  that the term fails to explain the pain slope.
 
 One panel per band, shared axes. Cells outlined are BH-significant for `d_pain`
 in `--main-run` (`dpain_bh_reject`), the cells of the main heatmap. Both fits
-must come from one `--heart-rate` folder, so they share rows. The per-cell table
+must come from one `autonomics/` folder, so they share rows. The per-cell table
 and the attenuation numbers go to `<run-dir>/autonomic_compare.csv`.
 """
 
@@ -32,7 +33,8 @@ import numpy as np
 import pandas as pd
 
 from ieeg_ehr import io
-from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR
+from ieeg_ehr.analysis.pain_change import (AUTONOMIC_TERMS, FIGURES_SUBDIR, TERM_PREFIX,
+                                           model_terms)
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +44,20 @@ INK = '#1a1a19'
 MUTED = '#6b6a64'
 GRID = '#e4e3dd'
 SURFACE = '#fcfcfb'
+#: Autonomic term -> (name in titles, axis label of its slope).
+TERM_LABELS = {'dHR': ('heart-rate change', 'Heart-rate slope (Δz per bpm)'),
+               'dHRV': ('HRV change', 'HRV slope (Δz per Δ ln RMSSD)')}
 BAND_LABELS = {'delta': 'Delta', 'theta': 'Theta', 'alpha': 'Alpha', 'beta': 'Beta',
                'gamma': 'Gamma', 'high_gamma': 'High gamma'}
 
 
-def compare_cells(base, adjusted, main):
-    """One row per cell: raw and adjusted d_pain beta, dHR beta, main-heatmap significance."""
+def compare_cells(base, adjusted, main, prefix):
+    """One row per cell: raw and adjusted d_pain beta, the autonomic beta (`prefix`, renamed
+    `auto_*`), main-heatmap significance."""
     keep = ['region', 'freq', 'dpain_beta', 'dpain_se']
-    df = base[keep].merge(adjusted[keep + ['dhr_beta', 'dhr_se', 'dhr_bh_reject']],
-                          on=['region', 'freq'], suffixes=('_raw', '_adj'))
+    auto = adjusted[keep + [f'{prefix}_beta', f'{prefix}_se', f'{prefix}_bh_reject']].rename(
+        columns={f'{prefix}_{c}': f'auto_{c}' for c in ('beta', 'se', 'bh_reject')})
+    df = base[keep].merge(auto, on=['region', 'freq'], suffixes=('_raw', '_adj'))
     df = df.merge(main[['region', 'freq', 'dpain_bh_reject']].rename(
         columns={'dpain_bh_reject': 'main_significant'}), on=['region', 'freq'], how='left')
     df['main_significant'] = df['main_significant'].fillna(False).astype(bool)
@@ -71,7 +78,7 @@ def summary(df):
         # Least squares through the origin over every cell: 1 = no attenuation.
         'slope_adj_on_raw': float((raw * adj).sum() / (raw ** 2).sum()),
         'median_abs_shift_in_se': float(df['shift_in_se'].abs().median()),
-        'r_dpain_dhr': float(np.corrcoef(df['dpain_beta_adj'], df['dhr_beta'])[0, 1]),
+        'r_dpain_auto': float(np.corrcoef(df['dpain_beta_adj'], df['auto_beta'])[0, 1]),
     }
 
 
@@ -127,8 +134,8 @@ def facet_grid(df, bands, x, y, xlabel, ylabel, title, subtitle, out, identity):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--run-dir', required=True, help='the pain_change run with dHR')
-    ap.add_argument('--base-run', required=True, help='the same model without dHR')
+    ap.add_argument('--run-dir', required=True, help='the pain_change run with dHR or dHRV')
+    ap.add_argument('--base-run', required=True, help='the same model without it')
     ap.add_argument('--main-run', required=True,
                     help='the run whose d_pain heatmap marks the significant cells')
     args = ap.parse_args(argv)
@@ -137,11 +144,14 @@ def main(argv=None):
     run_dir, base_dir, main_dir = Path(args.run_dir), Path(args.base_run), Path(args.main_run)
     params = json.loads((run_dir / 'provenance.json').read_text())['params']
     base_params = json.loads((base_dir / 'provenance.json').read_text())['params']
-    if run_dir.parent != base_dir.parent or not params.get('heart_rate'):
-        raise SystemExit('--run-dir and --base-run must sit in one --heart-rate folder, '
+    if run_dir.parent != base_dir.parent or not params.get('autonomic'):
+        raise SystemExit('--run-dir and --base-run must sit in one autonomics/ folder, '
                          'so both fit the same rows')
-    if 'dHR' in base_params['formula']:
-        raise SystemExit(f'--base-run already has dHR: {base_params["formula"]}')
+    (term,) = [t for t in model_terms(params['model']) if t in AUTONOMIC_TERMS]
+    if set(model_terms(base_params['model'])) & set(AUTONOMIC_TERMS):
+        raise SystemExit(f'--base-run has an autonomic term: {base_params["formula"]}')
+    prefix = TERM_PREFIX[term]
+    name, auto_label = TERM_LABELS[term]
 
     pairs = {d: pd.read_csv(d / 'pair_index.csv', usecols=['subject_id', 't1', 't2'])
              for d in (run_dir, base_dir)}
@@ -151,8 +161,8 @@ def main(argv=None):
                 len(keys[base_dir]), n_diff)
 
     read = lambda d: io.read_table(d / 'cells.csv', on_stale='warn')
-    df = compare_cells(read(base_dir), read(run_dir), read(main_dir))
-    stats = {**summary(df), 'n_pairs_adjusted': len(keys[run_dir]),
+    df = compare_cells(read(base_dir), read(run_dir), read(main_dir), prefix)
+    stats = {'term': term, **summary(df), 'n_pairs_adjusted': len(keys[run_dir]),
              'n_pairs_base': len(keys[base_dir]), 'n_pairs_in_one_only': n_diff}
     for k, v in stats.items():
         logger.info('%s: %s', k, f'{v:.4g}' if isinstance(v, float) else v)
@@ -167,27 +177,27 @@ def main(argv=None):
     raw_adj = figures / 'scatter_dpain-raw-vs-adj.png'
     facet_grid(df, bands, 'dpain_beta_raw', 'dpain_beta_adj',
                'Pain slope, original model (Δz per pain point)',
-               'Pain slope, adjusted for ΔHR',
-               'Pain slopes before and after adjusting for heart-rate change',
+               f'Pain slope, adjusted for {term}',
+               f'Pain slopes before and after adjusting for {name}',
                f"{stats['n_cells']} region x band cells. Slope of adjusted on original "
                f"{stats['slope_adj_on_raw']:.2f} (1 = no attenuation). Median change in the "
                f"{stats['n_main_significant']} main-heatmap cells "
                f"{stats['median_pct_change_main_significant']:+.1f}%. Median shift "
                f"{stats['median_abs_shift_in_se']:.2f} SE.",
                raw_adj, identity=True)
-    pain_hr = figures / 'scatter_dpain-vs-dhr.png'
-    facet_grid(df, bands, 'dpain_beta_adj', 'dhr_beta',
-               'Pain slope (Δz per pain point)', 'Heart-rate slope (Δz per bpm)',
-               'Pain and heart-rate effects across cells',
-               f"Both from the dHR model. Correlation across all {stats['n_cells']} "
-               f"cells r = {stats['r_dpain_dhr']:.2f}. Dissociation only: this does not "
-               'test whether heart rate explains the pain slope.',
-               pain_hr, identity=False)
-    for out in (raw_adj, pain_hr):
+    pain_auto = figures / f'scatter_dpain-vs-{prefix}.png'
+    facet_grid(df, bands, 'dpain_beta_adj', 'auto_beta',
+               'Pain slope (Δz per pain point)', auto_label,
+               f'Pain and {name} effects across cells',
+               f"Both from the {term} model. Correlation across all {stats['n_cells']} "
+               f"cells r = {stats['r_dpain_auto']:.2f}. Dissociation only: this does not "
+               f'test whether {name} explains the pain slope.',
+               pain_auto, identity=False)
+    for out in (raw_adj, pain_auto):
         io.write_sidecar(out, kind='figure', script=SCRIPT, params=vars(args),
                          parents=parents, extra={'summary': stats})
-    io.log_analysis('pain_change autonomic scatters (raw vs dHR-adjusted d_pain, '
-                    'd_pain vs dHR)', figures)
+    io.log_analysis(f'pain_change autonomic scatters (raw vs {term}-adjusted d_pain, '
+                    f'd_pain vs {term})', figures)
     return 0
 
 
