@@ -30,7 +30,9 @@ the per-subject pain_1 mean of each cell, beside the weights as
 
 the least-squares inversion of the model with d_pain unknown. `pain_1_within_c` is
 pain1 minus the subject's centering mean for that cell, the one the fit used.
-Each comes `uniform` and `ivw` (every term divided by var_resid_c). The adjusted
+Each comes `uniform`, `ivw` (every term divided by var_resid_c) and `unit`
+(sum_c sign(beta_c) x_c / sum_c |beta_c|: every cell's z change counts equally,
+only its sign taken from beta). The adjusted
 prediction needs alpha and the centering, and below EXTRAPOLATE_BELOW_MIN it is
 `extrapolated`, as the fit saw no shorter gap. Output lands in
 `analysis/pain/pain_change/prediction/<data token>/<run token>_<timestamp>/`, the
@@ -144,13 +146,17 @@ def centering_path(weights_name):
 # ============================================================================
 
 def _invert(x, beta, inv_var):
-    """(uniform, ivw) least-squares d_pain per row, over the finite cells of x."""
+    """(uniform, ivw, unit) d_pain per row, over the finite cells of x: the
+    least-squares inversion, the same with var_resid weights, and the unit-weighted
+    sum_c sign(beta_c) x_c / sum_c |beta_c|.
+    """
     finite = np.isfinite(x)
     b = np.where(finite, beta, 0.0)
     x = np.where(finite, x, 0.0)
     with np.errstate(invalid='ignore', divide='ignore'):
         return ((b * x).sum(axis=1) / (b ** 2).sum(axis=1),
-                (b * x * inv_var).sum(axis=1) / (b ** 2 * inv_var).sum(axis=1))
+                (b * x * inv_var).sum(axis=1) / (b ** 2 * inv_var).sum(axis=1),
+                (np.sign(b) * x).sum(axis=1) / np.abs(b).sum(axis=1))
 
 
 def predict(dz_cells, pairs, weights, centering=None):
@@ -177,7 +183,8 @@ def predict(dz_cells, pairs, weights, centering=None):
         out = rows[['pair_id', 't_min']].copy()
         out['n_cells_used'] = np.isfinite(x).sum(axis=1)
         out['sum_beta2'] = (np.where(np.isfinite(x), beta, 0.0) ** 2).sum(axis=1)
-        out['pred_raw_uniform'], out['pred_raw_ivw'] = _invert(x, beta, inv_var)
+        out['pred_raw_uniform'], out['pred_raw_ivw'], out['pred_raw_unit'] = _invert(
+            x, beta, inv_var)
         if adjusted:
             mean = (centering[centering['subject'] == subject]
                     .set_index(['roi', 'band'])['pain_1_mean']
@@ -186,7 +193,8 @@ def predict(dz_cells, pairs, weights, centering=None):
             gap_h = rows['t_min'].to_numpy()[:, None] / 60.0
             r = (x - w['alpha'].to_numpy() - w['gamma'].to_numpy() * pain_1_within
                  - w['delta'].to_numpy() * gap_h)
-            out['pred_adj_uniform'], out['pred_adj_ivw'] = _invert(r, beta, inv_var)
+            out['pred_adj_uniform'], out['pred_adj_ivw'], out['pred_adj_unit'] = _invert(
+                r, beta, inv_var)
             out['extrapolated'] = out['t_min'] < EXTRAPOLATE_BELOW_MIN
         parts.append(out)
     return pd.concat(parts, ignore_index=True)
@@ -245,8 +253,9 @@ raw  dpain_hat(t) = sum_c beta_c d_z_c(t) / sum_c beta_c^2
 adj  the same on d_z_c(t) - alpha_c - gamma_c pain_1_within_c - delta_c (t - t1) in h
 ```
 
-over the converged cells the subject has, each `uniform` and `ivw` (every term
-divided by var_resid_c). Adjusted prediction: {'yes' if params['adjusted'] else
+over the converged cells the subject has, each `uniform`, `ivw` (every term
+divided by var_resid_c) and `unit` (sum_c sign(beta_c) d_z_c / sum_c |beta_c|).
+Adjusted prediction: {'yes' if params['adjusted'] else
 'no, the weights carry no intercept or centering'}. Below {EXTRAPOLATE_BELOW_MIN:g}
 min the adjusted prediction is extrapolated: the fit saw no shorter gap.
 

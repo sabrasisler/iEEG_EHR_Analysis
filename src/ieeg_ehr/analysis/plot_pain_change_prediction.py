@@ -30,6 +30,16 @@ tokens of docs/run_tokens.md. Kinds:
     dc-groups-fraction   the same on the fraction of the interval, t1 = 0, t2 = 1
     dc-groups-actual     per ΔC bin, actual Δpain at report 2 beside the prediction
                          at t2, and pain at report 1 and report 2
+    dc-pain-bins         the prediction over the interval, one panel per pain direction
+                         (DC_PAIN_BINS), one line per ΔC bin and pain magnitude, with
+                         the fit of prediction(t2) ~ Δpain + ΔC + (1 | subject) over all
+                         dc-groups pairs (written to dc-pain-model_dpain_<tag>.csv)
+    dose-response-by-dc  dose-response, one panel per ΔC bin, each with the slope of
+                         prediction on actual Δpain (also in dc-pain-model)
+    dc-shift-contributions  the ΔC shift of the prediction split into ROI x band
+                         cells: decoder weight, the fit's dC effect on power, and their
+                         product, summed by ROI and band (dc-shift-contributions_dpain_
+                         <tag>.csv)
 
 For the adjusted prediction the first EXTRAPOLATE_BELOW_MIN minutes are hatched: the
 fit saw no gap that short.
@@ -48,13 +58,17 @@ from matplotlib.cm import ScalarMappable  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap, Normalize  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+import statsmodels.formula.api as smf  # noqa: E402
 
-from ieeg_ehr import io  # noqa: E402
+from ieeg_ehr import config, io  # noqa: E402
 from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR, load_exposure  # noqa: E402
 from ieeg_ehr.analysis.pain_change_prediction import (  # noqa: E402
     DPAIN_BINS, EXTRAPOLATE_BELOW_MIN, assign_bins, load_trajectory)
-from ieeg_ehr.config import opioid_mme  # noqa: E402
-from ieeg_ehr.features.build_pain_change_trajectory import WINDOW_MIN  # noqa: E402
+from ieeg_ehr.analysis.plot_band_map_domains import BAND_SYMBOL  # noqa: E402
+from ieeg_ehr.analysis.plot_domain_glass import BAND_COLOURS  # noqa: E402
+from ieeg_ehr.analysis.run_bandpower_mixed import BAND_SETS  # noqa: E402
+from ieeg_ehr.config import opioid_mme, roi_schemes  # noqa: E402
+from ieeg_ehr.features.build_pain_change_trajectory import WINDOW_MIN, cell_column  # noqa: E402
 from ieeg_ehr.med_analysis import mme_curve  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -69,6 +83,8 @@ NEUTRAL = '#5f5e5a'
 TERCILE_COLOURS = ('#86b6ef', '#2a78d6', '#104281')
 INK, MUTED, GRID, SHADE = '#2b2b29', '#6b6a66', '#e4e3df', '#f0efec'
 DOSE_WINDOW_MIN = 10
+#: Both axes of dose-response-by-dc, in NRS.
+DOSE_BY_DC_LIM = 10
 #: The time-axis figures stop here, though the extraction runs to 3 h.
 PLOT_HORIZON_MIN = 120
 #: The t2-aligned figures start this long before the second report.
@@ -94,6 +110,20 @@ DC_COLOURS = ('#8c510a', '#d8b365', '#8c8b86', '#5ab4ac', '#01665e')
 DC_FIRST_HOURS_OUT = 24
 #: Steps of the t1 -> t2 fraction axis.
 FRACTION_BINS = 20
+#: Δpain bins of dc-pain-bins, inclusive. Set by the user 2026-10-20.
+DC_PAIN_BINS = {'large decrease': (-10, -4), 'small decrease': (-3, -2),
+                'no change': (-1, 1), 'small increase': (2, 3), 'large increase': (4, 10)}
+#: Its panels, each a pain direction and the DC_PAIN_BINS drawn there.
+PAIN_PANELS = (('decrease', ('large decrease', 'small decrease')),
+               ('no change', ('no change',)),
+               ('increase', ('large increase', 'small increase')))
+PAIN_STYLES = {'large decrease': '-', 'small decrease': '--', 'no change': '-',
+               'large increase': '-', 'small increase': '--'}
+#: y axis of dc-pain-bins, in NRS: the SEM of a few thin lines reaches far past the means.
+DC_PAIN_YLIM = 15
+#: prediction(t2) ~ ... + (1 | subject) over all dc-groups pairs, dC continuous.
+DC_PAIN_FORMULAS = ('value ~ delta_pain + dc', 'value ~ delta_pain + dc + pain1_within',
+                    'value ~ delta_pain * dc')
 
 
 # ============================================================================
@@ -279,6 +309,17 @@ def _dose_axes(ax, title):
     ax.set_title(title, fontsize=10, color=INK)
 
 
+def _dose_errorbar(ax, s, colour, dx=0.0, label=None, annotate=False):
+    """dose_points rows as mean +/- SEM, labelled subjects/pairs when `annotate`."""
+    ax.errorbar(s['delta_pain'] + dx, s['mean'], yerr=s['sem'], fmt='o', ms=5, color=colour,
+                ecolor=colour, elinewidth=1, capsize=0, label=label)
+    if annotate:
+        for r in s.itertuples():
+            ax.annotate(f'{r.n_subjects}/{r.n_pairs}', (r.delta_pain, r.mean),
+                        textcoords='offset points', xytext=(0, 8), ha='center',
+                        fontsize=7, color=MUTED)
+
+
 def fig_dose(df, out_dir, name, title, min_subjects, hue=None, hue_levels=(),
              hue_colours=()):
     pts = dose_points(df, hue)
@@ -288,14 +329,8 @@ def fig_dose(df, out_dir, name, title, min_subjects, hue=None, hue_levels=(),
         (lvl, c, pts[pts[hue] == lvl]) for lvl, c in zip(hue_levels, hue_colours)]
     offsets = np.linspace(-0.2, 0.2, len(series)) if len(series) > 1 else [0.0]
     for (lvl, colour, s), dx in zip(series, offsets):
-        ax.errorbar(s['delta_pain'] + dx, s['mean'], yerr=s['sem'], fmt='o', ms=5,
-                    color=colour, ecolor=colour, elinewidth=1, capsize=0,
-                    label=None if lvl is None else str(lvl))
-        if hue is None:
-            for r in s.itertuples():
-                ax.annotate(f'{r.n_subjects}/{r.n_pairs}', (r.delta_pain, r.mean),
-                            textcoords='offset points', xytext=(0, 8), ha='center',
-                            fontsize=7, color=MUTED)
+        _dose_errorbar(ax, s, colour, dx, None if lvl is None else str(lvl),
+                       annotate=hue is None)
     ax.set_xlim(pts['delta_pain'].min() - 1, pts['delta_pain'].max() + 1)
     _dose_axes(ax, title)
     _legend(ax, loc='upper left')
@@ -406,6 +441,21 @@ def exposure_steps(pairs):
     return steps, per_pair
 
 
+def to_fraction(df, group):
+    """Each pair's steps averaged within FRACTION_BINS steps of (t - t1) / (t2 - t1)."""
+    step = np.minimum(np.floor(df['t_min'] / df['gap_min'] * FRACTION_BINS), FRACTION_BINS - 1)
+    return (df.assign(x_h=(step + 0.5) / FRACTION_BINS)
+            .groupby(['pair_id', 'subject', group, 'x_h'], observed=True)[['value', 'dc']]
+            .mean().reset_index())
+
+
+def _fraction_axis(ax):
+    ax.set_xlim(0, 1)
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1])
+    ax.set_xticklabels(['t1', '25%', '50%', '75%', 't2'])
+    ax.set_xlabel('Fraction of the interval from report 1 to report 2', color=INK)
+
+
 def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
     """Predicted Δpain (top) and ΔC(t) (bottom) from t1 to t2, one line per ΔC bin.
 
@@ -413,11 +463,7 @@ def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
     (t - t1) / (t2 - t1) in FRACTION_BINS steps, each pair averaged within a step first.
     """
     if axis == 'fraction':
-        step = np.minimum(np.floor(df['t_min'] / df['gap_min'] * FRACTION_BINS),
-                          FRACTION_BINS - 1)
-        df = (df.assign(x_h=(step + 0.5) / FRACTION_BINS)
-              .groupby(['pair_id', 'subject', 'dc_group', 'x_h'], observed=True)[['value', 'dc']]
-              .mean().reset_index())
+        df = to_fraction(df, 'dc_group')
     else:
         df = df[df['t_min'] <= PLOT_HORIZON_MIN].assign(x_h=lambda d: d['t_min'] / 60)
     fig, (top, bottom) = plt.subplots(2, 1, figsize=(7, 6.6), sharex=True,
@@ -433,10 +479,7 @@ def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
                       value='dc')
     top.set_xlabel('')
     if axis == 'fraction':
-        bottom.set_xlim(0, 1)
-        bottom.set_xticks([0, 0.25, 0.5, 0.75, 1])
-        bottom.set_xticklabels(['t1', '25%', '50%', '75%', 't2'])
-        bottom.set_xlabel('Fraction of the interval from report 1 to report 2', color=INK)
+        _fraction_axis(bottom)
     else:
         bottom.set_xlabel('Hours since first report (each pair ends at its t2)', color=INK)
     top.set_ylabel('Predicted Δpain (NRS)', color=INK)
@@ -504,6 +547,239 @@ def fig_dc_actual(df, out_dir, name, title, min_subjects):
     _save(fig, out_dir, name)
 
 
+def dc_pain_model(at_t2):
+    """Fixed effects of each DC_PAIN_FORMULAS fit, statsmodels MixedLM, REML,
+    random intercept per subject, one row per term.
+    """
+    df = at_t2.assign(pain1_within=at_t2['pain1']
+                      - at_t2.groupby('subject')['pain1'].transform('mean'))
+    return pd.DataFrame([row for formula in DC_PAIN_FORMULAS
+                         for row in _fixed_effects(df, formula, f'{formula} + (1 | subject)')])
+
+
+def _fixed_effects(df, formula, label):
+    """One row per fixed effect of `formula` + (1 | subject), statsmodels MixedLM, REML."""
+    fit = smf.mixedlm(formula, df, groups=df['subject']).fit(reml=True)
+    ci = fit.conf_int()
+    return [{'formula': label, 'term': term, 'estimate': fit.fe_params[term],
+             'se': fit.bse_fe[term], 'ci_low': ci.loc[term, 0], 'ci_high': ci.loc[term, 1],
+             'p': fit.pvalues[term], 'n_pairs': len(df), 'n_subjects': df['subject'].nunique(),
+             'converged': fit.converged, 'subject_var': fit.cov_re.iloc[0, 0]}
+            for term in fit.fe_params.index]
+
+
+def dc_dose_slopes(per_pair):
+    """Per ΔC bin, value ~ delta_pain + (1 | subject) on near_t2 pairs, as _fixed_effects rows."""
+    return pd.DataFrame([
+        row for g, d in per_pair.groupby('dc_group', observed=True)
+        for row in _fixed_effects(d, 'value ~ delta_pain',
+                                  f'value(t2 ± {DOSE_WINDOW_MIN} min) ~ delta_pain '
+                                  f'+ (1 | subject), {g}')])
+
+
+def fig_dose_by_dc(df, out_dir, name, title, min_subjects, slopes):
+    """fig_dose, one panel per ΔC bin, each titled with its dc_dose_slopes slope."""
+    pts = dose_points(df, hue='dc_group')
+    pts = pts[pts['n_subjects'] >= min_subjects]
+    fig, axes = plt.subplots(1, len(DC_BINS), figsize=(3.2 * len(DC_BINS), 4),
+                             sharex=True, sharey=True)
+    lim = DOSE_BY_DC_LIM
+    n_out = int((pts[['delta_pain', 'mean']].abs() > lim).any(axis=1).sum())
+    for ax, g, colour in zip(axes, DC_BINS, DC_COLOURS):
+        _style(ax)
+        ax.axhline(0, color=MUTED, lw=0.8)
+        ax.plot([-lim, lim], [-lim, lim], color=MUTED, lw=0.8, ls='--')
+        s = pts[pts['dc_group'] == g]
+        _dose_errorbar(ax, s, colour, annotate=True)
+        fe = slopes[slopes['formula'].str.endswith(f', {g}')].set_index('term')
+        r = fe.loc['delta_pain']
+        x = np.array([s['delta_pain'].min(), s['delta_pain'].max()])
+        ax.plot(x, fe.loc['Intercept', 'estimate'] + r.estimate * x, color=colour, lw=1.2)
+        ax.set_title(f'{g} ({r.n_subjects} subj, {r.n_pairs} pairs)\n'
+                     f'slope {r.estimate:+.2f} [{r.ci_low:+.2f}, {r.ci_high:+.2f}]',
+                     fontsize=9, color=INK, pad=14)
+    axes[0].set_xlim(-lim, lim)
+    axes[0].set_ylim(-lim, lim)
+    axes[0].set_ylabel(f'Predicted Δpain, ±{DOSE_WINDOW_MIN} min of t2 (NRS)', color=INK)
+    fig.supxlabel('Actual Δpain at report 2 (NRS)', color=INK, fontsize=10)
+    fig.suptitle(f'{title}\nby ΔC, t1 to t2', fontsize=10, color=INK)
+    fig.tight_layout()
+    _footer(fig, 'Labels: subjects/pairs. Points with fewer than '
+                 f'{min_subjects} subjects dropped. Axes clipped at ±{lim} ({n_out} of '
+                 f'{len(pts)} points beyond). Dashed: identity. Solid: the fit. Slope: fixed '
+                 'effect [95% CI] of value ~ Δpain + (1 | subject) over the pairs of the '
+                 'panel, statsmodels MixedLM, REML. ΔC bins and first-day exclusion as '
+                 'dc-groups.')
+    _save(fig, out_dir, name)
+
+
+def fig_dc_pain(df, out_dir, name, title, min_subjects, model):
+    """The prediction over the fraction of the interval, one panel per PAIN_PANELS
+    direction, one line per ΔC bin (colour) and DC_PAIN_BINS magnitude (style), with
+    the `model` (dc_pain_model) estimates of the first formula in the title.
+    """
+    df = df.assign(pain_bin=assign_bins(df['delta_pain'], DC_PAIN_BINS))
+    df['line'] = df['dc_group'].astype(str) + ', ' + df['pain_bin'].astype(str)
+    frac = to_fraction(df, 'line')
+    fig, (axes, legend_axes) = plt.subplots(
+        2, len(PAIN_PANELS), figsize=(5.2 * len(PAIN_PANELS), 6.6),
+        gridspec_kw={'height_ratios': (3, 1.3)})
+    dropped = []
+    for ax, legend_ax, (panel, pain_bins) in zip(axes, legend_axes, PAIN_PANELS):
+        _style(ax)
+        ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
+        lines = [f'{g}, {b}' for b in pain_bins for g in DC_BINS]
+        colours = DC_COLOURS * len(pain_bins)
+        styles = {f'{g}, {b}': PAIN_STYLES[b] for b in pain_bins for g in DC_BINS}
+        drawn = _trajectory_lines(ax, frac, 'line', lines, colours, min_subjects,
+                                  styles=styles)
+        dropped += [g for g in lines if g not in drawn]
+        _fraction_axis(ax)
+        ax.set_ylim(-DC_PAIN_YLIM, DC_PAIN_YLIM)
+        ax.set_title(f'pain {panel}\n' + ',  '.join(
+            f'{"solid" if PAIN_STYLES[b] == "-" else "dashed"} {DC_PAIN_BINS[b][0]:+d} to '
+            f'{DC_PAIN_BINS[b][1]:+d}' for b in pain_bins), fontsize=9, color=INK)
+        legend_ax.axis('off')
+        legend_ax.legend(*ax.get_legend_handles_labels(), frameon=False, fontsize=7,
+                         labelcolor=INK, loc='upper center')
+    axes[0].set_ylabel('Predicted Δpain (NRS)', color=INK)
+    for ax in axes[1:]:
+        ax.set_yticklabels([])
+    fe = model[model['formula'] == model['formula'].iloc[0]].set_index('term')
+    fig.suptitle(f'{title}\nprediction(t2) ~ Δpain + ΔC + (1 | subject), all '
+                 f'{fe["n_pairs"].iloc[0]} dc-groups pairs, ΔC continuous: ' + ',   '.join(
+                     f'{label} {fe.loc[t, "estimate"]:+.2f} [{fe.loc[t, "ci_low"]:+.2f}, '
+                     f'{fe.loc[t, "ci_high"]:+.2f}]'
+                     for t, label in (('delta_pain', 'Δpain'), ('dc', 'ΔC'))),
+                 fontsize=10, color=INK)
+    fig.tight_layout()
+    _footer(fig, f'{df["subject"].nunique()} subjects, {df["pair_id"].nunique()} pairs. Legend: '
+                 f'ΔC bin t1 to t2 (as dc-groups), Δpain bin. Mean ± SEM across subjects of '
+                 f'subject means, y clipped at ±{DC_PAIN_YLIM}. Lines under {min_subjects} '
+                 f'subjects not drawn: {", ".join(dropped) or "none"}.')
+    _save(fig, out_dir, name)
+
+
+def dc_shift_contributions(at_t2, trajectory_dir, weights_name, source_run, weighting):
+    """Per subject and ROI x band cell, its share of the ΔC shift of the prediction.
+
+    The prediction is sum_c w_c dz_c with w_c = beta_c iv_c / sum beta^2 iv over the
+    cells finite at t2 (iv = 1 / var_resid for ivw, else 1; sign(beta_c) / sum |beta|
+    for unit), so a dC effect b_c on
+    dz_c shifts it by sum_c w_c b_c per typical dose. Each subject uses its own
+    fold's beta and b (`dc_beta` of the source `cells_loo.csv`), averaged over its
+    pairs at t2. A cell a pair lacks enters as weight 0, so the shares sum to the
+    subject's shift. The d_pain:dC term is left out.
+    """
+    weights = io.read_table(config.pain_change_prediction_weights_path(weights_name),
+                            on_stale='warn')
+    dc_beta = (io.read_table(Path(source_run) / 'cells_loo.csv', on_stale='warn')
+               .rename(columns={'region': 'roi', 'freq': 'band'})
+               [['heldout_subject', 'roi', 'band', 'dc_beta']])
+    weights = weights.merge(dc_beta, on=['heldout_subject', 'roi', 'band'], how='left')
+    if weights['dc_beta'].isna().any():
+        raise ValueError('weights cells with no dc_beta in the source run')
+    _, dz = load_trajectory(trajectory_dir)
+    dz = dz.merge(at_t2[['pair_id', 'subject', 't_min']], on=['pair_id', 't_min'])
+    parts = []
+    for subject, rows in dz.groupby('subject'):
+        w = weights[weights['heldout_subject'] == subject]
+        finite = np.isfinite(rows[[cell_column(r, b) for r, b in zip(w['roi'], w['band'])]]
+                             .to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE))
+        beta = w['beta'].to_numpy()
+        iv = 1.0 / w['var_resid'].to_numpy() if weighting == 'ivw' else 1.0
+        num, den = ((np.sign(beta), np.abs(beta)) if weighting == 'unit'
+                    else (beta * iv, beta ** 2 * iv))
+        weight = (np.where(finite, num, 0.0)
+                  / np.where(finite, den, 0.0).sum(axis=1, keepdims=True))
+        parts.append(pd.DataFrame({
+            'subject': subject, 'roi': w['roi'].to_numpy(), 'band': w['band'].to_numpy(),
+            'weight': weight.mean(axis=0), 'dc_beta': w['dc_beta'].to_numpy(),
+            'has_cell': finite.any(axis=0),
+            'contribution': (weight * w['dc_beta'].to_numpy()).mean(axis=0)}))
+    return pd.concat(parts, ignore_index=True)
+
+
+def shift_by_cell(per_subject):
+    """Per cell, weight and contribution averaged over ALL subjects (0 where absent),
+    so contributions sum to the mean shift, and dc_beta over the subjects with it.
+    """
+    n = per_subject['subject'].nunique()
+    g = per_subject.groupby(['roi', 'band'], sort=False)
+    has = per_subject[per_subject['has_cell']].groupby(['roi', 'band'], sort=False)
+    return pd.DataFrame({'weight': g['weight'].sum() / n,
+                         'contribution': g['contribution'].sum() / n,
+                         'dc_beta': has['dc_beta'].mean(),
+                         'n_subjects': has['subject'].nunique()}).reset_index()
+
+
+def fig_dc_shift(cells, out_dir, name, title, rois, bands, model_dc):
+    """Grouped bars per ROI, one bar per band: decoder weight, dC effect on power,
+    contribution (rows), and the contribution summed by ROI and by band (right).
+    """
+    nb = len(bands)
+    cells = cells.set_index(['roi', 'band'])
+    fig = plt.figure(figsize=(20, 10))
+    grid = fig.add_gridspec(3, 2, width_ratios=(5, 1), hspace=0.35, wspace=0.18)
+    rows = [fig.add_subplot(grid[i, 0]) for i in range(3)]
+    for ax in rows[1:]:
+        ax.sharex(rows[0])
+    by_roi, by_band = fig.add_subplot(grid[0:2, 1]), fig.add_subplot(grid[2, 1])
+    centres = np.arange(len(rois)) * (nb + 1) + (nb - 1) / 2
+    for ax, col, label in zip(rows, ('weight', 'dc_beta', 'contribution'),
+                              ('Decoder weight (NRS per z)', 'ΔC effect on power\n'
+                               '(z per typical dose)', 'Contribution to the shift\n'
+                               '(NRS per typical dose)')):
+        _style(ax)
+        ax.grid(axis='x', visible=False)
+        ax.axhline(0, color=MUTED, lw=0.8)
+        for i in range(0, len(rois), 2):
+            ax.axvspan(i * (nb + 1) - 0.6, i * (nb + 1) + nb - 0.4, color=SHADE, lw=0,
+                       zorder=0)
+        for j, band in enumerate(bands):
+            v = [cells[col].get((roi, band), np.nan) for roi in rois]
+            ax.bar(np.arange(len(rois)) * (nb + 1) + j, v, width=0.9,
+                   color=BAND_COLOURS[band], label=BAND_SYMBOL[band] if col == 'weight' else None)
+        ax.set_ylabel(label, color=INK, fontsize=9)
+        ax.tick_params(labelbottom=False)
+    rows[-1].tick_params(labelbottom=True)
+    rows[-1].set_xticks(centres)
+    rows[-1].set_xticklabels([roi_schemes.ROI_RENAMES.get(r, r) for r in rois], rotation=55,
+                             ha='right', rotation_mode='anchor', fontsize=8)
+    rows[-1].set_xlim(-1, len(rois) * (nb + 1) - 1)
+    rows[0].legend(frameon=False, fontsize=8, labelcolor=INK, ncol=nb, loc='upper left')
+    total = cells['contribution'].sum()
+    absent = [r for r in rois if cells.loc[r, 'n_subjects'].isna().all()]
+    roi_sum = cells.groupby(level='roi', sort=False)['contribution'].sum().sort_values()
+    _style(by_roi)
+    by_roi.barh(range(len(roi_sum)), roi_sum.to_numpy(),
+                color=np.where(roi_sum.to_numpy() < 0, DC_COLOURS[4], DC_COLOURS[0]))
+    by_roi.set_yticks(range(len(roi_sum)))
+    by_roi.set_yticklabels([roi_schemes.ROI_RENAMES.get(r, r) for r in roi_sum.index],
+                           fontsize=7)
+    by_roi.axvline(0, color=MUTED, lw=0.8)
+    by_roi.set_title('By ROI, all bands', fontsize=9, color=INK)
+    band_sum = cells.groupby(level='band', sort=False)['contribution'].sum().reindex(bands)
+    _style(by_band)
+    by_band.barh(range(nb), band_sum.to_numpy(), color=[BAND_COLOURS[b] for b in bands])
+    by_band.set_yticks(range(nb))
+    by_band.set_yticklabels([BAND_SYMBOL[b] for b in bands], fontsize=8)
+    by_band.invert_yaxis()
+    by_band.axvline(0, color=MUTED, lw=0.8)
+    by_band.set_title('By band, all ROIs', fontsize=9, color=INK)
+    by_band.set_xlabel('NRS per typical dose', color=INK, fontsize=8)
+    fig.suptitle(f'{title}\nΔC shift of the prediction by cell: sum of contributions '
+                 f'{total:+.2f} NRS per typical dose; fitted ΔC effect on the prediction '
+                 f'at t2 {model_dc:+.2f}', fontsize=10, color=INK)
+    _footer(fig, 'Contribution = decoder weight x ΔC effect, per subject with its own LOO '
+                 'fold and the cells each pair has at t2, averaged over pairs, then over '
+                 'subjects with 0 where a subject lacks the cell, so the contributions sum '
+                 'to the mean shift. Weight and contribution average over all subjects, the '
+                 'ΔC effect over the subjects with the cell. The d_pain:dC term is left out. '
+                 f'No held-out pair has: {", ".join(absent) or "none"}. Descriptive.')
+    _save(fig, out_dir, name)
+
+
 # ============================================================================
 # Entry points
 # ============================================================================
@@ -523,7 +799,7 @@ def prediction_frame(run_dir, weights_name, prediction='raw', weighting='uniform
 
 def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min_subjects=3,
                bins=None):
-    """Every figure for one prediction (raw | adj) and weighting (uniform | ivw)."""
+    """Every figure for one prediction (raw | adj) and weighting (uniform | ivw | unit)."""
     bins = bins or DPAIN_BINS
     out_dir = Path(run_dir) / FIGURES_SUBDIR
     df = prediction_frame(run_dir, weights_name, prediction, weighting, bins)
@@ -576,12 +852,48 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
 
     steps, per_pair = exposure_steps(df.drop_duplicates('pair_id'))
     late = per_pair[per_pair['e1_start_h'] >= DC_FIRST_HOURS_OUT]
-    groups = late.assign(dc_group=dc_bin(late['dc_interval']))[['pair_id', 'dc_group']]
+    groups = late.assign(dc_group=dc_bin(late['dc_interval']))[
+        ['pair_id', 'dc_group', 'dc_interval']]
     dc_df = df.merge(steps, on=['pair_id', 't_min']).merge(groups, on='pair_id')
     logger.info('dC groups (pairs): %s', groups['dc_group'].value_counts().to_dict())
     for axis in ('hours', 'fraction'):
         fig_dc_groups(dc_df, out_dir, name(f'dc-groups-{axis}'), title, min_subjects, axis)
     fig_dc_actual(dc_df, out_dir, name('dc-groups-actual'), title, min_subjects)
+    # At t2 the step dc is the whole-interval dC.
+    at_t2 = dc_df[dc_df['t_min'] == dc_df['gap_min'].round()].dropna(subset=['value'])
+    dose_df = df.merge(groups[['pair_id', 'dc_group']], on='pair_id')
+    per_pair = near_t2(dose_df, keys=['dc_group']).dropna(subset=['value'])
+    slopes = dc_dose_slopes(per_pair)
+    model = pd.concat([dc_pain_model(at_t2), slopes], ignore_index=True)
+    io.write_table(model, Path(run_dir) / f'dc-pain-model_dpain_{tag}.csv',
+                   params={'formulas': DC_PAIN_FORMULAS, 'prediction': prediction,
+                           'weighting': weighting, 'first_hours_out': DC_FIRST_HOURS_OUT},
+                   parents=[Path(run_dir) / f'predictions_{weights_name}.csv'],
+                   subjects=sorted(at_t2['subject'].unique()),
+                   script='ieeg_ehr/analysis/plot_pain_change_prediction.py')
+    fig_dc_pain(dc_df, out_dir, name('dc-pain-bins'), title, min_subjects, model)
+    fig_dose_by_dc(dose_df, out_dir, name('dose-response-by-dc'), title, min_subjects, slopes)
+    params = json.loads((Path(run_dir) / 'provenance.json').read_text())['params']
+    weights_path = config.pain_change_prediction_weights_path(weights_name)
+    source_run = Path(io.read_sidecar(weights_path)['params']['source_run'])
+    per_subject = dc_shift_contributions(at_t2, params['trajectory_dir'], weights_name,
+                                         source_run, weighting)
+    # The heatmap's ROI and band order: the in-sample fit the LOO run refits.
+    source_params = json.loads((source_run / 'provenance.json').read_text())['params']
+    rois = list(dict.fromkeys(io.read_table(Path(source_params['reference_run']) / 'cells.csv',
+                                            on_stale='warn')['region']))
+    shift = shift_by_cell(per_subject)
+    io.write_table(shift, Path(run_dir) / f'dc-shift-contributions_dpain_{tag}.csv',
+                   params={'weights': weights_name, 'weighting': weighting,
+                           'first_hours_out': DC_FIRST_HOURS_OUT},
+                   parents=[weights_path, source_run / 'cells_loo.csv'],
+                   subjects=sorted(per_subject['subject'].unique()),
+                   script='ieeg_ehr/analysis/plot_pain_change_prediction.py')
+    fig_dc_shift(shift, out_dir, name('dc-shift-contributions'), title,
+                 [r for r in rois if r in set(shift['roi'])],
+                 list(BAND_SETS[source_params['band_set']]),
+                 model.set_index(['formula', 'term']).loc[
+                     (f'{DC_PAIN_FORMULAS[0]} + (1 | subject)', 'dc'), 'estimate'])
 
 
 def main(argv=None):
@@ -590,7 +902,7 @@ def main(argv=None):
     ap.add_argument('--run-dir', required=True)
     ap.add_argument('--weights', required=True)
     ap.add_argument('--prediction', choices=['raw', 'adj'], default='raw')
-    ap.add_argument('--weighting', choices=['uniform', 'ivw'], default='uniform')
+    ap.add_argument('--weighting', choices=['uniform', 'ivw', 'unit'], default='uniform')
     ap.add_argument('--min-subjects', type=int, default=3)
     ap.add_argument('--bins', type=json.loads, default=None,
                     help='JSON {label: [lo, hi]}, inclusive, in display order')
