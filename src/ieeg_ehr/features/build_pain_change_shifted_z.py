@@ -19,7 +19,11 @@ same minute blocks, mask projection and excluded-fraction rule as
 
 VALIDATION. Each report gets one stack of minute blocks [t - SHIFT - 5, t). Its last
 5 minutes are the stored window [t - 5, t), which must reproduce the stored table
-for every epoch x channel, NaN pattern included, or the task raises.
+for every epoch x channel, NaN pattern included, or the task raises. A session with
+fewer than MIN_EPOCHS epochs is skipped: no pair can use its shifted window, and its
+baseline is that one epoch, whose small SD lifts float32 rounding above the
+tolerance (sub-039: max |diff| 3.9e-5 where every multi-epoch session stays under
+2.3e-6).
 
 OUTPUT: `shifted_zscore_dir(vc, shift)`, beside the stored tables, one
 `zmean_sub-XXX_ses-YY.parquet` per subject-session in their schema (epoch_id,
@@ -46,6 +50,8 @@ from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
 logger = logging.getLogger(__name__)
 
 SCRIPT = 'ieeg_ehr/features/build_pain_change_shifted_z.py'
+#: A pair needs two epochs, so a session with fewer gets no shifted table.
+MIN_EPOCHS = 2
 
 
 def window_label(shift_min):
@@ -188,6 +194,12 @@ def main(argv=None):
             session = fullres_cells.subject_session_of(path)[1]
             if (out_dir / path.name).exists() and not args.overwrite:
                 logger.info('sub-%s ses-%s: exists, skipping', subject, session)
+                continue
+            n_epochs = io.read_table(path, columns=['epoch_id'], on_stale='ignore')[
+                'epoch_id'].nunique()
+            if n_epochs < MIN_EPOCHS:
+                logger.info('sub-%s ses-%s: %d epoch(s), no pair can use it, skipping',
+                            subject, session, n_epochs)
                 continue
             build_session(subject, session, vc, args.shift_min, out_dir)
     io.log_analysis(f'pain_change shifted z tables {window_label(args.shift_min)}, '
