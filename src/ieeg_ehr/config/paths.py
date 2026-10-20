@@ -29,6 +29,12 @@ from ieeg_ehr._repo import REPO_DIR   # noqa: F401  (re-exported; provenance + c
 RAW_DIR = '/oak/stanford/groups/ckeller1/data/iEEG_EHR/iEEG_NWB'
 FILE_REGISTRY_CSV = f'{RAW_DIR}/sherlock_file_registry.csv'
 
+#: The `iEEG_EHR_V2` re-conversion (docs/dataset_v2.md). Its own derivatives
+#: tree holds only outputs that describe V2 itself.
+V2_DIR = Path('/oak/stanford/groups/ckeller1/data/iEEG_EHR_V2')
+V2_RAW_DIR = V2_DIR / 'raw'
+V2_DERIVATIVES_BASE = V2_DIR / 'derivatives' / 'sisler'
+
 # ============================================================================
 # DERIVATIVES ROOT + TOP-LEVEL TREE
 # ============================================================================
@@ -355,6 +361,20 @@ BIPOLAR_PSD_FULLRES_ROOT = PREPROCESSED_ROOT / 'bipolar_psd'
 def bipolar_psd_fullres_nwb_path(subject, session, run):
     return (BIPOLAR_PSD_FULLRES_ROOT / f'sub-{subject}' / f'ses-{session}'
             / f'sub-{subject}_ses-{session}_run-{run}_bipolar_psd_fullres.nwb')
+
+
+# Heart rate from the EKG leads, one Parquet pair per subject-session
+# (preprocessing/ekg_hr.py). Small enough that per-run files would only cost
+# inodes.
+EKG_HR_ROOT = PREPROCESSED_ROOT / 'ekg_hr'
+
+
+def ekg_hr_path(subject, session):
+    return EKG_HR_ROOT / f'sub-{subject}_ses-{session}_hr.parquet'
+
+
+def ekg_rpeaks_path(subject, session):
+    return EKG_HR_ROOT / f'sub-{subject}_ses-{session}_rpeaks.parquet'
 
 
 def bipolar_trace_cache_dir():
