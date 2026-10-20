@@ -19,11 +19,14 @@ same minute blocks, mask projection and excluded-fraction rule as
 
 VALIDATION. Each report gets one stack of minute blocks [t - SHIFT - 5, t). Its last
 5 minutes are the stored window [t - 5, t), which must reproduce the stored table
-for every epoch x channel, NaN pattern included, or the task raises. A session with
-fewer than MIN_EPOCHS epochs is skipped: no pair can use its shifted window, and its
-baseline is that one epoch, whose small SD lifts float32 rounding above the
-tolerance (sub-039: max |diff| 3.9e-5 where every multi-epoch session stays under
-2.3e-6).
+for every epoch x channel to Z_VALIDATION_TOL, NaN pattern included, or the task
+raises. The tolerance is on z itself, not on a difference: the stored z comes from
+the float32 epoch cache and this z from the continuous PSD, and the two differ by a
+small per channel x frequency offset that cancels in a difference (the trajectory
+validates d(t2) to 1e-5). Measured 2026-10-19: max |diff| 2.3e-7 to 3.9e-5 per
+session (sub-039 3.9e-5, sub-167 1.9e-5, sub-177 1.2e-5, at |z| < 1, so not
+float32 rounding). A misplaced window or mask moves an epoch mean by 1e-3 or more.
+A pair's d_z then mixes the two sources, so it carries that offset, under 1e-4 z.
 
 OUTPUT: `shifted_zscore_dir(vc, shift)`, beside the stored tables, one
 `zmean_sub-XXX_ses-YY.parquet` per subject-session in their schema (epoch_id,
@@ -43,15 +46,15 @@ import pandas as pd
 from ieeg_ehr import config, io
 from ieeg_ehr.analysis import fullres_cells
 from ieeg_ehr.features.build_pain_change_trajectory import (
-    VALIDATION_TOL, WINDOW_MIN, MinuteBlocks, session_runs, window_means)
+    WINDOW_MIN, MinuteBlocks, session_runs, window_means)
 from ieeg_ehr.views import fullres_reader, view_config
 from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
 
 logger = logging.getLogger(__name__)
 
 SCRIPT = 'ieeg_ehr/features/build_pain_change_shifted_z.py'
-#: A pair needs two epochs, so a session with fewer gets no shifted table.
-MIN_EPOCHS = 2
+#: See VALIDATION in the module docstring.
+Z_VALIDATION_TOL = 1e-4
 
 
 def window_label(shift_min):
@@ -134,13 +137,13 @@ def build_session(subject, session, vc, shift_min, out_dir):
     stats = {'n_epochs': len(epochs), 'n_validated_values': int(diffs.size),
              'validation_max_abs_diff': float(diffs.max()) if diffs.size else None,
              'validation_median_abs_diff': float(np.median(diffs)) if diffs.size else None,
-             'nan_mismatch': nan_mismatch, 'validation_tol': VALIDATION_TOL,
+             'nan_mismatch': nan_mismatch, 'validation_tol': Z_VALIDATION_TOL,
              'elapsed_sec': round(time.time() - t0, 1)}
     logger.info('sub-%s ses-%s: %d epochs, validation %d values, max |diff| %.3g, '
                 '%d NaN-pattern mismatches, %.0fs', subject, session, len(epochs),
                 diffs.size, stats['validation_max_abs_diff'] or np.nan, nan_mismatch,
                 stats['elapsed_sec'])
-    if nan_mismatch or (diffs.size and diffs.max() > VALIDATION_TOL):
+    if nan_mismatch or (diffs.size and diffs.max() > Z_VALIDATION_TOL):
         raise AssertionError(f'sub-{subject} ses-{session}: the unshifted window does not '
                              f'reproduce {stored_path.name}: {stats}')
 
@@ -194,12 +197,6 @@ def main(argv=None):
             session = fullres_cells.subject_session_of(path)[1]
             if (out_dir / path.name).exists() and not args.overwrite:
                 logger.info('sub-%s ses-%s: exists, skipping', subject, session)
-                continue
-            n_epochs = io.read_table(path, columns=['epoch_id'], on_stale='ignore')[
-                'epoch_id'].nunique()
-            if n_epochs < MIN_EPOCHS:
-                logger.info('sub-%s ses-%s: %d epoch(s), no pair can use it, skipping',
-                            subject, session, n_epochs)
                 continue
             build_session(subject, session, vc, args.shift_min, out_dir)
     io.log_analysis(f'pain_change shifted z tables {window_label(args.shift_min)}, '
