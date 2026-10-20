@@ -15,7 +15,7 @@ into `<run-dir>/figures/` (docs/run_tokens.md):
   correlation mean the two effects dissociate. It shows dissociation only, not
   that the term fails to explain the pain slope.
 - `summary_dpain-<term>.png`: both scatters as two panels, every band in one
-  panel, coloured delta (blue) to high gamma (red).
+  panel, coloured delta (light green) to high gamma (dark green).
 
 The scatters take one panel per band, shared axes. Cells outlined are BH-significant for `d_pain`
 in `--main-run` (`dpain_bh_reject`), the cells of the main heatmap. Both fits
@@ -51,6 +51,10 @@ TERM_LABELS = {'dHR': ('heart-rate change', 'Heart-rate slope (Δz per bpm)', 'H
                'dHRV': ('HRV change', 'HRV slope (Δz per Δ ln RMSSD)', 'HRV')}
 BAND_LABELS = {'delta': 'Delta', 'theta': 'Theta', 'alpha': 'Alpha', 'beta': 'Beta',
                'gamma': 'Gamma', 'high_gamma': 'High gamma'}
+#: The summary figure's band ramp: `BAND_CMAP` sampled over BAND_CMAP_RANGE, delta at
+#: the light end. The light end stays above the near-white steps so delta shows on white.
+BAND_CMAP = 'Greens'
+BAND_CMAP_RANGE = (0.35, 1.0)
 BAND_SYMBOLS = {'delta': 'δ', 'theta': 'θ', 'alpha': 'α', 'beta': 'β', 'gamma': 'γ',
                 'high_gamma': 'hγ'}
 
@@ -137,9 +141,11 @@ def facet_grid(df, bands, x, y, xlabel, ylabel, title, subtitle, out, identity):
 
 def summary_figure(df, bands, stats, term, out):
     """Panel A: raw vs adjusted pain slope, identity line. Panel B: pain vs autonomic slope.
-    Every band in one panel, delta to high gamma blue to red; main-heatmap cells outlined."""
+    Every band in one panel, delta to high gamma light to dark green; main-heatmap cells
+    outlined."""
     _, auto_label, short = TERM_LABELS[term]
-    colours = dict(zip(bands, plt.get_cmap('coolwarm')(np.linspace(0, 1, len(bands)))))
+    colours = dict(zip(bands, plt.get_cmap(BAND_CMAP)(np.linspace(*BAND_CMAP_RANGE,
+                                                                   len(bands)))))
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(9.4, 5.2))
 
     def dots(ax, x, y):
@@ -150,7 +156,7 @@ def summary_figure(df, bands, stats, term, out):
                     ax.scatter(c[x], c[y], s=60, color=colours[band], edgecolors='black',
                                linewidths=1.1, zorder=4)
                 else:
-                    ax.scatter(c[x], c[y], s=24, color=colours[band], alpha=0.5,
+                    ax.scatter(c[x], c[y], s=24, color=colours[band], alpha=0.6,
                                edgecolors='none', zorder=3)
         ax.axhline(0, color=GRID, linewidth=1, zorder=1)
         ax.axvline(0, color=GRID, linewidth=1, zorder=1)
