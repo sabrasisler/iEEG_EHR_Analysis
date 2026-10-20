@@ -96,6 +96,8 @@ always names one set of curves.
 | `heatmap_dc.png` | `dC` fixed effect (change in exposure), region x band | `plot_pain_change_heatmap --term dc` |
 | `heatmap_cbar.png` | `Cbar` fixed effect (mean exposure), region x band | `plot_pain_change_heatmap --term cbar` |
 | `heatmap_dhr.png` | `dHR` fixed effect (heart-rate change), region x band | `plot_pain_change_heatmap --term dhr` |
+| `scatter_dpain-raw-vs-adj.png` | `d_pain` beta per cell, original (x) vs adjusted for `dHR` (y), identity line, one panel per band, main-heatmap BH cells outlined. In a `-dhr` run | `plot_pain_change_autonomic` |
+| `scatter_dpain-vs-dhr.png` | `d_pain` beta (x) vs `dHR` beta (y) per cell of a `-dhr` run, one panel per band | `plot_pain_change_autonomic` |
 
 Overwrite a figure when only its look changes (layout, colour, fonts, labels).
 Give it a new name when what it shows changes (term, statistic, correction,
