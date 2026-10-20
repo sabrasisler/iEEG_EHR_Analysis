@@ -37,9 +37,11 @@ ECG in it scored a median of 0.19, clean subjects 0.92-0.99.
 starting_time + second, UTC offset stripped. Correct on V1 and V2
 (docs/dataset_v2.md §3). hr_bpm is evaluated at the second's center.
 
-A run that cannot be read (corrupt chunk, truncated file, no EKG series;
-docs/dataset_v2.md §2.2) is logged, listed in the sidecar's `runs` with its
-error, and contributes no rows.
+A V1 run whose EKG fails to decode (corrupt chunk, truncated file; 257 of
+7,781 runs on 2026-10-19, docs/dataset_v2.md §2.2) is read from its V2 copy,
+which holds the same samples. The sidecar's `runs` records the `source` of
+each run. A run that neither version can supply, or that has no EKG series,
+is logged, listed in `runs` with its error, and contributes no rows.
 
 Usage:
   python -m ieeg_ehr.preprocessing.ekg_hr --subjects 019 085
@@ -180,9 +182,20 @@ def hr_per_second(peaks, quality, fs, n_samples):
     return hr, q, rr
 
 
-def process_run(run, nwb_path):
+def read_ekg_v1_or_v2(subject, session, run, nwb_path):
+    """read_ekg on the V1 file, or on the V2 copy when V1 fails to decode."""
+    try:
+        return read_ekg(nwb_path) + ('V1',)
+    except OSError as e:
+        v2_path = config.v2_raw_nwb_path(subject, session, run)
+        logger.warning('sub-%s ses-%s run-%s: V1 EKG unreadable (%r); reading %s',
+                       subject, session, run, e, v2_path)
+        return read_ekg(v2_path) + ('V2',)
+
+
+def process_run(subject, session, run, nwb_path):
     """One run's per-second table, beat table and summary."""
-    data, labels, fs, start = read_ekg(nwb_path)
+    data, labels, fs, start, source = read_ekg_v1_or_v2(subject, session, run, nwb_path)
     best = best_lead(candidate_leads(data, labels), fs)
     peaks, quality = best['peaks'], best['quality']
     hr, q, rr = hr_per_second(peaks, quality, fs, len(data))
@@ -195,7 +208,7 @@ def process_run(run, nwb_path):
     beats_df = pd.DataFrame({'run': run, 'sample': peaks, 't_run_sec': t_run,
                              'time': start + pd.to_timedelta(t_run, unit='s'),
                              'quality': quality})
-    summary = {'run': run, 'sfreq': fs, 'n_samples': len(data), 'labels': labels,
+    summary = {'run': run, 'source': source, 'sfreq': fs, 'n_samples': len(data), 'labels': labels,
                'lead': best['lead'], 'inverted': best['inverted'],
                'n_beats': len(peaks), 'n_good_beats': best['n_good_beats']}
     return hr_df, beats_df, summary
@@ -213,7 +226,7 @@ def build_session(subject, session, runs, overwrite=False):
     for run, nwb_path in runs:
         t0 = time.time()
         try:
-            hr_df, beats_df, summary = process_run(run, nwb_path)
+            hr_df, beats_df, summary = process_run(subject, session, run, nwb_path)
         except (OSError, KeyError) as e:
             logger.error('sub-%s ses-%s run-%s: cannot read EKG (%r); no rows',
                          subject, session, run, e)
@@ -232,7 +245,10 @@ def build_session(subject, session, runs, overwrite=False):
     if not hr_tables:
         raise RuntimeError(f'sub-{subject} ses-{session}: no run had readable EKG')
 
-    sidecar = dict(params=PARAMS, parents=[str(p) for _, p in runs],
+    parents = [str(p) for _, p in runs] + [
+        str(config.v2_raw_nwb_path(subject, session, s['run']))
+        for s in summaries if s.get('source') == 'V2']
+    sidecar = dict(params=PARAMS, parents=parents,
                    subjects=[f'sub-{subject}'],
                    extra={'runs': summaries,
                           'n_runs_failed': sum('error' in s for s in summaries)})

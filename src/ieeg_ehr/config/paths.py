@@ -33,6 +33,11 @@ FILE_REGISTRY_CSV = f'{RAW_DIR}/sherlock_file_registry.csv'
 #: tree holds only outputs that describe V2 itself.
 V2_DIR = Path('/oak/stanford/groups/ckeller1/data/iEEG_EHR_V2')
 V2_RAW_DIR = V2_DIR / 'raw'
+
+
+def v2_raw_nwb_path(subject, session, run):
+    return (V2_RAW_DIR / f'sub-{subject}' / f'ses-{session}' / 'ieeg'
+            / f'sub-{subject}_ses-{session}_run-{run}.nwb')
 V2_DERIVATIVES_BASE = V2_DIR / 'derivatives' / 'sisler'
 
 # ============================================================================
