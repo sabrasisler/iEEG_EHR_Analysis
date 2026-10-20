@@ -28,6 +28,8 @@ tokens of docs/run_tokens.md. Kinds:
                          each pair's t2, one line per whole-interval ΔC bin (DC_BINS),
                          first-day pairs out
     dc-groups-fraction   the same on the fraction of the interval, t1 = 0, t2 = 1
+    dc-groups-actual     per ΔC bin, actual Δpain at report 2 beside the prediction
+                         at t2, and pain at report 1 and report 2
 
 For the adjusted prediction the first EXTRAPOLATE_BELOW_MIN minutes are hatched: the
 fit saw no gap that short.
@@ -450,6 +452,58 @@ def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
     _save(fig, out_dir, name)
 
 
+def fig_dc_actual(df, out_dir, name, title, min_subjects):
+    """Per ΔC bin, actual Δpain at report 2 beside the prediction at t2 (left), and
+    pain at report 1 and report 2 (right). Subject means first, then mean +/- SEM.
+    """
+    at_t2 = (df[df['t_min'] == df['gap_min'].round()].dropna(subset=['value'])
+             .assign(pain2=lambda d: d['pain1'] + d['delta_pain']))
+    per_subject = (at_t2.groupby(['dc_group', 'subject'], observed=True)
+                   [['delta_pain', 'value', 'pain1', 'pain2']].mean().reset_index())
+    sizes = group_sizes(at_t2, 'dc_group')
+    drawn = [g for g in DC_BINS if sizes.get(g, (0, 0))[0] >= min_subjects]
+    rng = np.random.default_rng(0)
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11, 4.6),
+                                      gridspec_kw={'width_ratios': (3, 2)})
+    for ax in (left, right):
+        _style(ax)
+    left.axhline(0, color=MUTED, lw=0.8, zorder=1)
+    for i, g in enumerate(drawn):
+        colour = DC_COLOURS[DC_BINS.index(g)]
+        s = per_subject[per_subject['dc_group'] == g]
+        left.scatter(i - 0.15 + rng.uniform(-0.07, 0.07, len(s)), s['delta_pain'], s=12,
+                     color=colour, alpha=0.35, lw=0, zorder=2)
+        for col, dx, face in (('delta_pain', -0.15, colour), ('value', 0.15, 'white')):
+            left.errorbar(i + dx, s[col].mean(), yerr=_sem(s[col]), fmt='o', ms=7,
+                          color=colour, mfc=face, mew=1.5, elinewidth=1.4, capsize=0,
+                          zorder=3)
+        right.errorbar([i - 0.12, i + 0.12], s[['pain1', 'pain2']].mean(),
+                       yerr=[_sem(s['pain1']), _sem(s['pain2'])], fmt='-', color=colour,
+                       elinewidth=1.4, capsize=0, lw=1.4)
+        right.plot(i - 0.12, s['pain1'].mean(), 'o', ms=6, color=colour, mfc='white', mew=1.5)
+        right.plot(i + 0.12, s['pain2'].mean(), 'o', ms=6, color=colour)
+    labels = [f'{g}\n{sizes[g][0]}/{sizes[g][1]}' for g in drawn]
+    for ax in (left, right):
+        ax.set_xticks(range(len(drawn)))
+        ax.set_xticklabels(labels, fontsize=8)
+        ax.set_xlim(-0.6, len(drawn) - 0.4)
+        ax.set_xlabel('ΔC, t1 to t2', color=INK)
+    left.set_ylabel('Δpain, report 2 - report 1 (NRS)', color=INK)
+    right.set_ylabel('Pain (NRS)', color=INK)
+    right.set_title('Open: report 1. Filled: report 2.', fontsize=9, color=MUTED)
+    handles = [plt.Line2D([], [], ls='', marker='o', ms=6, color=NEUTRAL, mfc=face, mew=1.5)
+               for face in (NEUTRAL, 'white')]
+    left.legend(handles, ['actual, report 2', 'predicted, t2'], loc='upper left',
+                frameon=False, fontsize=8, labelcolor=INK)
+    fig.suptitle(title, fontsize=10, color=INK)
+    _footer(fig, f'{at_t2["subject"].nunique()} subjects, {at_t2["pair_id"].nunique()} pairs, '
+                 f'the dc-groups pairs with a prediction at t2. Tick labels: subjects/pairs. '
+                 f'Small dots: subject means of actual Δpain, x jittered. '
+                 f'Large: mean ± SEM across subjects. Groups under {min_subjects} subjects '
+                 f'dropped ({len(DC_BINS) - len(drawn)}).')
+    _save(fig, out_dir, name)
+
+
 # ============================================================================
 # Entry points
 # ============================================================================
@@ -527,6 +581,7 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
     logger.info('dC groups (pairs): %s', groups['dc_group'].value_counts().to_dict())
     for axis in ('hours', 'fraction'):
         fig_dc_groups(dc_df, out_dir, name(f'dc-groups-{axis}'), title, min_subjects, axis)
+    fig_dc_actual(dc_df, out_dir, name('dc-groups-actual'), title, min_subjects)
 
 
 def main(argv=None):
