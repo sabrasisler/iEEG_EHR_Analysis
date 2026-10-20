@@ -14,8 +14,10 @@ into `<run-dir>/figures/` (docs/run_tokens.md):
   term's beta, both of `--run-dir`. Cells spread along x with a near-zero
   correlation mean the two effects dissociate. It shows dissociation only, not
   that the term fails to explain the pain slope.
+- `summary_dpain-<term>.png`: both scatters as two panels, every band in one
+  panel, coloured delta (blue) to high gamma (red).
 
-One panel per band, shared axes. Cells outlined are BH-significant for `d_pain`
+The scatters take one panel per band, shared axes. Cells outlined are BH-significant for `d_pain`
 in `--main-run` (`dpain_bh_reject`), the cells of the main heatmap. Both fits
 must come from one `autonomics/` folder, so they share rows. The per-cell table
 and the attenuation numbers go to `<run-dir>/autonomic_compare.csv`.
@@ -44,11 +46,13 @@ INK = '#1a1a19'
 MUTED = '#6b6a64'
 GRID = '#e4e3dd'
 SURFACE = '#fcfcfb'
-#: Autonomic term -> (name in titles, axis label of its slope).
-TERM_LABELS = {'dHR': ('heart-rate change', 'Heart-rate slope (Δz per bpm)'),
-               'dHRV': ('HRV change', 'HRV slope (Δz per Δ ln RMSSD)')}
+#: Autonomic term -> (name in titles, axis label of its slope, short name).
+TERM_LABELS = {'dHR': ('heart-rate change', 'Heart-rate slope (Δz per bpm)', 'HR'),
+               'dHRV': ('HRV change', 'HRV slope (Δz per Δ ln RMSSD)', 'HRV')}
 BAND_LABELS = {'delta': 'Delta', 'theta': 'Theta', 'alpha': 'Alpha', 'beta': 'Beta',
                'gamma': 'Gamma', 'high_gamma': 'High gamma'}
+BAND_SYMBOLS = {'delta': 'δ', 'theta': 'θ', 'alpha': 'α', 'beta': 'β', 'gamma': 'γ',
+                'high_gamma': 'hγ'}
 
 
 def compare_cells(base, adjusted, main, prefix):
@@ -131,6 +135,58 @@ def facet_grid(df, bands, x, y, xlabel, ylabel, title, subtitle, out, identity):
     plt.close(fig)
 
 
+def summary_figure(df, bands, stats, term, out):
+    """Panel A: raw vs adjusted pain slope, identity line. Panel B: pain vs autonomic slope.
+    Every band in one panel, delta to high gamma blue to red; main-heatmap cells outlined."""
+    _, auto_label, short = TERM_LABELS[term]
+    colours = dict(zip(bands, plt.get_cmap('coolwarm')(np.linspace(0, 1, len(bands)))))
+    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(9.4, 5.2))
+
+    def dots(ax, x, y):
+        for sig in (False, True):
+            for band in bands:
+                c = df[(df['freq'] == band) & (df['main_significant'] == sig)]
+                if sig:
+                    ax.scatter(c[x], c[y], s=60, color=colours[band], edgecolors='black',
+                               linewidths=1.1, zorder=4)
+                else:
+                    ax.scatter(c[x], c[y], s=24, color=colours[band], alpha=0.5,
+                               edgecolors='none', zorder=3)
+        ax.axhline(0, color=GRID, linewidth=1, zorder=1)
+        ax.axvline(0, color=GRID, linewidth=1, zorder=1)
+        for side in ('top', 'right'):
+            ax.spines[side].set_visible(False)
+
+    dots(ax_a, 'dpain_beta_raw', 'dpain_beta_adj')
+    lim = 1.08 * np.abs(df[['dpain_beta_raw', 'dpain_beta_adj']].to_numpy()).max()
+    ax_a.plot([-lim, lim], [-lim, lim], color=MUTED, linestyle='--', linewidth=1.3, zorder=2)
+    ax_a.set(xlim=(-lim, lim), ylim=(-lim, lim), aspect='equal')
+    ax_a.set_xlabel('Pain slope, original model')
+    ax_a.set_ylabel(f'Pain slope, {short}-adjusted')
+    ax_a.set_title(f'A  Pain slope after {short} adjustment', loc='left', fontweight='bold')
+    ax_a.text(0.04, 0.96, f"slope = {stats['slope_adj_on_raw']:.2f}\n"
+              f"sig. cells: {stats['median_pct_change_main_significant']:+.0f}% median",
+              transform=ax_a.transAxes, va='top', fontsize=11)
+
+    dots(ax_b, 'dpain_beta_adj', 'auto_beta')
+    ax_b.set_xlabel('Pain slope (Δz / pain point)')
+    ax_b.set_ylabel(auto_label.replace(' per ', ' / '))
+    ax_b.set_title(f'B  Pain vs {short} slopes', loc='left', fontweight='bold')
+    ax_b.text(0.04, 0.96, f"r = {stats['r_dpain_auto']:.2f}", transform=ax_b.transAxes,
+              va='top', fontsize=11)
+
+    handles = [plt.Line2D([], [], marker='o', linestyle='', markersize=8, color=colours[b],
+                          label=BAND_SYMBOLS.get(b, b)) for b in bands]
+    handles.append(plt.Line2D([], [], marker='o', linestyle='', markersize=8, color='white',
+                              markeredgecolor='black', label='significant'))
+    fig.legend(handles=handles, loc='lower center', ncol=len(handles), frameon=False,
+               fontsize=11, handletextpad=0.3, columnspacing=1.4)
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=200, facecolor='white')
+    plt.close(fig)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -151,7 +207,7 @@ def main(argv=None):
     if set(model_terms(base_params['model'])) & set(AUTONOMIC_TERMS):
         raise SystemExit(f'--base-run has an autonomic term: {base_params["formula"]}')
     prefix = TERM_PREFIX[term]
-    name, auto_label = TERM_LABELS[term]
+    name, auto_label, _ = TERM_LABELS[term]
 
     pairs = {d: pd.read_csv(d / 'pair_index.csv', usecols=['subject_id', 't1', 't2'])
              for d in (run_dir, base_dir)}
@@ -193,7 +249,9 @@ def main(argv=None):
                f"cells r = {stats['r_dpain_auto']:.2f}. Dissociation only: this does not "
                f'test whether {name} explains the pain slope.',
                pain_auto, identity=False)
-    for out in (raw_adj, pain_auto):
+    combined = figures / f'summary_dpain-{prefix}.png'
+    summary_figure(df, bands, stats, term, combined)
+    for out in (raw_adj, pain_auto, combined):
         io.write_sidecar(out, kind='figure', script=SCRIPT, params=vars(args),
                          parents=parents, extra={'summary': stats})
     io.log_analysis(f'pain_change autonomic scatters (raw vs {term}-adjusted d_pain, '
