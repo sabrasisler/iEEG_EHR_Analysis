@@ -24,6 +24,9 @@ dependencies = [
                  #   pyarrow wheels are manylinux_2_28, so a plain install falls
                  #   through to a source build. See docs/io_conventions.md.
     "joblib",    # 1.5.3 — fitted models / FOOOF objects, never tables
+    "neurokit2", # 0.2.13 + PyWavelets 1.8.0 installed 2026-10-19 with --no-deps,
+                 #   for preprocessing/ekg_hr.py. Every other requirement was
+                 #   already in the venv.
 ]
 
 [project.optional-dependencies]

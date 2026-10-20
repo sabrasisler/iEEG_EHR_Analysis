@@ -231,6 +231,7 @@ Everything lives in the shared venv `$GROUP_HOME/venvs/ieeg_ehr_analysis`:
 |---|---|
 | 2026-07-27 | **pyarrow 20.0.0, joblib 1.5.3** — the IO layer |
 | 2026-08-05 | **nilearn 0.14.0, nibabel 5.4.2, scikit-learn 1.7.2, threadpoolctl 3.6.0, colorcet 3.2.1** — the electrode glass brain (`analysis/plot_electrode_locations.py`) |
+| 2026-10-19 | **neurokit2 0.2.13, PyWavelets 1.8.0** — heart rate from the EKG leads (`preprocessing/ekg_hr.py`) |
 
 **numpy 2.4.2 / scipy 1.16.3 / pandas 2.3.3 have never been touched**, and each
 install verifies that explicitly before and after rather than assuming it.
