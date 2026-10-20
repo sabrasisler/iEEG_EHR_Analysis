@@ -140,6 +140,8 @@ def test_tokens():
             == 'zscoreallep-paperbands6hg200-roiv2ofcins-nofirst24h')
     assert (pain_change.data_token(vc, 'paper_bands_6_hg200', None)
             == 'zscoreallep-paperbands6hg200-roiv2ofcins')
+    assert (pain_change.data_token(vc, 'paper_bands_6_hg200', None, heart_rate=True)
+            == 'zscoreallep-paperbands6hg200-roiv2ofcins-hr')
     assert pain_change.run_token('opioid', 'sm') == 'opioid_mme1_sm'
     assert pain_change.run_token('opioid', 'lme4') == 'opioid_mme1_lme4'
     assert pain_change.run_token('painchange', 'sm') == 'painchange_sm'
@@ -232,3 +234,17 @@ def test_opioid_dc_model_swaps_cbar_for_dc():
     assert terms == ['d_pain', 'dC', 'd_pain:dC', 'pain_1_within', 'gap_h']
     assert 'Cbar' not in terms and pain_change.uses_exposure('opioid-dc-pairint')
     assert pain_change.run_token('opioid-dc-pairint', 'lme4') == 'opioid-dc-pairint_mme1_lme4'
+
+
+def test_epoch_heart_rate_means_good_seconds_in_window():
+    t0 = np.datetime64('2000-01-01T00:00:00', 'ns')
+    times = t0 + np.arange(600).astype('timedelta64[s]')
+    hr = pd.DataFrame({'time': times, 'hr_bpm': np.r_[np.full(300, 60.), np.full(300, 90.)]})
+    hr = hr.drop(index=range(300, 450))           # half of the second epoch lost to quality
+    starts = np.array([t0, t0 + np.timedelta64(300, 's')])
+    mean, cov = pain_change.epoch_heart_rate(hr, starts, starts + np.timedelta64(300, 's'))
+    np.testing.assert_allclose(mean, [60, 90])
+    np.testing.assert_allclose(cov, [1.0, 0.5])
+    empty, cov0 = pain_change.epoch_heart_rate(hr, starts - np.timedelta64(900, 's'),
+                                               starts - np.timedelta64(600, 's'))
+    assert np.isnan(empty).all() and (cov0 == 0).all()

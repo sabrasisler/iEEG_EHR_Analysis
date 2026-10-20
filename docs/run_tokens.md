@@ -37,6 +37,7 @@ them. Joined with `-`, in this order.
 | ROI scheme | AXIS 6 | `roiv2ofcins`, `roiv3ins`, ... (DK schemes). `hcpexv5` = paper ROIs from an `hcpex_paper` coverage run, version of its mapping file | `views/view_config.py` `ROI_SCHEME_CODES` and `roi_code`, decoded in `docs/view_registry.md` |
 | first-hours exclusion | pair filter | `nofirst24h` = pairs whose first epoch starts within 24 h of `session_start` dropped. Absent = none dropped | `pain_change.data_token`, `--exclude-first-h` |
 | second-epoch window | pairing | `e2pre10to5` = each pair's later epoch is [t2 - 10, t2 - 5) min (shifted tables, `features/build_pain_change_shifted_z.py`), the earlier stays [t1 - 5, t1). Absent = [t2 - 5, t2) | `pain_change.data_token`, `--second-epoch-shift-min` |
+| heart rate | pair filter | `hr` = pairs carry `dHR` (`pain_change.add_heart_rate`), and pairs without heart rate in both epochs are dropped (good seconds under `HR_MIN_COVERAGE` of an epoch at quality >= `HR_MIN_QUALITY`). Absent = no HR, no pairs dropped | `pain_change.data_token`, `--heart-rate` |
 
 `scheme_code` also carries the pain-bin code (`relpain`). `pain_change` never
 bins pain, so its data token leaves that code out.
@@ -67,6 +68,7 @@ Each ID is written out in full in `MODELS`, and nothing parses the name.
 | `opioid-pairint` | `opioid` + `(1 \| pair_id)`, one shift shared by a pair's channels. lme4 only | 2026-10-15 |
 | `opioid-dc-pairint` | `d_z ~ d_pain + dC + d_pain:dC + pain_1_within + gap_h` + `(1 \| pair_id)`. dC in place of Cbar, not centred. lme4 only | 2026-10-15 |
 | `opioid-dc-pairint-nosubjint` | `opioid-dc-pairint` without `(1 \| subject)`: random effects `(0 + d_pain \| subject) + (1 \| pair_id)`. The intercept fitted to zero in all 132 cells of the 2026-10-15 run (a subject offset cancels in d_z). lme4 only | 2026-10-19 |
+| `opioid-dc-pairint-nosubjint-dhr` | `opioid-dc-pairint-nosubjint` + `dHR`, the heart-rate change between the pair's two epochs in bpm, not centred. The autonomic-confound check. Needs the `hr` data token. lme4 only | 2026-10-20 |
 
 Every model except a `-nosubjint` one takes the random effects
 `(1 \| subject) + (0 + d_pain \| subject)` (`pain_change.RE_SUBJECT`). A model ID
@@ -93,6 +95,7 @@ always names one set of curves.
 | `heatmap_dpain-x-dc.png` | `d_pain:dC` fixed effect, region x band | `plot_pain_change_heatmap --term dpain_x_dc` |
 | `heatmap_dc.png` | `dC` fixed effect (change in exposure), region x band | `plot_pain_change_heatmap --term dc` |
 | `heatmap_cbar.png` | `Cbar` fixed effect (mean exposure), region x band | `plot_pain_change_heatmap --term cbar` |
+| `heatmap_dhr.png` | `dHR` fixed effect (heart-rate change), region x band | `plot_pain_change_heatmap --term dhr` |
 
 Overwrite a figure when only its look changes (layout, colour, fonts, labels).
 Give it a new name when what it shows changes (term, statistic, correction,
@@ -114,4 +117,4 @@ Recorded in provenance, constant across runs so far.
 | rows | pairs | consecutive assessments, 30-240 min apart |
 | rows | coverage floors | 8 subjects, 20 rows per cell |
 | model | estimation | REML. `sm`: default optimizer, maxiter 200. `lme4`: bobyqa, maxfun 2e5 |
-| analysis | FDR | BH per term (`d_pain`, `d_pain:Cbar`, `d_pain:dC`, `dC`, `Cbar`), across all fitted cells and within region, failed fits excluded |
+| analysis | FDR | BH per term (`d_pain`, `d_pain:Cbar`, `d_pain:dC`, `dC`, `Cbar`, `dHR`), across all fitted cells and within region, failed fits excluded |

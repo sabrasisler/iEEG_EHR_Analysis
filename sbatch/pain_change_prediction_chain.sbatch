@@ -21,6 +21,8 @@
 # STOP_AFTER_FIT=1 ends after step 1, when the trajectory must first be built from the new fit.
 # SHIFT=5 takes each pair's later epoch from [t2 - 10, t2 - 5) min
 # (pain_change --second-epoch-shift-min; build the shifted tables first).
+# HEART_RATE=1 adds dHR and keeps only pairs with heart rate in both epochs
+# (pain_change --heart-rate); a `-dhr` model needs it.
 set -euo pipefail
 module load math R/4.4.2
 module load python/3.12
@@ -39,8 +41,8 @@ if [ -z "${FIT_DIR:-}" ]; then
   FIT_DIR=$(python -m ieeg_ehr.analysis.pain_change --model "$MODEL" --engine "$ENGINE" \
     --roi-scheme "$ROI" ${EXCLUDE_FIRST_H:+--exclude-first-h "$EXCLUDE_FIRST_H"} \
     ${INSULA_RUN:+--insula-from-run "$INSULA_RUN"} ${SHIFT:+--second-epoch-shift-min "$SHIFT"} \
-    "${VIEW[@]}" | tail -1)
-  for TERM in dpain dc dpain_x_dc; do
+    ${HEART_RATE:+--heart-rate} "${VIEW[@]}" | tail -1)
+  for TERM in dpain dc dpain_x_dc dhr; do
     if grep -q "^${TERM}_beta\|,${TERM}_beta," "$FIT_DIR/cells.csv"; then
       python -m ieeg_ehr.analysis.plot_pain_change_heatmap --run-dir "$FIT_DIR" --term "$TERM" \
         --domain-scheme "$DOMAIN_SCHEME"

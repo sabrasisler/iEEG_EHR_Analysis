@@ -106,7 +106,10 @@ _OPIOID = 'd_z ~ d_pain + dC + Cbar + d_pain:Cbar + pain_1_within + gap_h'
 #: ΔC in place of Cbar, in the main effects and the interaction. dC is not centred:
 #: 0 already means no exposure change, so `d_pain` is the slope at steady exposure.
 _OPIOID_DC = 'd_z ~ d_pain + dC + d_pain:dC + pain_1_within + gap_h'
-_PAIR = f'{RE_SUBJECT} + (1 | pair_id)'
+#: `_OPIOID_DC` plus the heart-rate change between the pair's two epochs, the
+#: autonomic-confound check. dHR is not centred: 0 means no change.
+_OPIOID_DC_DHR = 'd_z ~ d_pain + dC + d_pain:dC + dHR + pain_1_within + gap_h'
+_PAIR =f'{RE_SUBJECT} + (1 | pair_id)'
 #: `_PAIR` without the subject intercept. d_z is a within-subject difference of two
 #: epochs z-scored against the same session baseline, so a subject offset cancels
 #: and `(1 | pair_id)` takes up what is left: the intercept variance fitted to zero
@@ -124,22 +127,31 @@ MODELS = {
     'opioid-pairint': Model(_OPIOID, _PAIR),
     'opioid-dc-pairint': Model(_OPIOID_DC, _PAIR),
     'opioid-dc-pairint-nosubjint': Model(_OPIOID_DC, _PAIR_NOSUBJINT),
+    'opioid-dc-pairint-nosubjint-dhr': Model(_OPIOID_DC_DHR, _PAIR_NOSUBJINT),
 }
 #: Fixed-effect term -> column prefix in cells.csv.
 TERM_PREFIX = {'d_pain': 'dpain', 'pain_1_within': 'baseline', 'gap_h': 'gap',
                'dC': 'dc', 'Cbar': 'cbar', 'd_pain:Cbar': 'dpain_x_cbar',
-               'd_pain:dC': 'dpain_x_dc'}
+               'd_pain:dC': 'dpain_x_dc', 'dHR': 'dhr'}
 #: Terms that each get their own BH family.
-FDR_TERMS = ('d_pain', 'd_pain:Cbar', 'd_pain:dC', 'dC', 'Cbar')
+FDR_TERMS = ('d_pain', 'd_pain:Cbar', 'd_pain:dC', 'dC', 'Cbar', 'dHR')
 EXPOSURE_TERMS = ('dC', 'Cbar', 'd_pain:Cbar', 'd_pain:dC')
+#: Heart rate of a pair epoch (`add_heart_rate`): the mean `hr_bpm` of the epoch's
+#: seconds with `quality` >= HR_MIN_QUALITY (preprocessing/ekg_hr.py), defined only
+#: when those seconds cover at least HR_MIN_COVERAGE of the epoch. 0.8 is the
+#: quality the extractor picks its lead by: a lead with no ECG scored a median 0.19,
+#: clean leads 0.92-0.99.
+HR_MIN_QUALITY = 0.8
+HR_MIN_COVERAGE = 0.5
 #: Fitting-engine tokens (docs/run_tokens.md): statsmodels `MixedLM`, `lme4::lmer`.
 ENGINES = ('sm', 'lme4')
 LME4_SCRIPT = Path(__file__).with_name('pain_change_lmer.R')
 LME4_OPTIMIZER = 'bobyqa'
-#: Columns the lme4 frame carries besides cell_id, subject and d_z.
-LME4_COLUMNS = ['pair_id', 'd_pain', 'dC', 'Cbar', 'pain_1_within', 'gap_h']
-#: Pair columns a cell frame carries.
-PAIR_COLUMNS = ['pair_id', 'd_pain', 'pain_1', 'gap_h', 'dC', 'Cbar']
+#: Columns the lme4 frame carries besides cell_id, subject and d_z. dHR only
+#: under --heart-rate.
+LME4_COLUMNS = ['pair_id', 'd_pain', 'dC', 'Cbar', 'dHR', 'pain_1_within', 'gap_h']
+#: Pair columns a cell frame carries, of those the pairs have.
+PAIR_COLUMNS = ['pair_id', 'd_pain', 'pain_1', 'gap_h', 'dC', 'Cbar', 'dHR']
 
 #: One per cell, in report order. `boundary`: a random-effect variance
 #: contributes under mm.BOUNDARY_TOL of the residual variance (`boundary_component`
@@ -164,7 +176,11 @@ def uses_exposure(model):
     return any(t in EXPOSURE_TERMS for t in model_terms(model))
 
 
-def data_token(vc, band_set, exclude_first_h, shift_min=0):
+def uses_heart_rate(model):
+    return 'dHR' in model_terms(model)
+
+
+def data_token(vc, band_set, exclude_first_h, shift_min=0, heart_rate=False):
     """The level-4 folder: which rows go in and what their d_z is (docs/run_tokens.md)."""
     norm = (view_config.NORMALIZATION_CODES[vc.normalization]
             + view_config.BASELINE_CODES[vc.baseline])
@@ -174,6 +190,8 @@ def data_token(vc, band_set, exclude_first_h, shift_min=0):
     if shift_min:
         from ieeg_ehr.features.build_pain_change_shifted_z import window_label
         tokens.append(f'e2{window_label(shift_min)}')
+    if heart_rate:
+        tokens.append('hr')
     return '-'.join(tokens)
 
 
@@ -254,6 +272,65 @@ def add_exposure(pairs, exclude_first_h=None, shift_min=0):
     return pairs, report
 
 
+def epoch_heart_rate(hr, starts, stops):
+    """(mean HR, fraction of the epoch covered) over each [start, stop).
+
+    `hr`: one session's `preprocessing/ekg_hr.py` table, already cut to the seconds
+    with quality >= HR_MIN_QUALITY. A second belongs to the epoch its start falls in.
+    """
+    hr = hr.sort_values('time')
+    t = hr['time'].to_numpy()
+    csum = np.concatenate([[0.0], np.cumsum(hr['hr_bpm'].to_numpy(dtype=np.float64))])
+    lo, hi = np.searchsorted(t, starts), np.searchsorted(t, stops)
+    n = hi - lo
+    seconds = (stops - starts) / np.timedelta64(1, 's')
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return (csum[hi] - csum[lo]) / n, n / seconds
+
+
+def add_heart_rate(pairs, shift_min=0):
+    """(pairs with heart rate, report). Drops pairs without heart rate in both epochs.
+
+    `HR_1`, `HR_2`: mean bpm over each epoch of d_z, [t1 - 5, t1) and
+    [t2 - shift_min - 5, t2 - shift_min) min (`epoch_heart_rate`). `dHR = HR_2 - HR_1`.
+    An epoch whose good seconds cover under HR_MIN_COVERAGE of it has no HR, and a
+    session with no HR table has none at all.
+    """
+    epoch = pd.Timedelta(minutes=config.EPOCH_MINUTES_BEFORE).to_timedelta64()
+    shift = pd.Timedelta(minutes=shift_min).to_timedelta64()
+    t1_all = pairs['t1'].to_numpy(dtype='datetime64[ns]')
+    t2_all = pairs['t2'].to_numpy(dtype='datetime64[ns]') - shift
+    cols = {c: np.full(len(pairs), np.nan) for c in ('HR_1', 'HR_2', 'hr_cov_1', 'hr_cov_2')}
+    no_table = []
+    for (subject, session), idx in pairs.groupby(['subject', 'session']).indices.items():
+        path = config.ekg_hr_path(subject, session)
+        if not path.exists():
+            no_table.append(f'sub-{subject}_ses-{session}')
+            continue
+        hr = io.read_table(path, columns=['time', 'hr_bpm', 'quality'], on_stale='warn')
+        hr = hr[hr['quality'] >= HR_MIN_QUALITY]
+        t1, t2 = t1_all[idx], t2_all[idx]
+        cols['HR_1'][idx], cols['hr_cov_1'][idx] = epoch_heart_rate(hr, t1 - epoch, t1)
+        cols['HR_2'][idx], cols['hr_cov_2'][idx] = epoch_heart_rate(hr, t2 - epoch, t2)
+    pairs = pairs.assign(**cols)
+    for k in ('1', '2'):
+        pairs.loc[pairs[f'hr_cov_{k}'] < HR_MIN_COVERAGE, f'HR_{k}'] = np.nan
+    pairs['dHR'] = pairs['HR_2'] - pairs['HR_1']
+
+    missing = pairs['dHR'].isna()
+    lost = sorted(set(pairs['subject_id']) - set(pairs.loc[~missing, 'subject_id']))
+    if no_table:
+        logger.warning('NO HR TABLE: %s', no_table)
+    logger.info('HEART RATE: dropping %d of %d pairs without HR in both epochs '
+                '(quality >= %g over >= %g of the epoch); %d subjects lose all their pairs: %s',
+                int(missing.sum()), len(pairs), HR_MIN_QUALITY, HR_MIN_COVERAGE,
+                len(lost), lost)
+    report = {'min_quality': HR_MIN_QUALITY, 'min_coverage': HR_MIN_COVERAGE,
+              'hr_root': str(config.EKG_HR_ROOT), 'sessions_without_table': no_table,
+              'n_pairs_without_hr': int(missing.sum()), 'subjects_without_hr': lost}
+    return pairs[~missing].reset_index(drop=True), report
+
+
 def change_matrix(table, pairs, freq_cols, second=None):
     """{channel: (n_pairs, n_freq) d_z}, NaN where the channel is absent from either epoch.
 
@@ -307,7 +384,7 @@ def cell_frame(index, values, j, pairs):
     """One cell's model frame: rows with a finite d_z, covariates joined by pair."""
     df = index.assign(d_z=values[:, j])
     df = df[np.isfinite(df['d_z'])]
-    df = df.merge(pairs[PAIR_COLUMNS], on='pair_id')
+    df = df.merge(pairs[[c for c in PAIR_COLUMNS if c in pairs]], on='pair_id')
     df['pain_1_within'] = df['pain_1'] - df.groupby('subject')['pain_1'].transform('mean')
     return df.reset_index(drop=True)
 
@@ -416,16 +493,18 @@ class Rows:
     split_report: dict
     pair_report: dict
     cbar_center: float
+    hr_report: dict = None
 
 
 def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
               notch_half_width_hz=None, insula_threshold=None, exclude_first_h=None,
-              shift_min=0, second_dir=None):
+              shift_min=0, second_dir=None, heart_rate=False):
     """The d_z rows of the z-score tables at `paths`, ROI-mapped channels only.
 
     `insula_threshold` pins the coordinate insula split to an earlier run's cut.
     `shift_min` with `second_dir` (the shifted tables) takes the later epoch from
-    [t2 - shift_min - 5, t2 - shift_min), and C_2 with it.
+    [t2 - shift_min - 5, t2 - shift_min), and C_2 with it. `heart_rate` adds dHR
+    and keeps only the pairs that have it (`add_heart_rate`).
     """
     if bool(shift_min) != (second_dir is not None):
         raise ValueError('shift_min and second_dir go together')
@@ -441,6 +520,9 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
     pairs, pair_report = add_exposure(
         change_score.build_pairs(defs, admin, min_gap_min, max_gap_min), exclude_first_h,
         shift_min)
+    hr_report = None
+    if heart_rate:
+        pairs, hr_report = add_heart_rate(pairs, shift_min)
 
     freq_table, notch = fullres_cells.analysis_freq_table(notch_half_width_hz)
     bands = BAND_SETS.get(band_set)
@@ -479,7 +561,7 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
                 'Cbar centred on %.4f typical doses', len(index), index['subject'].nunique(),
                 len(regions), len(cols), band_set, cbar_center)
     return Rows(index, np.vstack(value_parts), pairs, regions, cols, col_hz, bands,
-                notch, no_roi, split_report, pair_report, cbar_center)
+                notch, no_roi, split_report, pair_report, cbar_center, hr_report)
 
 
 def cell_frames(rows, holdout=None):
@@ -529,7 +611,9 @@ def lme4_records(rows, min_subjects, model, n_jobs, holdout=None):
     formula = MODELS[model].formula
     with tempfile.TemporaryDirectory(dir=os.environ.get('L_SCRATCH')) as tmp:
         csv = Path(tmp) / 'frames.csv'
-        pd.concat(frames)[['cell_id', 'subject', 'd_z'] + LME4_COLUMNS].to_csv(csv, index=False)
+        frame = pd.concat(frames)
+        frame[['cell_id', 'subject', 'd_z'] + [c for c in LME4_COLUMNS if c in frame]].to_csv(
+            csv, index=False)
         cmd = ['Rscript', str(LME4_SCRIPT), '--in', str(csv), '--out', tmp,
                '--formula', formula, '--cores', str(n_jobs), '--optimizer', LME4_OPTIMIZER]
         logger.info('lme4: %d cells, %s', len(frames), ' '.join(cmd))
@@ -626,6 +710,14 @@ def write_methods(run_dir, cells, params, n_pairs, cohort, summary):
     elif 'd_pain:dC' in model_terms(model):
         exposure_vars += ("- `d_pain:dC`: the change in the pain slope per typical dose of exposure\n"
                           "  change. dC = 0 means steady exposure, so `d_pain` is the slope there.\n")
+    hr = params.get('heart_rate')
+    hr_var = (f"""- `dHR`: HR_2 - HR_1 in bpm, where HR is the mean heart rate over the windows
+  of `d_z` below, from the seconds of `preprocessing/ekg_hr.py` with template-match
+  quality >= {hr['min_quality']:g}. Not centred: 0 means no change.
+""" if uses_heart_rate(model) else '')
+    hr_rows = (f"Pairs without heart rate in both epochs (good seconds under "
+               f"{hr['min_coverage']:.0%} of an epoch, or no HR table) are dropped for every "
+               f"model of this folder ({hr['n_pairs_without_hr']} pairs). " if hr else '')
     if shift:
         dz_text = (f'epoch-mean z over [t2 - {shift + 5}, t2 - {shift}) min minus the '
                    'epoch-mean z over [t1 - 5, t1), t1 and t2 the two assessments.')
@@ -704,7 +796,7 @@ cells above the floor.
 - Frequency cells (`{params['band_set']}`): {freq_text}. Bands average d_z arithmetically over the native
   frequencies inside them after removing {len(params['notch_bins_removed'])} line-noise bins.
 - `d_pain`: NRS of the later assessment minus the earlier one.
-{exposure_vars}- `pain_1_within`: NRS of the earlier assessment, centred on the subject's mean
+{exposure_vars}{hr_var}- `pain_1_within`: NRS of the earlier assessment, centred on the subject's mean
   over the cell's rows.
 - `gap_h`: hours between the two assessments.
 
@@ -712,7 +804,7 @@ cells above the floor.
 
 Consecutive assessment pairs within a session, {params['min_gap_min']:g}-{params['max_gap_min']:g} min apart
 (`change_score.build_pairs`). Sessions with no MAR export are dropped
-({pr['n_pairs_no_mar']} pairs of {', '.join(pr['no_mar_subjects']) or 'no subject'}). {early}ROI scheme
+({pr['n_pairs_no_mar']} pairs of {', '.join(pr['no_mar_subjects']) or 'no subject'}). {early}{hr_rows}ROI scheme
 `{params['roi_scheme']}`, insula cut {params['insula_threshold']}. {len(cohort)} subjects,
 {n_pairs} pairs, {len(cells)} cells.
 
@@ -744,6 +836,9 @@ def main(argv=None):
     ap.add_argument('--second-epoch-shift-min', type=int, default=0,
                     help='take each pair\'s later epoch from [t2 - S - 5, t2 - S) min '
                          '(features/build_pain_change_shifted_z.py)')
+    ap.add_argument('--heart-rate', action='store_true',
+                    help='add dHR to the pairs and keep only pairs that have it '
+                         '(add_heart_rate); the data token gains `hr`')
     ap.add_argument('--notch-half-width-hz', type=float, default=None)
     ap.add_argument('--n-jobs', type=int,
                     default=int(os.environ.get('SLURM_CPUS_PER_TASK', 1)))
@@ -754,6 +849,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.engine == 'sm' and MODELS[args.model].random != RE_SUBJECT:
         ap.error(f'--model {args.model} needs --engine lme4')
+    if uses_heart_rate(args.model) and not args.heart_rate:
+        ap.error(f'--model {args.model} needs --heart-rate')
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -776,7 +873,8 @@ def main(argv=None):
                      args.min_gap_min, args.max_gap_min, args.notch_half_width_hz,
                      insula_threshold=insula_threshold,
                      exclude_first_h=args.exclude_first_h,
-                     shift_min=shift, second_dir=second_dir)
+                     shift_min=shift, second_dir=second_dir,
+                     heart_rate=args.heart_rate)
     index, pairs, bands = rows.index, rows.pairs, rows.bands
     logger.info('fitting model %s with %s, up to %d cells on %d worker(s)', args.model,
                 args.engine, len(rows.regions) * len(rows.cols), args.n_jobs)
@@ -800,7 +898,8 @@ def main(argv=None):
     run_dir = config.analysis_run_dir(
         question=config.PAIN_CHANGE_QUESTION,
         output_type=OUTPUT_TYPE['fullres' if bands is None else 'bands'],
-        view_scheme=data_token(vc, args.band_set, args.exclude_first_h, shift),
+        view_scheme=data_token(vc, args.band_set, args.exclude_first_h, shift,
+                               args.heart_rate),
         run_name=run_name)
     cohort = sorted(index['subject'].unique())
     params = {'model': args.model, 'run_name': run_name, 'formula': MODELS[args.model].formula,
@@ -817,11 +916,12 @@ def main(argv=None):
               'second_epoch_shift_min': shift,
               'second_zscore_dir': str(second_dir) if second_dir else None,
               'typical_dose_mme': opioid_mme.TYPICAL_DOSE_MME,
-              'cbar_center': rows.cbar_center,
+              'cbar_center': rows.cbar_center, 'heart_rate': rows.hr_report,
               'zscore_dir': str(zdir), 'view_config': vc.provenance()}
     cohort_pairs = pairs[pairs['subject_id'].isin(cohort)]
+    hr_parents = [str(config.EKG_HR_ROOT)] if args.heart_rate else []
     io.write_table(cohort_pairs, run_dir / 'pair_index.csv',
-                   params=params, parents=[str(med_state.ADMIN_TABLE)],
+                   params=params, parents=[str(med_state.ADMIN_TABLE)] + hr_parents,
                    subjects=cohort, script=SCRIPT)
     io.write_table(cells, run_dir / 'cells.csv', params=params,
                    parents=[str(zdir)] + ([str(second_dir)] if second_dir else []),
@@ -829,7 +929,7 @@ def main(argv=None):
     write_methods(run_dir, cells, params, len(cohort_pairs), cohort, summary)
     io.write_run_provenance(
         run_dir, script=SCRIPT, params=params,
-        parents=[str(zdir), str(med_state.ADMIN_TABLE)], subjects=cohort,
+        parents=[str(zdir), str(med_state.ADMIN_TABLE)] + hr_parents, subjects=cohort,
         extra={'status': 'EXPLORATORY mixed-model grid, NOT a finding',
                'n_cells': len(cells), 'fit_status': summary['n_cells'].to_dict(),
                'subjects_without_roi': sorted(rows.no_roi), **rows.split_report})
