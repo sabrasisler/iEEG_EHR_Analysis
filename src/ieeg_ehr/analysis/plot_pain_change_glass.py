@@ -193,8 +193,7 @@ def draw_low_high(el, values, cap, cb_label, out_path, node_size):
                       label='whole dot: one group only')]
     fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, 0.165),
                ncol=1, frameon=False, fontsize=8.5, handletextpad=0.4,
-               labelspacing=0.5, title='Mean β of BH-significant cells (q < 0.05)',
-               title_fontproperties={'weight': 'bold', 'size': 9.5})
+               labelspacing=0.5)
     cax = fig.add_axes((0.25, 0.035, 0.5, 0.012))
     cb = fig.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax,
                       orientation='horizontal')
@@ -212,7 +211,7 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--run-dir', required=True)
     ap.add_argument('--term', choices=list(TERMS), default='dpain')
-    ap.add_argument('--node-size', type=float, default=12)
+    ap.add_argument('--node-size', type=float, default=16)
     ap.add_argument('--grey-size', type=float, default=5)
     ap.add_argument('--low-high', action='store_true',
                     help='significant ROIs only, each dot split into its low and high '
