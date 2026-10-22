@@ -157,7 +157,7 @@ def low_high_values(cells, term):
     return out.assign(bands=bands).reset_index()
 
 
-def draw_low_high(el, values, cap, title, cb_label, out_path, node_size):
+def draw_low_high(el, values, cap, cb_label, out_path, node_size):
     """Sagittal over axial: one dot per electrode of a drawn ROI, split low | high."""
     from nilearn import plotting
 
@@ -166,7 +166,6 @@ def draw_low_high(el, values, cap, title, cb_label, out_path, node_size):
     halves = wedge_markers(2)
     n_of = el['region'].value_counts()
     fig = plt.figure(figsize=(5.2, 9.2))
-    fig.suptitle(title, fontsize=12, fontweight='bold', color='0.1', y=1.0)
     displays = []
     for mode, rect in (('x', (0.0, 0.58, 1.0, 0.40)), ('z', (0.08, 0.17, 0.84, 0.42))):
         d = plotting.plot_glass_brain(None, display_mode=mode, figure=fig, axes=rect,
@@ -228,7 +227,7 @@ def main(argv=None):
     cells = io.read_table(run_dir / 'cells.csv', on_stale='warn')
     cells = cells.assign(region=cells['region'].replace(roi_schemes.ROI_RENAMES))
     el = electrodes(params, prov['subjects'])
-    token, title, cb_label = TERMS[args.term]
+    token, _, cb_label = TERMS[args.term]
     if args.low_high:
         values = low_high_values(cells, args.term)
         empty = sorted(set(values['region']) - set(el['region']))
@@ -236,7 +235,7 @@ def main(argv=None):
             raise SystemExit(f'significant ROIs with no electrode drawn: {empty}')
         cap = colour_cap(cells, args.term)
         out = run_dir / FIGURES_SUBDIR / f'glass_{token}_sig.png'
-        draw_low_high(el[el['region'].isin(values['region'])], values, cap, title, cb_label,
+        draw_low_high(el[el['region'].isin(values['region'])], values, cap, cb_label,
                       out, args.node_size)
         n = el['region'].value_counts()
         io.write_table(values.assign(n_electrodes=values['region'].map(n)),
