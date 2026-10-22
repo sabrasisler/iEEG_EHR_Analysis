@@ -7,10 +7,11 @@ exponentials, `g(t) = sum_i c_i exp(-rate_i t)`, so one-compartment oral
 absorption, an IV bolus and the three-compartment fentanyl bolus all go through
 the same code. Factors, routes and PK parameters live in `config/opioid_mme.py`.
 
-g follows the shape of PLASMA concentration, scaled so an IV bolus starts at 1.
-For a one-compartment drug that is also the amount in the body. For fentanyl it
-is not: most of a bolus redistributes into fat and muscle within minutes, where
-it does little. The curve is therefore "active MME", and the axis says so.
+g follows the EFFECT-SITE concentration where the drug has a published time to
+peak effect (fentanyl, hydromorphone, morphine), the plasma concentration
+otherwise, and every g peaks at 1. A dose of X MME therefore peaks at X, and
+every curve starts at 0 and rises: nothing jumps at a dose. The curve is
+"active MME", and the axis says so.
 
 Times are hours since `session_start`, within one (subject, session) only:
 `taken_date` sits on a shared de-identified epoch (load.py, note 3). Doses given
@@ -105,38 +106,26 @@ def _map_dose(r):
                 mme=amount * opioid_mme.MME_FACTOR[key].factor)
 
 
-def unit_dose(curve, t_h):
-    """g(t) on `t_h` (hours, >= 0)."""
-    t_h = np.asarray(t_h, dtype=np.float64)
-    return sum(c * np.exp(-rate * t_h)
-               for c, rate in zip(curve.coefs, curve.rates))
-
-
 def time_grid(session_start, session_end, doses, step_h=GRID_STEP_H):
     """Hours since session_start, from the earlier of session start and the
-    first dose to session end, in `step_h` steps plus every dose time.
+    first dose to session end, in `step_h` steps.
 
-    The dose times are on the grid so each curve starts at its true peak: an IV
-    fentanyl curve halves in under 2 min, so a dose that fell between two grid
-    points would lose a large share of its height and area. Doses before
-    session start do not exist in the export yet; the grid already admits them.
+    Doses before session start do not exist in the export yet; the grid
+    already admits them.
     """
     t0 = min(0.0, float(doses['t_h'].min())) if len(doses) else 0.0
     t1 = (session_end - session_start).total_seconds() / 3600.0
-    return np.union1d(np.arange(t0, t1 + step_h / 2, step_h), doses['t_h'])
+    return np.arange(t0, t1 + step_h / 2, step_h)
 
 
-def exposure_curve(doses, t_h, left_limit=False):
-    """Total active MME on `t_h`, the sum of every dose's curve (superposition).
-
-    `left_limit=True` leaves out a dose at exactly its own time, which gives
-    the value just before an IV bolus jumps.
-    """
-    total = np.zeros_like(t_h, dtype=np.float64)
+def exposure_curve(doses, t_h):
+    """Total active MME on `t_h`, the sum of every dose's curve (superposition)."""
+    t_h = np.asarray(t_h, dtype=np.float64)
+    total = np.zeros_like(t_h)
     for d in doses.itertuples():
-        after = t_h > d.t_h if left_limit else t_h >= d.t_h
+        after = t_h >= d.t_h
         curve = opioid_mme.UNIT_DOSE[(d.ingredient, d.route_class)]
-        total[after] += d.mme * unit_dose(curve, t_h[after] - d.t_h)
+        total[after] += d.mme * curve(t_h[after] - d.t_h)
     return total
 
 
@@ -176,16 +165,18 @@ def early_opioid_sessions(doses, within_h=EARLY_DOSE_H):
 
 def unit_dose_checks():
     """One row per (ingredient, route): the unit-dose curve's shape, against
-    the label where the config carries a label Tmax.
+    the label where the curve keeps a label Tmax (plasma curves only) and
+    against the published effect-site peak where it has a ke0.
 
     `auc_numeric_h` integrates g on a fine grid and must equal the analytic
-    sum(c_i / rate_i). For a one-compartment drug that is 1/ke.
+    sum(c_i / rate_i). `peak_ok`: g peaks at 1.
     """
     rows = []
     for (ingredient, route_class), curve in sorted(opioid_mme.UNIT_DOSE.items()):
         slowest = min(curve.rates)
         t = np.arange(0.0, 30.0 / slowest, 1e-4)
-        g = unit_dose(curve, t)
+        g = curve(t)
+        tpeak = opioid_mme.EFFECT_TPEAK_MIN.get(ingredient)
         i_peak = int(np.argmax(g))
         below = np.nonzero(g[i_peak:] <= g[i_peak] / 2)[0]
         auc_analytic = sum(c / rate for c, rate in zip(curve.coefs, curve.rates))
@@ -193,7 +184,11 @@ def unit_dose_checks():
         rows.append(dict(
             ingredient=ingredient, route_class=route_class,
             tmax_h=float(t[i_peak]), label_tmax_h=curve.label_tmax_h,
+            effect_tpeak_h=(tpeak[0] / 60.0 if tpeak and route_class == 'IV'
+                            else None),
+            ke0_per_h=curve.ke0_per_h,
             g_peak=float(g[i_peak]),
+            peak_ok=bool(abs(g[i_peak] - 1.0) < 1e-6),
             peak_to_half_h=float(t[i_peak + below[0]] - t[i_peak]),
             terminal_half_life_h=float(np.log(2) / slowest),
             auc_analytic_h=auc_analytic, auc_numeric_h=auc_numeric,
@@ -249,7 +244,7 @@ def totals_check(doses, paths):
 
 
 #: Step for the area check. Trapezoid error on fentanyl's fastest phase is
-#: ~(rate x step)^2 / 12, about 1% at the 1-min plot grid and under 0.05% here.
+#: ~(rate x step)^2 / 12, under 0.05% here.
 CHECK_STEP_H = 10.0 / 3600.0
 
 
@@ -257,15 +252,9 @@ def integral_check(doses, session_start, session_end):
     """Numerical area under one session's curve against sum(mme x area of g),
     with each dose's area truncated at session end. Confirms the
     superposition, not the PK.
-
-    Each interval uses the curve's left limit at its right end. Plain
-    trapezoids would ramp across every IV bolus jump and add half a step of
-    full-height area per dose.
     """
     t_h = time_grid(session_start, session_end, doses, step_h=CHECK_STEP_H)
-    right = exposure_curve(doses, t_h)
-    left = exposure_curve(doses, t_h, left_limit=True)
-    area = float(np.sum(0.5 * (right[:-1] + left[1:]) * np.diff(t_h)))
+    area = float(np.trapezoid(exposure_curve(doses, t_h), t_h))
     expected = 0.0
     for d in doses.itertuples():
         g = opioid_mme.UNIT_DOSE[(d.ingredient, d.route_class)]

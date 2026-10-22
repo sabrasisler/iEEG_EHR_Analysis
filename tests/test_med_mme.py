@@ -1,9 +1,10 @@
 """Tests for the opioid MME curves.
 
 The claims under test: every unit-dose curve integrates to sum(c_i / rate_i),
-the oral curves peak where the label says, combination products convert by
-per-tablet strength, curves add, and an unmapped opioid raises instead of
-disappearing.
+starts at 0 and peaks at 1, the oral plasma curves peak where the label says,
+the effect-site curves peak at the published time and keep the plasma area,
+combination products convert by per-tablet strength, curves add, and an
+unmapped opioid raises instead of disappearing.
 """
 
 import numpy as np
@@ -32,23 +33,40 @@ def test_unit_dose_areas_match_analytic():
     assert checks['auc_ok'].all()
 
 
+def area(curve):
+    return sum(c / r for c, r in zip(curve.coefs, curve.rates))
+
+
 def test_one_compartment_area_is_inverse_ke():
-    curve = opioid_mme.UNIT_DOSE[('HYDROMORPHONE', 'IV')]
-    checks = mme_curve.unit_dose_checks().set_index(['ingredient', 'route_class'])
-    assert checks.loc[('HYDROMORPHONE', 'IV'), 'auc_analytic_h'] == pytest.approx(
-        1.0 / curve.rates[0])
+    curve = opioid_mme.PLASMA[('HYDROMORPHONE', 'IV')]
+    assert area(curve) == pytest.approx(1.0 / curve.rates[0])
 
 
-def test_oral_tmax_matches_label_where_given():
-    checks = mme_curve.unit_dose_checks().dropna(subset=['label_tmax_h'])
-    assert len(checks)
-    assert np.allclose(checks['tmax_h'], checks['label_tmax_h'], atol=0.05)
+def test_oral_plasma_tmax_matches_label_where_given():
+    labelled = [c for c in opioid_mme.PLASMA.values() if c.label_tmax_h]
+    assert len(labelled)
+    for curve in labelled:
+        assert opioid_mme.peak_time(curve) == pytest.approx(curve.label_tmax_h,
+                                                            abs=0.05)
 
 
-def test_iv_bolus_starts_at_one():
-    for (_, route), curve in opioid_mme.UNIT_DOSE.items():
-        if route == 'IV':
-            assert mme_curve.unit_dose(curve, 0.0) == pytest.approx(1.0)
+def test_every_curve_starts_at_zero_and_peaks_at_one():
+    checks = mme_curve.unit_dose_checks()
+    assert checks['peak_ok'].all()
+    for curve in opioid_mme.UNIT_DOSE.values():
+        assert curve(0.0) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_effect_site_peaks_at_published_time():
+    checks = mme_curve.unit_dose_checks().dropna(subset=['effect_tpeak_h'])
+    assert set(checks['ingredient']) == set(opioid_mme.EFFECT_TPEAK_MIN)
+    assert np.allclose(checks['tmax_h'], checks['effect_tpeak_h'], atol=1e-3)
+
+
+def test_effect_site_keeps_the_plasma_area():
+    for ingredient, ke0 in opioid_mme.KE0_PER_H.items():
+        plasma = opioid_mme.PLASMA[(ingredient, 'IV')]
+        assert area(opioid_mme.effect_site(plasma, ke0)) == pytest.approx(area(plasma))
 
 
 def test_combination_tablets_convert_by_strength():
@@ -105,15 +123,14 @@ def test_buprenorphine_is_excluded():
 
 
 def test_fentanyl_between_grid_points_keeps_its_peak():
-    """A dose 30 s off the minute grid still starts at full height, and its
-    area still matches. Fentanyl halves in under 2 min, so a 1-min miss loses
-    a large share of both."""
+    """A dose 30 s off the minute grid peaks at its MME on the 1-min grid, and
+    its area matches. Fentanyl has the fastest effect site (peak at 3.6 min)."""
     doses = mme_curve.opioid_doses(admin([
         {'drug': 'FENTANYL', 'medication': 'FENTANYL (PF) 50 MCG/ML INJECTION',
          'route': 'Intravenous', 'dose': 50.0, 'unit': 'mcg',
          'h': 1.0 + 30 / 3600}]))
     t = mme_curve.time_grid(START, END, doses)
-    assert mme_curve.exposure_curve(doses, t).max() == pytest.approx(10.0)
+    assert mme_curve.exposure_curve(doses, t).max() == pytest.approx(10.0, rel=1e-2)
     area, expected = mme_curve.integral_check(doses, START, END)
     assert area == pytest.approx(expected, rel=1e-3)
 

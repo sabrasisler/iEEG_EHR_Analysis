@@ -145,7 +145,8 @@ def session_runs(subject, session):
 
 
 class MinuteBlocks:
-    """Per clock minute: z sums and counts per channel x bin, unmasked windows per channel."""
+    """Per clock minute: z sums, z^2 sums and counts per channel x bin, unmasked
+    windows per channel."""
 
     def __init__(self, runs, sess, mean, sd, channels, bins):
         self.runs, self.sess = runs, sess
@@ -163,7 +164,8 @@ class MinuteBlocks:
                                  'channel_meta; the baseline rows would mislabel channels')
 
     def window(self, m0, n):
-        """(S, N, V) stacked over the n minutes from m0: (n, C, F), (n, C, F), (n, C)."""
+        """(S, N, V, S2) stacked over the n minutes from m0: (n, C, F), (n, C, F),
+        (n, C), (n, C, F)."""
         for m in [m for m in self.blocks if m < m0]:
             del self.blocks[m]
         minutes = pd.date_range(m0, periods=n, freq='min')
@@ -172,11 +174,12 @@ class MinuteBlocks:
             if missing != list(minutes[-len(missing):]):
                 raise ValueError(f'minutes from {m0} requested out of time order')
             self._compute(missing[0], len(missing))
-        return tuple(np.stack([self.blocks[m][i] for m in minutes]) for i in range(3))
+        return tuple(np.stack([self.blocks[m][i] for m in minutes]) for i in range(4))
 
     def _compute(self, m0, n):
         c, f = len(self.channels), len(self.bins)
         s = np.zeros((n, c, f), dtype=config.CACHE_ACCUMULATE_DTYPE)
+        s2 = np.zeros((n, c, f), dtype=config.CACHE_ACCUMULATE_DTYPE)
         cnt = np.zeros((n, c, f), dtype=np.int32)
         v = np.zeros((n, c), dtype=np.int32)
         m1 = m0 + pd.Timedelta(minutes=n)
@@ -195,15 +198,15 @@ class MinuteBlocks:
                 while b0 < i1:
                     b1 = min((b0 // self.chunk + 1) * self.chunk, i1)
                     self._fold(data[b0:b1][:, cols][:, :, self.bins], b0, b1, offset,
-                               run, names, rows, s, cnt, v)
+                               run, names, rows, s, s2, cnt, v)
                     b0 = b1
         if (v > WINDOWS_PER_MINUTE).any():
             raise ValueError(f'more than {WINDOWS_PER_MINUTE} windows in one minute after '
                              f'{m0}: two runs overlap in time')
         for k, m in enumerate(pd.date_range(m0, periods=n, freq='min')):
-            self.blocks[m] = (s[k], cnt[k], v[k])
+            self.blocks[m] = (s[k], cnt[k], v[k], s2[k])
 
-    def _fold(self, raw, b0, b1, offset, run, names, rows, s, cnt, v):
+    def _fold(self, raw, b0, b1, offset, run, names, rows, s, s2, cnt, v):
         block = raw.astype(config.CACHE_ACCUMULATE_DTYPE)
         block[~np.isfinite(block)] = np.nan
         excluded = (mask_projection.project_pair_mask_to_windows(
@@ -217,7 +220,9 @@ class MinuteBlocks:
         minute = (offset + np.arange(b0, b1)) // WINDOWS_PER_MINUTE
         starts = np.flatnonzero(np.r_[True, np.diff(minute) != 0])
         k = minute[starts]
-        s[k[:, None], rows] += np.add.reduceat(np.where(finite, z, 0.0), starts, axis=0)
+        z = np.where(finite, z, 0.0)
+        s[k[:, None], rows] += np.add.reduceat(z, starts, axis=0)
+        s2[k[:, None], rows] += np.add.reduceat(z * z, starts, axis=0)
         cnt[k[:, None], rows] += np.add.reduceat(finite.astype(np.int32), starts, axis=0)
         v[k[:, None], rows] += np.add.reduceat((~excluded).astype(np.int32), starts, axis=0)
 
@@ -244,7 +249,7 @@ def window_means(s, cnt, v, max_excluded_frac):
 
 def pair_trajectory(blocks, t1, bin_table, bands, max_excluded_frac):
     """(channel band d, excluded fraction) per step: (n_steps, C, n_bands), (n_steps, C)."""
-    s, cnt, v = blocks.window(t1 - pd.Timedelta(minutes=WINDOW_MIN),
+    s, cnt, v, _ = blocks.window(t1 - pd.Timedelta(minutes=WINDOW_MIN),
                               WINDOW_MIN + HORIZON_MIN)
     zmean, frac = window_means(s, cnt, v, max_excluded_frac)
     d = zmean - zmean[0]

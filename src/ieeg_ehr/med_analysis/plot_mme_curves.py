@@ -157,7 +157,9 @@ def plot_grid(doses, non_opioid, sessions, coverage, summary, out_path):
     return style.save(fig, out_path, footnote=(
         '* first opioid within 2 h of session start: pre-session (OR) doses '
         'are not in the MAR export, so the early curve is a lower bound.  '
-        'PO/IV bolus one-compartment, IV fentanyl three-compartment; '
+        'PO/IV bolus one-compartment, IV fentanyl three-compartment, '
+        'effect site for fentanyl, hydromorphone and morphine, every dose '
+        'peaking at its MME; '
         'MME factors CDC 2022 (oral), NDARC TR 329 (IV).'))
 
 

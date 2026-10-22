@@ -32,11 +32,12 @@ them. Joined with `-`, in this order.
 
 | Token | Parameter | Values | Defined in |
 |---|---|---|---|
-| normalization + baseline | AXIS 3 + AXIS 2 | `zscoreallep` = z-score against all of the session's pain-epoch windows | `views/view_config.py` `NORMALIZATION_CODES`, `BASELINE_CODES` |
+| normalization + baseline | AXIS 3 + AXIS 2 | `zscoreallep` = z-score against all of the session's pain-epoch windows. `zscorepostep` = against every window of the 5 min after each report (`post_report_epochs`, with `e1post0to5` only) | `views/view_config.py` `NORMALIZATION_CODES`, `BASELINE_CODES` |
 | band set | AXIS 5 | `paperbands6hg200`, `fullres` (the `--band-set` name without underscores) | `run_bandpower_mixed.BAND_SETS` |
 | ROI scheme | AXIS 6 | `roiv2ofcins`, `roiv3ins`, ... (DK schemes). `hcpexv5` = paper ROIs from an `hcpex_paper` coverage run, version of its mapping file | `views/view_config.py` `ROI_SCHEME_CODES` and `roi_code`, decoded in `docs/view_registry.md` |
 | first-hours exclusion | pair filter | `nofirst24h` = pairs whose first epoch starts within 24 h of `session_start` dropped. Absent = none dropped | `pain_change.data_token`, `--exclude-first-h` |
 | second-epoch window | pairing | `e2pre10to5` = each pair's later epoch is [t2 - 10, t2 - 5) min (shifted tables, `features/build_pain_change_shifted_z.py`), the earlier stays [t1 - 5, t1). Absent = [t2 - 5, t2) | `pain_change.data_token`, `--second-epoch-shift-min` |
+| first-epoch window | pairing | `e1post0to5` = each pair's earlier epoch is [t1, t1 + 5) min, the later [t2 - 5, t2), both z-scored against `post_report_epochs` (`features/build_pain_change_post_z.py`). Absent = [t1 - 5, t1) | `pain_change.data_token`, `--first-epoch-post` |
 
 ### The `autonomics/` folder
 
@@ -58,7 +59,7 @@ timestamp.
 | Token | Parameter | Values | Defined in |
 |---|---|---|---|
 | model | fixed and random effects | `opioid`, `opioid-pairint`, `opioid-dc-pairint`, `painchange`, `painchange-pairint` | `pain_change.MODELS` |
-| exposure version | the recipe for `dC` and `Cbar`. Present only when the formula uses them | `mme1` | `config/opioid_mme.py` `EXPOSURE_VERSION` |
+| exposure version | the recipe for `dC` and `Cbar`. Present only when the formula uses them | `mme1`, `mme2`, `mme3`, `mme4` | `config/opioid_mme.py` `EXPOSURE_VERSION` |
 | engine | fitting software | `sm` = statsmodels `MixedLM`, `lme4` = `lme4::lmer` (`pain_change_lmer.R`, same frames and formula) | `pain_change.ENGINES` |
 | fit type | full fit or leave-one-subject-out | absent = full fit, `loo` = LOO refit, written beside its parent | `pain_change_loo.py` |
 
@@ -92,6 +93,8 @@ always names one set of curves.
 |---|---|---|
 | `mme1` | MAR doses only (doses before `session_start` missing, so early curves are lower bounds). Opioids only, buprenorphine excluded. CDC 2022 oral and Nielsen 2014 IV MME factors. One-compartment PO and IV bolus, three-compartment IV fentanyl. C at an assessment = mean curve over the 5-min epoch before it. `Cbar` = mean curve over [t1, t2), centred on the cohort mean over pairs. Units: typical doses of 10.0 MME (median discovery opioid dose). | 2026-10-15 |
 | `mme2` | `mme1`, but C at an assessment = mean curve over the epoch its d_z uses, so a shifted second epoch (`e2pre10to5`) moves C_2 to [t2 - 10, t2 - 5). Used only by shifted runs: equal to `mme1` without a shift (`opioid_mme.exposure_version`). | 2026-10-19 |
+| `mme3` | `mme1` on the effect-site curves: fentanyl, hydromorphone and morphine get an effect-site compartment (ke0 solved from stanpumpR's IV tPeak: 3.6, 19.6 and 93.8 min), and every unit-dose curve peaks at 1, so a dose of X MME peaks at X active MME. `mme1` and `mme2` used plasma curves with an IV bolus at full height at the dose (DECISIONS 2026-10-21). | 2026-10-21 |
+| `mme4` | `mme3` with `mme2`'s rule: C at an assessment = mean curve over the epoch its d_z uses. Used by runs whose epochs move: `e2pre10to5` (C_2 over [t2 - 10, t2 - 5)) and `e1post0to5` (C_1 over [t1, t1 + 5)). | 2026-10-21 |
 
 ## Figure tokens: file names in `figures/`
 
@@ -110,6 +113,7 @@ always names one set of curves.
 | `scatter_dpain-vs-dhr.png`, `scatter_dpain-vs-dhrv.png` | `d_pain` beta (x) vs the autonomic term's beta (y) per cell, one panel per band | `plot_pain_change_autonomic` |
 | `summary_dpain-dhr.png`, `summary_dpain-dhrv.png` | the two scatters above as panels A and B, every band in one panel coloured delta (light green) to high gamma (dark green), main-heatmap BH cells outlined | `plot_pain_change_autonomic` |
 | `pairs_dpain-dhr.png`, `pairs_dpain-dhrv.png` | no neural data: A, every pair's autonomic change against its pain change, with the mean per pain change and the within-subject r; B, each subject's own slope with its 95% CI | `plot_pain_change_autonomic` |
+| `glass_dpain.png` | electrodes of ROIs with a BH-significant `d_pain` cell, coloured by ROI, the rest grey | `plot_pain_change_glass --term dpain` |
 
 Overwrite a figure when only its look changes (layout, colour, fonts, labels).
 Give it a new name when what it shows changes (term, statistic, correction,

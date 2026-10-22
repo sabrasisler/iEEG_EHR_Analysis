@@ -43,7 +43,6 @@ import pandas as pd
 from ieeg_ehr import config, io
 from ieeg_ehr.analysis import fullres_cells, pain_change
 from ieeg_ehr.views import view_config
-from ieeg_ehr.views import build_pain_epoch_fullres_zscore as zview
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +133,9 @@ def main(argv=None):
     reference_run = Path(args.reference_run)
     prov = json.loads((reference_run / 'provenance.json').read_text())
     params = prov['params']
+    first_post = bool(params.get('first_epoch_post'))
+    if first_post:
+        args.baseline = 'post_report_epochs'
     vc = view_config.from_args(args)
     if vc.provenance() != params['view_config']:
         raise ValueError('view arguments differ from the reference run:\n'
@@ -151,15 +153,15 @@ def main(argv=None):
                          'the main runs')
     insula_threshold = (prov.get('insula_split') or {}).get('thresholds')
     shift = params.get('second_epoch_shift_min') or 0
-    second_dir = params.get('second_zscore_dir')
-    zdir = zview.zscore_dir(vc)
+    zdir, first_dir, second_dir = pain_change.zscore_dirs(vc, shift, first_post)
     paths = [p for p in sorted(zdir.glob('zmean_sub-*_ses-*.parquet'))
              if f'sub-{fullres_cells.subject_session_of(p)[0]}' in train]
     rows = pain_change.load_rows(paths, params['roi_scheme'], params['band_set'],
                                  params['min_gap_min'], params['max_gap_min'],
                                  insula_threshold=insula_threshold,
                                  exclude_first_h=params['exclude_first_h'],
-                                 shift_min=shift, second_dir=second_dir)
+                                 shift_min=shift, second_dir=second_dir,
+                                 first_dir=first_dir)
     if rows.notch != params['notch_bins_removed']:
         raise ValueError('the notch differs from the reference run')
     if set(rows.index['subject']) != train:
@@ -197,7 +199,10 @@ def main(argv=None):
                   'min_gap_min': params['min_gap_min'], 'max_gap_min': params['max_gap_min'],
                   'insula_threshold': insula_threshold,
                   'exclude_first_h': params['exclude_first_h'],
-                  'second_epoch_shift_min': shift, 'second_zscore_dir': second_dir,
+                  'second_epoch_shift_min': shift,
+                  'second_zscore_dir': str(second_dir) if second_dir else None,
+                  'first_epoch_post': first_post,
+                  'first_zscore_dir': str(first_dir) if first_dir else None,
                   'with_lrt': False, 'folds': folds}
     subjects = sorted(train)
     io.write_table(cells, run_dir / 'cells_loo.csv', params=run_params,

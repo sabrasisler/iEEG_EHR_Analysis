@@ -25,7 +25,10 @@ from dataclasses import asdict, dataclass, field
 # as bare strings at call sites so a typo fails at construction, not silently in
 # an `if` that never matches.
 DOMAINS = ('log', 'linear')
-BASELINES = ('zero_pain_epochs', 'all_pain_epochs', 'whole_session')
+#: `post_report_epochs` exists only as `pain_change` z tables built from the
+#: continuous PSD (`features/build_pain_change_post_z.py`): the epoch caches hold
+#: pre-report windows only, so no view computes it.
+BASELINES = ('zero_pain_epochs', 'all_pain_epochs', 'post_report_epochs', 'whole_session')
 NORMALIZATIONS = ('none', 'baseline_subtract', 'zscore_vs_baseline')
 EPOCH_AGGS = ('mean', 'rms')
 #: 'fullres' = the native 0.5 Hz FFT axis of features/pain/psd_epochs_fullres,
@@ -55,7 +58,8 @@ NORMALIZATION_CODES = {'zscore_vs_baseline': 'zscore',
 PAIN_BIN_CODES = {'subject_relative': 'relpain', 'absolute': 'abspain'}
 #: Appended to the normalization code only when the baseline is not the default,
 #: so every existing zero_pain_epochs path is unchanged.
-BASELINE_CODES = {'zero_pain_epochs': '', 'all_pain_epochs': 'allep'}
+BASELINE_CODES = {'zero_pain_epochs': '', 'all_pain_epochs': 'allep',
+                  'post_report_epochs': 'postep'}
 
 # The ROI scheme is in the folder name too, because two schemes are two different
 # REGION SETS and a figure of one must not land in the other's directory. The
@@ -200,8 +204,8 @@ class ViewConfig:
     @property
     def value_label(self):
         """Axis/colourbar label, so a figure cannot mislabel its own units."""
-        ref = {'zero_pain_epochs': '0-pain',
-               'all_pain_epochs': 'all-epoch'}.get(self.baseline)
+        ref = {'zero_pain_epochs': '0-pain', 'all_pain_epochs': 'all-epoch',
+               'post_report_epochs': 'post-report'}.get(self.baseline)
         if self.normalization == 'zscore_vs_baseline':
             return f'Mean z-score vs {ref} baseline'
         if self.normalization == 'baseline_subtract':

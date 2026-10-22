@@ -21,6 +21,10 @@
 # STOP_AFTER_FIT=1 ends after step 1, when the trajectory must first be built from the new fit.
 # SHIFT=5 takes each pair's later epoch from [t2 - 10, t2 - 5) min
 # (pain_change --second-epoch-shift-min; build the shifted tables first).
+# FIRST_POST=1 takes each pair's earlier epoch from [t1, t1 + 5) min, both epochs against
+# the post-report baseline (pain_change --first-epoch-post; build the post tables first,
+# sbatch/build_pain_change_post_z_array.sbatch). STOP_AFTER_LOO=1 ends after step 2.
+# A heatmap that fails is logged and skipped, so it never ends the job.
 # AUTONOMIC=1 adds dHR and dHRV, keeps only pairs with both in both epochs, and
 # writes under <data token>/autonomics/ (pain_change --autonomic). A `-dhr` or
 # `-dhrv` model needs it, and STOP_AFTER_FIT=1 with it: LOO refuses autonomic runs.
@@ -42,11 +46,11 @@ if [ -z "${FIT_DIR:-}" ]; then
   FIT_DIR=$(python -m ieeg_ehr.analysis.pain_change --model "$MODEL" --engine "$ENGINE" \
     --roi-scheme "$ROI" ${EXCLUDE_FIRST_H:+--exclude-first-h "$EXCLUDE_FIRST_H"} \
     ${INSULA_RUN:+--insula-from-run "$INSULA_RUN"} ${SHIFT:+--second-epoch-shift-min "$SHIFT"} \
-    ${AUTONOMIC:+--autonomic} "${VIEW[@]}" | tail -1)
+    ${FIRST_POST:+--first-epoch-post} ${AUTONOMIC:+--autonomic} "${VIEW[@]}" | tail -1)
   for TERM in dpain dc dpain_x_dc dhr dhrv; do
     if grep -q "^${TERM}_beta\|,${TERM}_beta," "$FIT_DIR/cells.csv"; then
       python -m ieeg_ehr.analysis.plot_pain_change_heatmap --run-dir "$FIT_DIR" --term "$TERM" \
-        --domain-scheme "$DOMAIN_SCHEME"
+        --domain-scheme "$DOMAIN_SCHEME" || echo "HEATMAP FAILED: $TERM (exit $?), continuing"
     fi
   done
 fi
@@ -56,6 +60,7 @@ if [ -n "${STOP_AFTER_FIT:-}" ]; then exit 0; fi
 LOO_DIR=$(python -m ieeg_ehr.analysis.pain_change_loo --reference-run "$FIT_DIR" \
   --roi-scheme "$ROI" "${VIEW[@]}" | tail -1)
 echo "LOO_DIR=$LOO_DIR"
+if [ -n "${STOP_AFTER_LOO:-}" ]; then exit 0; fi
 WEIGHTS="$(basename "$(dirname "$LOO_DIR")")_$(basename "$LOO_DIR")"
 python -m ieeg_ehr.analysis.pain_change_prediction weights --source-run "$LOO_DIR" --name "$WEIGHTS"
 

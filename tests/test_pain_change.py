@@ -140,8 +140,8 @@ def test_tokens():
             == 'zscoreallep-paperbands6hg200-roiv2ofcins-nofirst24h')
     assert (pain_change.data_token(vc, 'paper_bands_6_hg200', None)
             == 'zscoreallep-paperbands6hg200-roiv2ofcins')
-    assert pain_change.run_token('opioid', 'sm') == 'opioid_mme1_sm'
-    assert pain_change.run_token('opioid', 'lme4') == 'opioid_mme1_lme4'
+    assert pain_change.run_token('opioid', 'sm') == 'opioid_mme3_sm'
+    assert pain_change.run_token('opioid', 'lme4') == 'opioid_mme3_lme4'
     assert pain_change.run_token('painchange', 'sm') == 'painchange_sm'
 
 
@@ -165,10 +165,61 @@ def test_add_exposure(monkeypatch):
     assert report['no_mar_subjects'] == ['sub-002'] and report['n_pairs_early'] == 1
     r = out.iloc[0]
     assert r['C_1'] == 0.0                       # the dose at t1 follows epoch 1
-    assert r['C_2'] > 0 and r['Cbar'] > r['C_2']  # IV bolus decays across [t1, t2)
+    assert 0 < r['Cbar'] < r['C_2']   # morphine's effect site still rises at t2 (peak 94 min)
     assert r['dC'] == pytest.approx(r['C_2'] - r['C_1'])
     mme = 4.0 * opioid_mme.MME_FACTOR[('MORPHINE', 'IV')].factor
     assert r['Cbar'] * opioid_mme.TYPICAL_DOSE_MME < mme
+
+
+def test_add_exposure_first_post_moves_c1(monkeypatch):
+    """--first-epoch-post: C_1 is the mean over [t1, t1 + 5), so a dose at t1 counts."""
+    start = pd.Timestamp('2000-01-01 08:00')
+    admin = pd.DataFrame([{
+        'subject': '001', 'session': '01', 'level2': 'Opioids', 'drug': 'FENTANYL',
+        'medication': 'FENTANYL (PF) 50 MCG/ML INJECTION', 'route': 'Intravenous',
+        'dose': 50.0, 'dose_unit': 'mcg', 'session_start': start,
+        'session_end': start + pd.Timedelta(days=3),
+        'taken_dt': start + pd.Timedelta(hours=30)}])
+    monkeypatch.setattr(pain_change.load, 'load_administrations', lambda: admin)
+    h = lambda x: start + pd.Timedelta(hours=x)
+    pairs = pd.DataFrame({'subject': ['001'], 'session': '01', 'subject_id': ['sub-001'],
+                          't1': [h(30)], 't2': [h(31)]})
+    pre, _ = pain_change.add_exposure(pairs)
+    post, _ = pain_change.add_exposure(pairs, first_post=True)
+    assert pre['C_1'].iloc[0] == 0.0
+    assert post['C_1'].iloc[0] > 0.0
+    assert post['C_2'].iloc[0] == pytest.approx(pre['C_2'].iloc[0])
+    assert post['e1_start_h'].iloc[0] == pytest.approx(30.0)
+
+
+def test_change_matrix_takes_the_earlier_epoch_from_first():
+    cols = ['f000']
+    table = pd.DataFrame({'channel': ['A', 'A'], 'epoch_id': [1, 2], 'f000': [1.0, 5.0]})
+    first = pd.DataFrame({'channel': ['A', 'A'], 'epoch_id': [1, 2], 'f000': [3.0, 9.0]})
+    pairs = pd.DataFrame({'e1': [1], 'e2': [2]})
+    assert pain_change.change_matrix(table, pairs, cols)['A'][0, 0] == 4.0
+    assert pain_change.change_matrix(table, pairs, cols, first=first)['A'][0, 0] == 2.0
+
+
+def test_post_baseline_matches_numpy():
+    from ieeg_ehr.features.build_pain_change_post_z import post_baseline
+    rng = np.random.default_rng(0)
+    z = rng.normal(0.3, 1.7, size=(400, 2, 3))
+    m, s = post_baseline(np.full((2, 3), 400), z.sum(axis=0), (z * z).sum(axis=0), 2)
+    assert np.allclose(m, z.mean(axis=0))
+    assert np.allclose(s, z.std(axis=0, ddof=1))
+    m, s = post_baseline(np.ones((2, 3), dtype=int), z[0], z[0] ** 2, 2)
+    assert np.isnan(s).all()
+
+
+def test_tokens_for_first_post():
+    from ieeg_ehr.views import view_config
+    vc = view_config.ViewConfig(baseline='post_report_epochs', freq='fullres',
+                                region='none', mask_level='bipolar', mask_label='x')
+    token = pain_change.data_token(vc, 'paper_bands_6_hg200', None, first_post=True)
+    assert token.startswith('zscorepostep-') and token.endswith('-e1post0to5')
+    assert pain_change.run_token('opioid-dc-pairint', 'lme4', first_post=True) == \
+        'opioid-dc-pairint_mme4_lme4'
 
 
 def _synthetic_rows(seed=6, n_subjects=12):
@@ -231,7 +282,7 @@ def test_opioid_dc_model_swaps_cbar_for_dc():
     terms = pain_change.model_terms('opioid-dc-pairint')
     assert terms == ['d_pain', 'dC', 'd_pain:dC', 'pain_1_within', 'gap_h']
     assert 'Cbar' not in terms and pain_change.uses_exposure('opioid-dc-pairint')
-    assert pain_change.run_token('opioid-dc-pairint', 'lme4') == 'opioid-dc-pairint_mme1_lme4'
+    assert pain_change.run_token('opioid-dc-pairint', 'lme4') == 'opioid-dc-pairint_mme3_lme4'
 
 
 def test_epoch_autonomic_mean_hr_and_ln_rmssd():

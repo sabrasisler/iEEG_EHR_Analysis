@@ -56,6 +56,11 @@ the exponentiate-in-view exception. Stats/GLMM default to log-power features.
 - `all_pain_epochs` (mean/SD over every masked window of every pain epoch in
   the session; the `pain_change` baseline, built by
   `views/build_pain_epoch_fullres_zscore.py`. Added 2026-10-06)
+- `post_report_epochs` (mean/SD over every masked window of the 5 min AFTER
+  each pain report in the session, [t, t + 5). Code `postep`. The epoch caches
+  hold pre-report windows only, so no view computes it: it exists as the
+  `pain_change` z tables of `features/build_pain_change_post_z.py`, read with
+  `pain_change --first-epoch-post`. Added 2026-10-21)
 - `whole_session` (mean/SD over all of the subject's windows)
 - (future) `pre_event_window` variants
 Notes: a view-time computation over the chosen windows' per-window values.

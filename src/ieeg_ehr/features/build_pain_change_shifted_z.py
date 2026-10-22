@@ -116,7 +116,7 @@ def build_session(subject, session, vc, shift_min, out_dir):
     for ep in epochs.itertuples(index=False):
         rows = stored[stored['epoch_id'] == ep.epoch_id]
         idx = [slot[c] for c in rows['channel']]
-        s, cnt, v = blocks.window(ep.pain_time - pd.Timedelta(minutes=n_minutes), n_minutes)
+        s, cnt, v, _ = blocks.window(ep.pain_time - pd.Timedelta(minutes=n_minutes), n_minutes)
         shifted, frac = window_means(s[:WINDOW_MIN], cnt[:WINDOW_MIN], v[:WINDOW_MIN],
                                      max_excl)
         check, _ = window_means(s[shift_min:], cnt[shift_min:], v[shift_min:], max_excl)

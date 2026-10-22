@@ -13,10 +13,16 @@ on every number. `med_analysis/mme_curve.py` reads it. Decisions behind it
   route uses one compartment (first-order absorption for PO, bolus for IV).
 - Feeding-tube doses count as PO.
 
+Revised 2026-10-21 (Sabra, DECISIONS 2026-10-21): an effect-site compartment
+for every drug with a published time to peak effect, and every curve scaled to
+peak at 1 per MME.
+
 UNIT-DOSE CURVES
 ----------------
 Every curve is a sum of exponentials, g(t) = sum_i coefs[i] * exp(-rates[i] t),
 t in hours since the dose. The area under g is sum(coefs[i] / rates[i]).
+
+`PLASMA` holds the plasma shapes:
 
 - PO, one compartment:  g = ka/(ka-ke) * (exp(-ke t) - exp(-ka t))
 - IV bolus:             g = exp(-ke t)
@@ -25,12 +31,27 @@ t in hours since the dose. The area under g is sum(coefs[i] / rates[i]).
 
 The oral ka values were back-solved from each label's Tmax and t1/2:
 Tmax = ln(ka/ke) / (ka - ke).
+
+`UNIT_DOSE`, the curves the exposure uses, builds on them in two steps:
+
+1. EFFECT SITE. A plasma curve peaks before the drug acts: an IV bolus is at
+   full height the moment it is given, and fentanyl's plasma curve halves in
+   2 min. The biophase lags plasma, dCe/dt = ke0 (Cp - Ce) with Ce(0) = 0
+   (Sheiner et al. 1979), so each plasma term c exp(-r t) becomes
+   c ke0 / (ke0 - r) (exp(-r t) - exp(-ke0 t)), with the plasma curve's area.
+   ke0 is a property of the drug. It is solved once, so that the effect site
+   peaks at the drug's published `EFFECT_TPEAK_MIN` after an IV bolus of the
+   `PLASMA` curve, and applied to every route of that drug. Drugs with no
+   published value keep the plasma shape.
+2. PEAK = 1. Each curve is scaled to peak at 1, so a dose of X MME peaks at X
+   active MME: an MME factor is an equianalgesic dose, read at peak effect. A
+   short-acting drug keeps a short curve and less area per MME.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
-from scipy.optimize import brentq
+from scipy.optimize import brentq, minimize_scalar
 
 
 @dataclass(frozen=True)
@@ -45,6 +66,12 @@ class UnitDose:
     rates: tuple            # 1/h
     source: str
     label_tmax_h: float | None = None
+    ke0_per_h: float | None = None
+
+    def __call__(self, t_h):
+        """g(t) on `t_h` (hours since the dose, >= 0)."""
+        t_h = np.asarray(t_h, dtype=np.float64)
+        return sum(c * np.exp(-rate * t_h) for c, rate in zip(self.coefs, self.rates))
 
 
 def oral(ka, ke, source, label_tmax_h=None):
@@ -78,6 +105,30 @@ def three_compartment_bolus(v1, v2, v3, cl1, cl2, cl3, source):
     return UnitDose(tuple(float(c) for c in coefs.real[order]),
                     tuple(float(-r * 60.0) for r in eigvals.real[order]),
                     source)
+
+
+def peak_time(curve):
+    """Hours from the dose to the peak of a single-peaked curve."""
+    span = 10.0 * np.log(2) / min(curve.rates)
+    return minimize_scalar(lambda t: -curve(t), bounds=(0.0, span),
+                           method='bounded', options={'xatol': 1e-8}).x
+
+
+def effect_site(plasma, ke0):
+    """The biophase curve of `plasma` for a transfer rate `ke0` (1/h)."""
+    coefs = tuple(c * ke0 / (ke0 - r) for c, r in zip(plasma.coefs, plasma.rates))
+    return replace(plasma, coefs=coefs + (-sum(coefs),),
+                   rates=plasma.rates + (ke0,), label_tmax_h=None, ke0_per_h=ke0)
+
+
+def ke0_from_tpeak(plasma, tpeak_h):
+    """The ke0 at which the effect site of `plasma` peaks at `tpeak_h`."""
+    return brentq(lambda k: peak_time(effect_site(plasma, k)) - tpeak_h, 1e-2, 1e4)
+
+
+def peak_normalized(curve):
+    peak = float(curve(peak_time(curve)))
+    return replace(curve, coefs=tuple(c / peak for c in curve.coefs))
 
 
 # ============================================================================
@@ -146,7 +197,7 @@ MME_FACTOR = {
 # UNIT-DOSE PK CURVES
 # ============================================================================
 
-UNIT_DOSE = {
+PLASMA = {
     ('HYDROCODONE', 'PO'): oral(2.04, 0.182, 'Norco label (t1/2 3.8 h)',
                                 label_tmax_h=1.3),
     ('OXYCODONE', 'PO'): oral(1.82, 0.185, 'Roxicodone label (t1/2 3.75 h)'),
@@ -172,6 +223,34 @@ UNIT_DOSE = {
         source='stanpumpR drugs_fentanyl.R, 70 kg (Shafer)'),
 }
 
+#: Minutes from an IV bolus to the peak effect-site concentration, with source.
+#: stanpumpR (Shafer) solves its ke0 from these against its own plasma models;
+#: `KE0_PER_H` solves against `PLASMA`, so the peak time carries over and ke0
+#: does not.
+EFFECT_TPEAK_MIN = {
+    'FENTANYL': (3.6, 'stanpumpR drugs_fentanyl.R tPeak (Shafer & Varvel 1991, '
+                      'EEG)'),
+    'HYDROMORPHONE': (19.6, 'stanpumpR drugs_hydromorphone.R tPeak'),
+    'MORPHINE': (93.8, 'stanpumpR drugs_morphine.R tPeak (t1/2 ke0 ~138 min; '
+                       'Lotsch et al. 2001, pupil: 2.8 h)'),
+}
+
+KE0_PER_H = {ingredient: ke0_from_tpeak(PLASMA[(ingredient, 'IV')], minutes / 60.0)
+             for ingredient, (minutes, _) in EFFECT_TPEAK_MIN.items()}
+
+
+def _unit_dose(key, plasma):
+    ingredient = key[0]
+    if ingredient not in KE0_PER_H:
+        return peak_normalized(plasma)
+    curve = effect_site(plasma, KE0_PER_H[ingredient])
+    return peak_normalized(replace(curve, source=(
+        f'{plasma.source}; effect site, IV tPeak '
+        f'{EFFECT_TPEAK_MIN[ingredient][0]:g} min ({EFFECT_TPEAK_MIN[ingredient][1]})')))
+
+
+UNIT_DOSE = {key: _unit_dose(key, plasma) for key, plasma in PLASMA.items()}
+
 
 # ---------------------------------------------------------------------------
 # EXPOSURE VERSION: the pair covariates of the `pain_change` opioid model
@@ -186,19 +265,26 @@ UNIT_DOSE = {
 # missing and early curves are lower bounds. Opioids only, buprenorphine
 # excluded. C at an assessment = mean curve over the 5-min epoch before it;
 # Cbar = mean curve over [t1, t2). Units: typical doses.
-EXPOSURE_VERSION = 'mme1'
 #
 # mme2 (2026-10-19): mme1, but C at an assessment = mean curve over the neural
 # epoch the pair's d_z uses for it, so a second epoch moved to
 # [t2 - shift - 5, t2 - shift) (`pain_change --second-epoch-shift-min`) moves C_2
 # with it. The window itself is the run's data token (`e2pre10to5`). Equal to mme1
 # when no epoch is shifted, so an unshifted run keeps the mme1 name.
-SHIFTED_EXPOSURE_VERSION = 'mme2'
+#
+# mme3 (2026-10-21): mme1 on the effect-site, peak-normalized `UNIT_DOSE` curves
+# (module docstring). mme1 and mme2 used the plasma curves, IV bolus at g(0) = 1.
+EXPOSURE_VERSION = 'mme3'
+#
+# mme4 (2026-10-21): mme3 with mme2's rule, C at an assessment = mean curve over the
+# epoch its d_z uses: a shifted second epoch moves C_2, a post-report first epoch
+# (`pain_change --first-epoch-post`, [t1, t1 + 5)) moves C_1.
+SHIFTED_EXPOSURE_VERSION = 'mme4'
 
 
-def exposure_version(shift_min):
-    """The version a pain_change run's exposure follows for its second-epoch shift."""
-    return SHIFTED_EXPOSURE_VERSION if shift_min else EXPOSURE_VERSION
+def exposure_version(epochs_moved):
+    """The version a pain_change run's exposure follows: mme4 when an epoch moved."""
+    return SHIFTED_EXPOSURE_VERSION if epochs_moved else EXPOSURE_VERSION
 
 #: One typical dose, the divisor that puts exposure in typical-dose units: the
 #: median MME over every opioid dose of the 63 discovery subjects (624 doses,

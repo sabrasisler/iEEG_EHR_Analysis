@@ -1221,3 +1221,53 @@ fits, not predictions.
 
 *Reverses if:* an autonomic covariate enters the main model, or a third
 autonomic measure needs rows the other two lack.
+
+## 2026-10-21 — Effect-site MME curves, every dose peaking at its MME (`mme3`, `mme4`)
+
+The user made both calls, after the methods-figure candidates showed IV doses as
+vertical spikes.
+
+- **Effect-site compartment** for every drug with a published time to peak
+  effect after an IV bolus: fentanyl 3.6 min, hydromorphone 19.6 min, morphine
+  93.8 min (stanpumpR tPeak, Shafer). ke0 is solved once per drug against its
+  `PLASMA` IV curve and applied to every route. Hydrocodone, oxycodone, tramadol
+  and codeine keep their plasma shapes. Nothing jumps at a dose any more.
+- **Every unit-dose curve peaks at 1,** so a dose of X MME peaks at X active MME:
+  an MME factor is read as equianalgesic at peak effect. Area per MME now differs
+  by drug (fentanyl IV 1.2 h, morphine IV 4.7 h, oxycodone PO 7.0 h).
+
+**Why.** The plasma curves put an IV bolus at full height the moment it was given,
+and fentanyl's three-compartment plasma curve halved in 1.8 min with 0.32 h of
+area per MME, against 2.5 h for IV morphine: a typical fentanyl dose counted about
+1/8 as much as an equal-MME morphine dose. The effect site alone keeps that area
+(a 10 MME fentanyl dose would peak at 2.7). Normalizing the plasma curve to
+g(0) = 1 was the arbitrary step, and peak = MME replaces it.
+
+`mme3` is the new recipe, `mme4` is `mme3` for runs whose epochs move. `mme1` and
+`mme2` runs stay valid records of the plasma recipe.
+
+*Reverses if:* weights arrive in the export (the PK would scale), or the effect
+should be read as area (MME-hours) rather than peak.
+
+## 2026-10-21 — `pain_change` post-report pairing (`zscorepostep-...-e1post0to5`)
+
+The user made each call:
+
+- **Epochs:** a pair's earlier epoch is the 5 min AFTER its report, [t1, t1 + 5),
+  and its later epoch the 5 min before the next, [t2 - 5, t2). Consecutive pairs
+  share no neural window. The post epoch opens at the report, not 5 min later:
+  the user kept it there knowing it holds the end of the bedside visit and the
+  onset of any dose charted at t1 (294 of 1,647 pairs had an analgesic dose at
+  exactly t1, measured 2026-10-06).
+- **Baseline:** both epochs are z-scored against every masked window of every
+  post-report epoch of the session (AXIS 2 `post_report_epochs`). In d_z the
+  baseline mean cancels, so the change rescales effect sizes by the SD alone.
+- **Exposure** follows the epochs (`mme4`): C_1 is the mean curve over [t1, t1 + 5).
+- **Rows:** no first-24 h exclusion, the 2026-10-19 hcpex v5 ROI file, 30-240 min
+  gaps, as in the `e2pre10to5` runs it mirrors.
+
+Tables: `features/build_pain_change_post_z.py`, validated against the stored
+pre-report tables. Fit with `pain_change --first-epoch-post`.
+
+*Reverses if:* the post epoch proves dominated by the bedside visit (then an
+offset, [t1 + 5, t1 + 10), mirroring `e2pre10to5`).

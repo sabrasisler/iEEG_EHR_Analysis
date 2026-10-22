@@ -31,7 +31,15 @@ many hours of `session_start`.
 `--second-epoch-shift-min S` takes each pair's LATER epoch from the shifted tables
 (`features/build_pain_change_shifted_z.py`), [t2 - S - 5, t2 - S) min, while the
 earlier epoch stays [t1 - 5, t1). Consecutive pairs then share no neural window.
-The data token gains `e2pre{S+5}to{S}` and the exposure version is `mme2`.
+The data token gains `e2pre{S+5}to{S}` and the exposure version is
+`opioid_mme.SHIFTED_EXPOSURE_VERSION`.
+
+`--first-epoch-post` takes each pair's EARLIER epoch from the 5 min after its
+report, [t1, t1 + 5), and the later from [t2 - 5, t2), both z-scored against the
+AXIS 2 `post_report_epochs` baseline (`features/build_pain_change_post_z.py`).
+Consecutive pairs share no neural window. The data token is
+`zscorepostep-...-e1post0to5`, and C_1 and the autonomic epoch 1 move to
+[t1, t1 + 5) with the neural epoch (`opioid_mme.SHIFTED_EXPOSURE_VERSION`).
 
 One mixed model per ROI x band cell, rows = pair x channel, fixed and random
 effects from `MODELS[--model]`. Every model has `RE_SUBJECT`,
@@ -191,7 +199,7 @@ def uses_autonomic(model):
     return any(t in AUTONOMIC_TERMS for t in model_terms(model))
 
 
-def data_token(vc, band_set, exclude_first_h, shift_min=0):
+def data_token(vc, band_set, exclude_first_h, shift_min=0, first_post=False):
     """The level-4 folder: which rows go in and what their d_z is (docs/run_tokens.md)."""
     norm = (view_config.NORMALIZATION_CODES[vc.normalization]
             + view_config.BASELINE_CODES[vc.baseline])
@@ -201,13 +209,31 @@ def data_token(vc, band_set, exclude_first_h, shift_min=0):
     if shift_min:
         from ieeg_ehr.features.build_pain_change_shifted_z import window_label
         tokens.append(f'e2{window_label(shift_min)}')
+    if first_post:
+        from ieeg_ehr.features.build_pain_change_post_z import WINDOW_LABELS
+        tokens.append(f"e1{WINDOW_LABELS['post']}")
     return '-'.join(tokens)
 
 
-def run_token(model, engine, shift_min=0):
+def run_token(model, engine, shift_min=0, first_post=False):
     """The run name before its timestamp: model, exposure version if used, engine."""
-    exposure = [opioid_mme.exposure_version(shift_min)] if uses_exposure(model) else []
+    exposure = ([opioid_mme.exposure_version(bool(shift_min) or first_post)]
+                if uses_exposure(model) else [])
     return '_'.join([model, *exposure, engine])
+
+
+def zscore_dirs(vc, shift_min=0, first_post=False):
+    """(tables the rows come from, earlier-epoch tables, later-epoch tables).
+
+    The second and third are None when the first holds that epoch.
+    """
+    if first_post:
+        from ieeg_ehr.features.build_pain_change_post_z import post_zscore_dir
+        return post_zscore_dir(vc, 'pre'), post_zscore_dir(vc, 'post'), None
+    if shift_min:
+        from ieeg_ehr.features.build_pain_change_shifted_z import shifted_zscore_dir
+        return zview.zscore_dir(vc), None, shifted_zscore_dir(vc, shift_min)
+    return zview.zscore_dir(vc), None, None
 
 
 def discovery_paths(zdir):
@@ -232,11 +258,12 @@ def load_exposure():
             mme_curve.opioid_doses(admin))
 
 
-def add_exposure(pairs, exclude_first_h=None, shift_min=0):
+def add_exposure(pairs, exclude_first_h=None, shift_min=0, first_post=False):
     """(pairs with opioid exposure, report). Drops no-MAR sessions and early pairs.
 
     `C_1`, `C_2`: mean active MME over each assessment's epoch: [t - 5, t) min, the
-    second moved to [t2 - shift_min - 5, t2 - shift_min) when `shift_min` is set.
+    second moved to [t2 - shift_min - 5, t2 - shift_min) when `shift_min` is set,
+    the first moved to [t1, t1 + 5) when `first_post` is set.
     `dC = C_2 - C_1`. `Cbar`: mean over [t1, t2), NOT centred here (`load_rows`
     centres it on the cohort). All in typical doses (`TYPICAL_DOSE_MME`).
     `e1_start_h`: hours from `session_start` to the start of the first epoch.
@@ -256,14 +283,15 @@ def add_exposure(pairs, exclude_first_h=None, shift_min=0):
     t2_h = (pairs['t2'].to_numpy() - start) / np.timedelta64(1, 'h')
     epoch_h = config.EPOCH_MINUTES_BEFORE / 60.0
     shift_h = shift_min / 60.0
+    e1_lo_h = t1_h if first_post else t1_h - epoch_h
     c1, c2, cbar = (np.zeros(len(pairs)) for _ in range(3))
     for (subject, session), idx in pairs.groupby(['subject', 'session']).indices.items():
         d = doses[(doses['subject'] == subject) & (doses['session'] == session)]
-        c1[idx] = mme_curve.window_mean(d, t1_h[idx] - epoch_h, t1_h[idx])
+        c1[idx] = mme_curve.window_mean(d, e1_lo_h[idx], e1_lo_h[idx] + epoch_h)
         c2[idx] = mme_curve.window_mean(d, t2_h[idx] - shift_h - epoch_h,
                                         t2_h[idx] - shift_h)
         cbar[idx] = mme_curve.window_mean(d, t1_h[idx], t2_h[idx])
-    pairs['e1_start_h'] = t1_h - epoch_h
+    pairs['e1_start_h'] = e1_lo_h
     pairs['C_1'] = c1 / opioid_mme.TYPICAL_DOSE_MME
     pairs['C_2'] = c2 / opioid_mme.TYPICAL_DOSE_MME
     pairs['dC'] = pairs['C_2'] - pairs['C_1']
@@ -330,17 +358,18 @@ def epoch_autonomic(hr, diffs, starts, stops):
     return mean_hr, ln_rmssd
 
 
-def add_autonomic(pairs, shift_min=0):
+def add_autonomic(pairs, shift_min=0, first_post=False):
     """(pairs with HR and HRV, report). Drops pairs that lack either in either epoch.
 
-    Over each epoch of d_z, [t1 - 5, t1) and [t2 - shift_min - 5, t2 - shift_min) min
-    (`epoch_autonomic`): `HR_1`, `HR_2` the mean bpm, `lnRMSSD_1`, `lnRMSSD_2` the
+    Over each epoch of d_z, [t1 - 5, t1) ([t1, t1 + 5) with `first_post`) and
+    [t2 - shift_min - 5, t2 - shift_min) min (`epoch_autonomic`): `HR_1`, `HR_2` the mean bpm, `lnRMSSD_1`, `lnRMSSD_2` the
     natural log of RMSSD in ms. `dHR = HR_2 - HR_1`, `dHRV = lnRMSSD_2 - lnRMSSD_1`.
     A session with no HR table has neither.
     """
     epoch = pd.Timedelta(minutes=config.EPOCH_MINUTES_BEFORE).to_timedelta64()
     shift = pd.Timedelta(minutes=shift_min).to_timedelta64()
-    t1_all = pairs['t1'].to_numpy(dtype='datetime64[ns]')
+    t1_all = (pairs['t1'].to_numpy(dtype='datetime64[ns]')
+              + (epoch if first_post else np.timedelta64(0, 'ns')))
     t2_all = pairs['t2'].to_numpy(dtype='datetime64[ns]') - shift
     cols = {c: np.full(len(pairs), np.nan)
             for c in ('HR_1', 'HR_2', 'lnRMSSD_1', 'lnRMSSD_2')}
@@ -378,40 +407,47 @@ def add_autonomic(pairs, shift_min=0):
     return pairs[~missing].reset_index(drop=True), report
 
 
-def change_matrix(table, pairs, freq_cols, second=None):
+def change_matrix(table, pairs, freq_cols, second=None, first=None):
     """{channel: (n_pairs, n_freq) d_z}, NaN where the channel is absent from either epoch.
 
-    `second`, a shifted table in the same schema, gives the later epoch's z.
+    `second`, a shifted table in the same schema, gives the later epoch's z, and
+    `first`, a post-report table, the earlier epoch's.
     """
     table = table.set_index(['channel', 'epoch_id'])[freq_cols]
     later = None if second is None else second.set_index(['channel', 'epoch_id'])[freq_cols]
+    earlier = None if first is None else first.set_index(['channel', 'epoch_id'])[freq_cols]
     e1, e2 = pairs['e1'].to_numpy(), pairs['e2'].to_numpy()
     out = {}
     for channel, sub in table.groupby(level='channel', sort=True):
         sub = sub.droplevel('channel')
         z2 = (sub.reindex(e2) if later is None
               else later.reindex(pd.MultiIndex.from_product([[channel], e2])))
+        z1 = (sub.reindex(e1) if earlier is None
+              else earlier.reindex(pd.MultiIndex.from_product([[channel], e1])))
         out[channel] = (z2.to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE)
-                        - sub.reindex(e1).to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE))
+                        - z1.to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE))
     return out
 
 
-def session_rows(path, pairs, region_of, freq_table, bands, second_path=None):
+def session_rows(path, pairs, region_of, freq_table, bands, second_path=None,
+                 first_path=None):
     """(index frame, (n_rows, n_cols) d_z) for one subject-session, ROI-mapped channels only.
 
-    `second_path`: the shifted table the later epoch comes from (`change_matrix`).
+    `second_path`: the shifted table the later epoch comes from, `first_path` the
+    post-report table the earlier epoch comes from (`change_matrix`).
     """
     subject, session = fullres_cells.subject_session_of(path)
     all_cols = fullres_reader.freq_columns()
     freq_cols = [all_cols[i] for i in freq_table.index]
     table = io.read_table(path, columns=['epoch_id', 'channel'] + freq_cols,
                           on_stale='warn')
-    second = (None if second_path is None else
-              io.read_table(second_path, columns=['epoch_id', 'channel'] + freq_cols,
-                            on_stale='warn'))
+    second, first = (None if p is None else
+                     io.read_table(p, columns=['epoch_id', 'channel'] + freq_cols,
+                                   on_stale='warn')
+                     for p in (second_path, first_path))
     bin_table = freq_table.reset_index()
     index, values = [], []
-    for channel, dz in change_matrix(table, pairs, freq_cols, second).items():
+    for channel, dz in change_matrix(table, pairs, freq_cols, second, first).items():
         region = region_of.get(channel)
         if region is None:
             continue
@@ -545,16 +581,21 @@ class Rows:
 
 def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
               notch_half_width_hz=None, insula_threshold=None, exclude_first_h=None,
-              shift_min=0, second_dir=None, autonomic=False):
+              shift_min=0, second_dir=None, autonomic=False, first_dir=None):
     """The d_z rows of the z-score tables at `paths`, ROI-mapped channels only.
 
     `insula_threshold` pins the coordinate insula split to an earlier run's cut.
     `shift_min` with `second_dir` (the shifted tables) takes the later epoch from
-    [t2 - shift_min - 5, t2 - shift_min), and C_2 with it. `autonomic` adds dHR and
-    dHRV and keeps only the pairs that have both (`add_autonomic`).
+    [t2 - shift_min - 5, t2 - shift_min), and C_2 with it. `first_dir` (the
+    post-report tables, with `paths` the pre-report tables on the same baseline)
+    takes the earlier epoch from [t1, t1 + 5), and C_1 with it. `autonomic` adds dHR
+    and dHRV and keeps only the pairs that have both (`add_autonomic`).
     """
     if bool(shift_min) != (second_dir is not None):
         raise ValueError('shift_min and second_dir go together')
+    if shift_min and first_dir is not None:
+        raise ValueError('a shifted second epoch and a post-report first epoch do not combine')
+    first_post = first_dir is not None
     subjects = {f'sub-{fullres_cells.subject_session_of(p)[0]}' for p in paths}
     split_report = {}
     roi_by_subject, no_roi = roi_maps(paths, subjects, roi_scheme,
@@ -566,10 +607,10 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
     defs = med_state.load_epoch_defs(subjects=sorted(subjects))
     pairs, pair_report = add_exposure(
         change_score.build_pairs(defs, admin, min_gap_min, max_gap_min), exclude_first_h,
-        shift_min)
+        shift_min, first_post)
     autonomic_report = None
     if autonomic:
-        pairs, autonomic_report = add_autonomic(pairs, shift_min)
+        pairs, autonomic_report = add_autonomic(pairs, shift_min, first_post)
 
     freq_table, notch = fullres_cells.analysis_freq_table(notch_half_width_hz)
     bands = BAND_SETS.get(band_set)
@@ -591,11 +632,14 @@ def load_rows(paths, roi_scheme, band_set, min_gap_min, max_gap_min,
             logger.warning('%s ses-%s: %s, skipped', sid, session,
                            'no pairs' if sp.empty else 'no ROI-labelled channel')
             continue
-        second_path = None if second_dir is None else Path(second_dir) / path.name
-        if second_path is not None and not second_path.exists():
-            raise FileNotFoundError(f'no shifted table {second_path}')
+        second_path, first_path = (None if d is None else Path(d) / path.name
+                                   for d in (second_dir, first_dir))
+        for p in (second_path, first_path):
+            if p is not None and not p.exists():
+                raise FileNotFoundError(f'no table {p}')
         idx, vals = session_rows(path, sp.reset_index(drop=True),
-                                 roi_by_subject[sid], freq_table, bands, second_path)
+                                 roi_by_subject[sid], freq_table, bands, second_path,
+                                 first_path)
         if idx is not None:
             index_parts.append(idx)
             value_parts.append(vals)
@@ -772,7 +816,22 @@ def write_methods(run_dir, cells, params, n_pairs, cohort, summary):
                f"{au['min_coverage']:.0%} of an epoch covered, or no HR table) are dropped for "
                f"every model of `{AUTONOMIC_SUBDIR}/` ({au['n_pairs_dropped']} pairs). "
                if au else '')
-    if shift:
+    baseline_text = ('every masked window of every pain epoch in that session (AXIS 2 '
+                     '`all_pain_epochs`)')
+    if params.get('first_epoch_post'):
+        dz_text = ('epoch-mean z over [t2 - 5, t2) min minus the epoch-mean z over '
+                   '[t1, t1 + 5), t1 and t2 the two assessments.')
+        baseline_text = ('every masked window of the 5 min after every pain report in that '
+                         'session, [t, t + 5) (AXIS 2 `post_report_epochs`)')
+        second_text = f", earlier epoch from `{params['first_zscore_dir']}`"
+        shared_text = (
+            '- Consecutive pairs share an assessment\'s pain score but no neural window:\n'
+            '  the later epoch of one pair ([t - 5, t)) and the earlier epoch of the next\n'
+            '  ([t, t + 5)) sit on either side of the same report.\n'
+            '- The earlier epoch opens at the report: it holds the end of the bedside\n'
+            '  visit and the first minutes of any dose charted at t1. C_1 covers the\n'
+            '  same 5 min, so dC carries the drug part.')
+    elif shift:
         dz_text = (f'epoch-mean z over [t2 - {shift + 5}, t2 - {shift}) min minus the '
                    'epoch-mean z over [t1 - 5, t1), t1 and t2 the two assessments.')
         second_text = f", later epoch from `{params['second_zscore_dir']}`"
@@ -844,9 +903,8 @@ cells above the floor.
 ## Variables
 
 - `d_z`: {dz_text} Each 2 s
-  window is z-scored per channel x frequency against the mean and SD over every
-  masked window of every pain epoch in that session (AXIS 2 `all_pain_epochs`),
-  then averaged within the 5-min epoch. Tables: `{params['zscore_dir']}`{second_text}.
+  window is z-scored per channel x frequency against the mean and SD over
+  {baseline_text}, then averaged within the 5-min epoch. Tables: `{params['zscore_dir']}`{second_text}.
 - Frequency cells (`{params['band_set']}`): {freq_text}. Bands average d_z arithmetically over the native
   frequencies inside them after removing {len(params['notch_bins_removed'])} line-noise bins.
 - `d_pain`: NRS of the later assessment minus the earlier one.
@@ -890,6 +948,10 @@ def main(argv=None):
     ap.add_argument('--second-epoch-shift-min', type=int, default=0,
                     help='take each pair\'s later epoch from [t2 - S - 5, t2 - S) min '
                          '(features/build_pain_change_shifted_z.py)')
+    ap.add_argument('--first-epoch-post', action='store_true',
+                    help='take each pair\'s earlier epoch from [t1, t1 + 5) min, both epochs '
+                         'z-scored against the post-report baseline '
+                         '(features/build_pain_change_post_z.py)')
     ap.add_argument('--autonomic', action='store_true',
                     help='add dHR and dHRV to the pairs, keep only pairs that have both '
                          f'(add_autonomic), and write under <data token>/{AUTONOMIC_SUBDIR}/')
@@ -905,6 +967,10 @@ def main(argv=None):
         ap.error(f'--model {args.model} needs --engine lme4')
     if uses_autonomic(args.model) and not args.autonomic:
         ap.error(f'--model {args.model} needs --autonomic')
+    if args.first_epoch_post and args.second_epoch_shift_min:
+        ap.error('--first-epoch-post and --second-epoch-shift-min do not combine')
+    if args.first_epoch_post:
+        args.baseline = 'post_report_epochs'
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -917,18 +983,14 @@ def main(argv=None):
         prov = json.loads((Path(args.insula_from_run) / 'provenance.json').read_text())
         insula_threshold = prov['insula_split']['thresholds']
     vc = view_config.from_args(args)
-    zdir = zview.zscore_dir(vc)
-    shift = args.second_epoch_shift_min
-    second_dir = None
-    if shift:
-        from ieeg_ehr.features.build_pain_change_shifted_z import shifted_zscore_dir
-        second_dir = shifted_zscore_dir(vc, shift)
+    shift, first_post = args.second_epoch_shift_min, args.first_epoch_post
+    zdir, first_dir, second_dir = zscore_dirs(vc, shift, first_post)
     rows = load_rows(discovery_paths(zdir), args.roi_scheme, args.band_set,
                      args.min_gap_min, args.max_gap_min, args.notch_half_width_hz,
                      insula_threshold=insula_threshold,
                      exclude_first_h=args.exclude_first_h,
                      shift_min=shift, second_dir=second_dir,
-                     autonomic=args.autonomic)
+                     autonomic=args.autonomic, first_dir=first_dir)
     index, pairs, bands = rows.index, rows.pairs, rows.bands
     logger.info('fitting model %s with %s, up to %d cells on %d worker(s)', args.model,
                 args.engine, len(rows.regions) * len(rows.cols), args.n_jobs)
@@ -948,11 +1010,11 @@ def main(argv=None):
                             p_col, TERM_PREFIX[term])
     summary = fit_summary(cells)
 
-    run_name = run_token(args.model, args.engine, shift)
+    run_name = run_token(args.model, args.engine, shift, first_post)
     run_dir = config.analysis_run_dir(
         question=config.PAIN_CHANGE_QUESTION,
         output_type=OUTPUT_TYPE['fullres' if bands is None else 'bands'],
-        view_scheme=data_token(vc, args.band_set, args.exclude_first_h, shift)
+        view_scheme=data_token(vc, args.band_set, args.exclude_first_h, shift, first_post)
         + (f'/{AUTONOMIC_SUBDIR}' if args.autonomic else ''),
         run_name=run_name)
     cohort = sorted(index['subject'].unique())
@@ -966,9 +1028,11 @@ def main(argv=None):
               'min_gap_min': args.min_gap_min, 'max_gap_min': args.max_gap_min,
               'min_subjects': args.min_subjects, 'notch_bins_removed': rows.notch,
               'exclude_first_h': args.exclude_first_h, 'pair_report': rows.pair_report,
-              'exposure_version': opioid_mme.exposure_version(shift),
+              'exposure_version': opioid_mme.exposure_version(bool(shift) or first_post),
               'second_epoch_shift_min': shift,
               'second_zscore_dir': str(second_dir) if second_dir else None,
+              'first_epoch_post': first_post,
+              'first_zscore_dir': str(first_dir) if first_dir else None,
               'typical_dose_mme': opioid_mme.TYPICAL_DOSE_MME,
               'cbar_center': rows.cbar_center, 'autonomic': rows.autonomic_report,
               'zscore_dir': str(zdir), 'view_config': vc.provenance()}
@@ -978,7 +1042,7 @@ def main(argv=None):
                    params=params, parents=[str(med_state.ADMIN_TABLE)] + hr_parents,
                    subjects=cohort, script=SCRIPT)
     io.write_table(cells, run_dir / 'cells.csv', params=params,
-                   parents=[str(zdir)] + ([str(second_dir)] if second_dir else []),
+                   parents=[str(d) for d in (zdir, first_dir, second_dir) if d],
                    subjects=cohort, script=SCRIPT)
     write_methods(run_dir, cells, params, len(cohort_pairs), cohort, summary)
     io.write_run_provenance(

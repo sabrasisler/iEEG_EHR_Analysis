@@ -35,7 +35,7 @@ def test_window_means_match_nanmean_over_window_rows(tmp_path, monkeypatch):
     blocks = traj.MinuteBlocks([run], sess, mean, sd, channels, np.arange(n_freq))
 
     t1 = pd.Timestamp('2000-01-01 10:08:00')
-    s, cnt, v = blocks.window(t1 - pd.Timedelta(minutes=traj.WINDOW_MIN), 12)
+    s, cnt, v, s2 = blocks.window(t1 - pd.Timedelta(minutes=traj.WINDOW_MIN), 12)
     zmean, frac = traj.window_means(s, cnt, v, max_excluded_frac=0.5)
 
     dts = run.start + pd.to_timedelta(np.arange(n_win), unit='s')
@@ -47,6 +47,8 @@ def test_window_means_match_nanmean_over_window_rows(tmp_path, monkeypatch):
         rows = (dts >= t - pd.Timedelta(minutes=traj.WINDOW_MIN)) & (dts < t)
         assert rows.sum() == 300
         np.testing.assert_allclose(zmean[k, :2], np.nanmean(z[rows], axis=0), rtol=1e-12)
+        np.testing.assert_allclose(s2[k:k + traj.WINDOW_MIN, :2].sum(axis=0),
+                                   np.nansum(z[rows] ** 2, axis=0), rtol=1e-10)
         assert np.isnan(zmean[k, 2]).all() and frac[k, 2] == 1.0
         np.testing.assert_array_equal(frac[k, :2], 0.0)
 
@@ -60,7 +62,7 @@ def test_uncovered_minutes_count_as_excluded(tmp_path):
     sess = SimpleNamespace(session_channels=['A'], channels_by_run={}, mask=None)
     blocks = traj.MinuteBlocks([run], sess, np.zeros((1, 2)), np.ones((1, 2)), ['A'],
                                np.arange(2))
-    s, cnt, v = blocks.window(pd.Timestamp('2000-01-01 10:05:00'), 10)
+    s, cnt, v, _ = blocks.window(pd.Timestamp('2000-01-01 10:05:00'), 10)
     _, frac = traj.window_means(s, cnt, v, max_excluded_frac=0.5)
     np.testing.assert_allclose(frac[:, 0], [0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
 
@@ -87,7 +89,7 @@ def test_runs_sharing_boundary_seconds_count_each_second_once(tmp_path, monkeypa
     sess = SimpleNamespace(session_channels=['A'], channels_by_run={}, mask=None)
     blocks = traj.MinuteBlocks(runs, sess, np.zeros((1, 2)), np.ones((1, 2)), ['A'],
                                np.arange(2))
-    s, cnt, v = blocks.window(pd.Timestamp('2000-01-01 10:09:00'), 3)
+    s, cnt, v, _ = blocks.window(pd.Timestamp('2000-01-01 10:09:00'), 3)
     np.testing.assert_array_equal(v[:, 0], [60, 60, 60])
     # 10:10 holds four windows of run AAA (z = 0) and 56 of run BBB (z = 1).
     np.testing.assert_array_equal(s[1, 0], [56.0, 56.0])
@@ -108,7 +110,7 @@ def test_a_run_inside_earlier_runs_adds_nothing(tmp_path, monkeypatch):
     sess = SimpleNamespace(session_channels=['A'], channels_by_run={}, mask=None)
     blocks = traj.MinuteBlocks(runs, sess, np.zeros((1, 2)), np.ones((1, 2)), ['A'],
                                np.arange(2))
-    s, cnt, v = blocks.window(pd.Timestamp('2000-01-01 10:04:00'), 18)
+    s, cnt, v, _ = blocks.window(pd.Timestamp('2000-01-01 10:04:00'), 18)
     np.testing.assert_array_equal(v[:, 0], 60)
     # SA1 (z = 1) never enters. EA2 (z = 1) supplies 10:20 and 10:21.
     np.testing.assert_array_equal(s[:, 0, 0], [0.0] * 16 + [60.0, 60.0])

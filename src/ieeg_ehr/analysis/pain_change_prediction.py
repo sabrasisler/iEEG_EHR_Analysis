@@ -36,7 +36,7 @@ only its sign taken from beta). The adjusted
 prediction needs alpha and the centering, and below EXTRAPOLATE_BELOW_MIN it is
 `extrapolated`, as the fit saw no shorter gap. Output lands in
 `analysis/pain/pain_change/prediction/<data token>/<run token>_<timestamp>/`, the
-tokens of the fit the weights came from (docs/run_tokens.md), with the raw uniform
+tokens of the fit the weights came from (docs/run_tokens.md), with the raw unit
 figures of `plot_pain_change_prediction`. A weights file is named
 `<data token>_<source run>` unless `--name` says otherwise.
 

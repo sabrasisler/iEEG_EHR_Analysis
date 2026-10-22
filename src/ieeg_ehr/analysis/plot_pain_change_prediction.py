@@ -1,7 +1,7 @@
 """Figures of a pain_change prediction run (`pain_change_prediction score`).
 
     python -m ieeg_ehr.analysis.plot_pain_change_prediction --run-dir <run> \\
-        --weights <weights name> --prediction raw --weighting uniform
+        --weights <weights name> --prediction raw --weighting unit
 
 Every figure averages within subject first, then shows mean +/- SEM across
 subjects, and drops any group, and any time step of a line, with fewer than
@@ -9,8 +9,9 @@ subjects, and drops any group, and any time step of a line, with fewer than
 out to PLOT_HORIZON_MIN, and shade the first 5 min, where the sliding window still
 overlaps the baseline window. Descriptive: no significance marks.
 
-Written to `<run>/figures/<kind>_dpain_<prediction>-<weighting>.png`, the figure
-tokens of docs/run_tokens.md. Kinds:
+Written to `<run>/figures/<weighting>/<kind>_dpain_<prediction>-<weighting>.png`, one
+folder per weighting: `unit` (equal weights, the default), `uniform` (beta-weighted
+least squares), `ivw`. Kinds:
 
     validation-scatter   predicted at t2 vs actual delta pain, one point per pair
     trajectories         one line per delta-pain bin over the first PLOT_HORIZON_MIN
@@ -30,9 +31,9 @@ tokens of docs/run_tokens.md. Kinds:
     dc-groups-fraction   the same on the fraction of the interval, t1 = 0, t2 = 1
     dc-groups-actual     per ΔC bin, actual Δpain at report 2 beside the prediction
                          at t2, and pain at report 1 and report 2
-    dc-pain-bins         the prediction over the interval, one panel per pain direction
-                         (DC_PAIN_BINS), one line per ΔC bin and pain magnitude, with
-                         the fit of prediction(t2) ~ Δpain + ΔC + (1 | subject) over all
+    dc-pain-fell         pain fell vs no pain change (DC_PAIN_PANELS), one line per ΔC
+                         bin: the prediction over the interval, with the fit
+                         of prediction(t2) ~ Δpain + ΔC + (1 | subject) over all
                          dc-groups pairs (written to dc-pain-model_dpain_<tag>.csv)
     dose-response-by-dc  dose-response, one panel per ΔC bin, each with the slope of
                          prediction on actual Δpain (also in dc-pain-model)
@@ -40,6 +41,9 @@ tokens of docs/run_tokens.md. Kinds:
                          cells: decoder weight, the fit's dC effect on power, and their
                          product, summed by ROI and band (dc-shift-contributions_dpain_
                          <tag>.csv)
+    dc-components        per ROI and region family x band group, the Δpain against the ΔC
+                         coefficient of score_k(t2) ~ Δpain + ΔC + (1 | subject), its
+                         part of the prediction (dc-components_dpain_<tag>.csv)
 
 For the adjusted prediction the first EXTRAPOLATE_BELOW_MIN minutes are hatched: the
 fit saw no gap that short.
@@ -48,6 +52,7 @@ fit saw no gap that short.
 import argparse
 import json
 import logging
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -110,17 +115,32 @@ DC_COLOURS = ('#8c510a', '#d8b365', '#8c8b86', '#5ab4ac', '#01665e')
 DC_FIRST_HOURS_OUT = 24
 #: Steps of the t1 -> t2 fraction axis.
 FRACTION_BINS = 20
-#: Δpain bins of dc-pain-bins, inclusive. Set by the user 2026-10-20.
-DC_PAIN_BINS = {'large decrease': (-10, -4), 'small decrease': (-3, -2),
-                'no change': (-1, 1), 'small increase': (2, 3), 'large increase': (4, 10)}
-#: Its panels, each a pain direction and the DC_PAIN_BINS drawn there.
-PAIN_PANELS = (('decrease', ('large decrease', 'small decrease')),
-               ('no change', ('no change',)),
-               ('increase', ('large increase', 'small increase')))
-PAIN_STYLES = {'large decrease': '-', 'small decrease': '--', 'no change': '-',
-               'large increase': '-', 'small increase': '--'}
-#: y axis of dc-pain-bins, in NRS: the SEM of a few thin lines reaches far past the means.
+#: Pain outcomes of dc-pain-fell, Δpain inclusive. Set by the user 2026-10-20: the
+#: increases are too sparse to draw, and Δpain -2 is left out as a gap between the two.
+DC_PAIN_PANELS = {'Pain fell': (-10, -3), 'No pain change': (-1, 1)}
+#: y axis of dc-pain-fell, in NRS: the SEM of thin lines reaches far past the means.
 DC_PAIN_YLIM = 15
+#: DC_BINS as ranges of ΔC, for dc-pain-fell.
+DC_BIN_LABELS = {'large fall': f'ΔC < −{DC_LARGE:g}',
+                 'small fall': f'−{DC_LARGE:g} ≤ ΔC ≤ −{DC_SMALL:g}',
+                 'no change': f'|ΔC| < {DC_SMALL:g}',
+                 'small rise': f'{DC_SMALL:g} ≤ ΔC ≤ {DC_LARGE:g}',
+                 'large rise': f'ΔC > {DC_LARGE:g}'}
+#: Region families and band groups of the dc-components scatter. Set by the user
+#: 2026-10-20, basal ganglia placed with the thalamus.
+REGION_FAMILIES = {
+    'Subcortical': ('Ventral thalamus', 'Dorsal/medial thalamus', 'Basal ganglia'),
+    'Cingulate': ('ACC', 'MCC'),
+    'Limbic/MTL': ('Amygdala', 'Hippocampus', 'Medial temporal lobe'),
+    'Prefrontal': ('dPFC', 'vlPFC', 'vmPFC', 'OFC', 'Frontal operculum'),
+    'Sensorimotor/insula': ('S1', 'SII', 'M1', 'Premotor', 'aIns', 'pIns'),
+    'Posterior/temporal': ('PCC', 'Precuneus', 'SPL + IPS', 'Supramarginal', 'Angular',
+                           'STG', 'MTG', 'ITG/fusiform', 'Occipital')}
+#: matplotlib Dark2, the set POSTER_COLOURS of the heatmaps draws from.
+FAMILY_COLOURS = ('#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e', '#e6ab02')
+BAND_GROUPS = {'low': ('delta', 'theta', 'alpha'), 'beta': ('beta',),
+               'high': ('gamma', 'high_gamma')}
+BAND_GROUP_MARKERS = {'low': 'o', 'beta': 's', 'high': '^'}
 #: prediction(t2) ~ ... + (1 | subject) over all dc-groups pairs, dC continuous.
 DC_PAIN_FORMULAS = ('value ~ delta_pain + dc', 'value ~ delta_pain + dc + pain1_within',
                     'value ~ delta_pain * dc')
@@ -614,37 +634,31 @@ def fig_dose_by_dc(df, out_dir, name, title, min_subjects, slopes):
 
 
 def fig_dc_pain(df, out_dir, name, title, min_subjects, model):
-    """The prediction over the fraction of the interval, one panel per PAIN_PANELS
-    direction, one line per ΔC bin (colour) and DC_PAIN_BINS magnitude (style), with
-    the `model` (dc_pain_model) estimates of the first formula in the title.
+    """One panel per DC_PAIN_PANELS pain outcome, one line per ΔC bin: the prediction
+    over the fraction of the interval, with the `model` (dc_pain_model) estimates of
+    the first formula in the title.
     """
-    df = df.assign(pain_bin=assign_bins(df['delta_pain'], DC_PAIN_BINS))
-    df['line'] = df['dc_group'].astype(str) + ', ' + df['pain_bin'].astype(str)
-    frac = to_fraction(df, 'line')
-    fig, (axes, legend_axes) = plt.subplots(
-        2, len(PAIN_PANELS), figsize=(5.2 * len(PAIN_PANELS), 6.6),
-        gridspec_kw={'height_ratios': (3, 1.3)})
+    lines = [DC_BIN_LABELS[g] for g in DC_BINS]
+    fig, axes = plt.subplots(2, len(DC_PAIN_PANELS), figsize=(5.6 * len(DC_PAIN_PANELS), 6),
+                             sharex=True, sharey='row', gridspec_kw={'height_ratios': (3, 1)})
     dropped = []
-    for ax, legend_ax, (panel, pain_bins) in zip(axes, legend_axes, PAIN_PANELS):
+    for (ax, legend_ax), (panel, (lo, hi)) in zip(axes.T, DC_PAIN_PANELS.items()):
+        d = df[df['delta_pain'].between(lo, hi)].assign(
+            dc_label=lambda x: x['dc_group'].map(DC_BIN_LABELS))
         _style(ax)
         ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
-        lines = [f'{g}, {b}' for b in pain_bins for g in DC_BINS]
-        colours = DC_COLOURS * len(pain_bins)
-        styles = {f'{g}, {b}': PAIN_STYLES[b] for b in pain_bins for g in DC_BINS}
-        drawn = _trajectory_lines(ax, frac, 'line', lines, colours, min_subjects,
-                                  styles=styles)
-        dropped += [g for g in lines if g not in drawn]
+        drawn = _trajectory_lines(ax, to_fraction(d, 'dc_label'), 'dc_label', lines,
+                                  DC_COLOURS, min_subjects)
+        dropped += [f'{panel}: {g}' for g in lines if g not in drawn]
+        ax.set_title(f'{panel} (Δpain {lo:+d} to {hi:+d})', fontsize=10, color=INK)
         _fraction_axis(ax)
+        ax.tick_params(labelbottom=True)
         ax.set_ylim(-DC_PAIN_YLIM, DC_PAIN_YLIM)
-        ax.set_title(f'pain {panel}\n' + ',  '.join(
-            f'{"solid" if PAIN_STYLES[b] == "-" else "dashed"} {DC_PAIN_BINS[b][0]:+d} to '
-            f'{DC_PAIN_BINS[b][1]:+d}' for b in pain_bins), fontsize=9, color=INK)
         legend_ax.axis('off')
-        legend_ax.legend(*ax.get_legend_handles_labels(), frameon=False, fontsize=7,
-                         labelcolor=INK, loc='upper center')
-    axes[0].set_ylabel('Predicted Δpain (NRS)', color=INK)
-    for ax in axes[1:]:
-        ax.set_yticklabels([])
+        legend_ax.legend(*ax.get_legend_handles_labels(), frameon=False, fontsize=8,
+                         labelcolor=INK, loc='upper center',
+                         title='ΔC, t1 to t2 (typical doses)', title_fontsize=8)
+    axes[0, 0].set_ylabel('Predicted Δpain (NRS)', color=INK)
     fe = model[model['formula'] == model['formula'].iloc[0]].set_index('term')
     fig.suptitle(f'{title}\nprediction(t2) ~ Δpain + ΔC + (1 | subject), all '
                  f'{fe["n_pairs"].iloc[0]} dc-groups pairs, ΔC continuous: ' + ',   '.join(
@@ -653,23 +667,23 @@ def fig_dc_pain(df, out_dir, name, title, min_subjects, model):
                      for t, label in (('delta_pain', 'Δpain'), ('dc', 'ΔC'))),
                  fontsize=10, color=INK)
     fig.tight_layout()
-    _footer(fig, f'{df["subject"].nunique()} subjects, {df["pair_id"].nunique()} pairs. Legend: '
-                 f'ΔC bin t1 to t2 (as dc-groups), Δpain bin. Mean ± SEM across subjects of '
-                 f'subject means, y clipped at ±{DC_PAIN_YLIM}. Lines under {min_subjects} '
-                 f'subjects not drawn: {", ".join(dropped) or "none"}.')
+    shown = df[np.logical_or.reduce([df['delta_pain'].between(lo, hi)
+                                     for lo, hi in DC_PAIN_PANELS.values()])]
+    _footer(fig, textwrap.fill(
+        f'{shown["subject"].nunique()} subjects, {shown["pair_id"].nunique()} dc-groups pairs; '
+        'pairs with Δpain of -2 or of +2 or more left out. Mean ± SEM across subjects of '
+        f'subject means, y clipped at ±{DC_PAIN_YLIM}. '
+        f'Lines under {min_subjects} subjects not drawn: {", ".join(dropped) or "none"}.', 160))
     _save(fig, out_dir, name)
 
 
-def dc_shift_contributions(at_t2, trajectory_dir, weights_name, source_run, weighting):
-    """Per subject and ROI x band cell, its share of the ΔC shift of the prediction.
+def pair_cell_terms(at_t2, trajectory_dir, weights_name, source_run, weighting):
+    """Per pair at t2 and cell of its subject's weights fold: the prediction weight,
+    dz, and the fold's dC effect (`dc_beta` of the source `cells_loo.csv`).
 
     The prediction is sum_c w_c dz_c with w_c = beta_c iv_c / sum beta^2 iv over the
     cells finite at t2 (iv = 1 / var_resid for ivw, else 1; sign(beta_c) / sum |beta|
-    for unit), so a dC effect b_c on
-    dz_c shifts it by sum_c w_c b_c per typical dose. Each subject uses its own
-    fold's beta and b (`dc_beta` of the source `cells_loo.csv`), averaged over its
-    pairs at t2. A cell a pair lacks enters as weight 0, so the shares sum to the
-    subject's shift. The d_pain:dC term is left out.
+    for unit). A cell the pair lacks has weight 0 and dz NaN.
     """
     weights = io.read_table(config.pain_change_prediction_weights_path(weights_name),
                             on_stale='warn')
@@ -684,20 +698,124 @@ def dc_shift_contributions(at_t2, trajectory_dir, weights_name, source_run, weig
     parts = []
     for subject, rows in dz.groupby('subject'):
         w = weights[weights['heldout_subject'] == subject]
-        finite = np.isfinite(rows[[cell_column(r, b) for r, b in zip(w['roi'], w['band'])]]
-                             .to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE))
+        x = rows[[cell_column(r, b) for r, b in zip(w['roi'], w['band'])]].to_numpy(
+            dtype=config.CACHE_ACCUMULATE_DTYPE)
+        finite = np.isfinite(x)
         beta = w['beta'].to_numpy()
         iv = 1.0 / w['var_resid'].to_numpy() if weighting == 'ivw' else 1.0
         num, den = ((np.sign(beta), np.abs(beta)) if weighting == 'unit'
                     else (beta * iv, beta ** 2 * iv))
         weight = (np.where(finite, num, 0.0)
                   / np.where(finite, den, 0.0).sum(axis=1, keepdims=True))
+        n = len(rows)
         parts.append(pd.DataFrame({
-            'subject': subject, 'roi': w['roi'].to_numpy(), 'band': w['band'].to_numpy(),
-            'weight': weight.mean(axis=0), 'dc_beta': w['dc_beta'].to_numpy(),
-            'has_cell': finite.any(axis=0),
-            'contribution': (weight * w['dc_beta'].to_numpy()).mean(axis=0)}))
+            'pair_id': np.repeat(rows['pair_id'].to_numpy(), len(w)), 'subject': subject,
+            'roi': np.tile(w['roi'].to_numpy(), n), 'band': np.tile(w['band'].to_numpy(), n),
+            'weight': weight.ravel(), 'dz': x.ravel(),
+            'dc_beta': np.tile(w['dc_beta'].to_numpy(), n)}))
     return pd.concat(parts, ignore_index=True)
+
+
+def dc_shift_contributions(terms):
+    """Per subject and cell, its share of the ΔC shift of the prediction.
+
+    A dC effect b_c on dz_c shifts the prediction by sum_c w_c b_c per typical dose,
+    each subject with its own fold, averaged over its pairs. A cell a pair lacks
+    enters as weight 0, so the shares sum to the subject's shift. The d_pain:dC term
+    is left out.
+    """
+    t = terms.assign(contribution=terms['weight'] * terms['dc_beta'],
+                     has_cell=np.isfinite(terms['dz']))
+    return (t.groupby(['subject', 'roi', 'band'], sort=False)
+            .agg(weight=('weight', 'mean'), dc_beta=('dc_beta', 'first'),
+                 has_cell=('has_cell', 'any'), contribution=('contribution', 'mean'))
+            .reset_index())
+
+
+def component_fits(terms, at_t2, min_subjects):
+    """score_k(t2) ~ delta_pain + dc + (1 | subject) per component, as _fixed_effects rows.
+
+    score_k = sum of w_c dz_c over the component's cells, its part of the prediction.
+    Components are each ROI (`level` roi, `bands` all) and each REGION_FAMILIES x
+    BAND_GROUPS group (`level` family), fitted over the pairs that have any of the
+    component's cells, with at least `min_subjects`.
+    """
+    family = {r: f for f, rois in REGION_FAMILIES.items() for r in rois}
+    group = {b: g for g, bands in BAND_GROUPS.items() for b in bands}
+    unmapped = sorted(set(terms['roi']) - set(family)) + sorted(set(terms['band']) - set(group))
+    if unmapped:
+        raise ValueError(f'no region family or band group for {unmapped}')
+    scores = terms.assign(value=terms['weight'] * terms['dz'], family=terms['roi'].map(family),
+                          band_group=terms['band'].map(group), all_bands='all')
+    meta = at_t2[['pair_id', 'delta_pain', 'dc']]
+    rows = []
+    for level, keys in (('roi', ['roi', 'all_bands']), ('family', ['family', 'band_group'])):
+        s = (scores.groupby(['pair_id', 'subject', *keys], sort=False)['value']
+             .sum(min_count=1).dropna().reset_index().merge(meta, on='pair_id'))
+        for (region, bands), d in s.groupby(keys, sort=False):
+            if d['subject'].nunique() < min_subjects:
+                continue
+            rows += [dict(r, level=level, region=region, bands=bands)
+                     for r in _fixed_effects(d, 'value ~ delta_pain + dc',
+                                             'score_k ~ delta_pain + dc + (1 | subject)')]
+    return pd.DataFrame(rows)
+
+
+def _crosshair(ax, w, **kw):
+    """Points of a component_fits pivot with their 95% CIs on both axes; returns (x, y)."""
+    x, y = w[('estimate', 'delta_pain')], w[('estimate', 'dc')]
+    ax.errorbar(x, y, xerr=[x - w[('ci_low', 'delta_pain')], w[('ci_high', 'delta_pain')] - x],
+                yerr=[y - w[('ci_low', 'dc')], w[('ci_high', 'dc')] - y], capsize=0, **kw)
+    return x, y
+
+
+def fig_components(fits, out_dir, name, title, min_subjects):
+    """Each component's Δpain coefficient (x) against its ΔC coefficient (y), with 95%
+    CIs: ROIs (left), REGION_FAMILIES x BAND_GROUPS (right, colour family, marker band).
+    """
+    wide = fits[fits['term'].isin(['delta_pain', 'dc'])].pivot_table(
+        index=['level', 'region', 'bands'], columns='term',
+        values=['estimate', 'ci_low', 'ci_high'], sort=False)
+    fig, (left, right) = plt.subplots(1, 2, figsize=(14, 6.2))
+    for ax in (left, right):
+        _style(ax)
+        ax.axhline(0, color=MUTED, lw=0.8)
+        ax.axvline(0, color=MUTED, lw=0.8)
+        ax.set_xlabel('Δpain coefficient (score NRS per NRS of reported Δpain)', color=INK)
+    left.set_ylabel('ΔC coefficient at fixed Δpain (score NRS per typical dose)', color=INK)
+    roi = wide.loc['roi']
+    x, y = _crosshair(left, roi, fmt='o', ms=5, color=NEUTRAL, ecolor=GRID, elinewidth=1)
+    for (r, _), xi, yi in zip(roi.index, x, y):
+        left.annotate(roi_schemes.ROI_RENAMES.get(r, r), (xi, yi), textcoords='offset points',
+                      xytext=(4, 3), fontsize=7, color=INK)
+    left.set_title(f'ROIs, all bands ({len(roi)})', fontsize=9, color=INK)
+    family = wide.loc['family']
+    for f, colour in zip(REGION_FAMILIES, FAMILY_COLOURS):
+        for g, marker in BAND_GROUP_MARKERS.items():
+            if (f, g) in family.index:
+                _crosshair(right, family.loc[[(f, g)]], fmt=marker, ms=8, color=colour,
+                           mec='white', mew=0.8, ecolor=colour, elinewidth=1.2, alpha=0.9)
+    families = [plt.Line2D([], [], ls='', marker='o', ms=7, color=c)
+                for c in FAMILY_COLOURS[:len(REGION_FAMILIES)]]
+    groups = [plt.Line2D([], [], ls='', marker=m, ms=7, color=NEUTRAL)
+              for m in BAND_GROUP_MARKERS.values()]
+    right.add_artist(right.legend(families, list(REGION_FAMILIES), frameon=False, fontsize=8,
+                                  labelcolor=INK, loc='lower right'))
+    right.legend(groups, [f'{g}: {"/".join(BAND_SYMBOL[b] for b in BAND_GROUPS[g])}'
+                          for g in BAND_GROUP_MARKERS], frameon=False, fontsize=8,
+                 labelcolor=INK, loc='upper right')
+    right.set_title(f'Region family x band group ({len(family)})', fontsize=9, color=INK)
+    fig.suptitle(f'{title}\nPer component: score_k(t2) ~ Δpain + ΔC + (1 | subject), all '
+                 'dc-groups pairs, ΔC continuous', fontsize=10, color=INK)
+    fig.tight_layout()
+    _footer(fig, textwrap.fill(
+        'score_k: the component\'s part of the prediction at t2, sum of its cells\' weight x '
+        'dz, so the components add up to the prediction. Each fit uses the pairs that have '
+        f'the component, components under {min_subjects} subjects left out. 95% CIs. On the '
+        'x axis: tracks reported pain. On the y axis: moves with opioid exposure at fixed '
+        'pain. statsmodels MixedLM, REML. Families: ' + '; '.join(
+            f'{f}: {", ".join(r)}' for f, r in REGION_FAMILIES.items()) + '.', 200))
+    _save(fig, out_dir, name)
 
 
 def shift_by_cell(per_subject):
@@ -784,7 +902,7 @@ def fig_dc_shift(cells, out_dir, name, title, rois, bands, model_dc):
 # Entry points
 # ============================================================================
 
-def prediction_frame(run_dir, weights_name, prediction='raw', weighting='uniform',
+def prediction_frame(run_dir, weights_name, prediction='raw', weighting='unit',
                      bins=None):
     """One scoring run's predictions joined to pair metadata, the chosen one as `value`."""
     params = json.loads((Path(run_dir) / 'provenance.json').read_text())['params']
@@ -797,11 +915,11 @@ def prediction_frame(run_dir, weights_name, prediction='raw', weighting='uniform
         columns={f'pred_{prediction}_{weighting}': 'value'})
 
 
-def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min_subjects=3,
+def render_all(run_dir, weights_name, prediction='raw', weighting='unit', min_subjects=3,
                bins=None):
     """Every figure for one prediction (raw | adj) and weighting (uniform | ivw | unit)."""
     bins = bins or DPAIN_BINS
-    out_dir = Path(run_dir) / FIGURES_SUBDIR
+    out_dir = Path(run_dir) / FIGURES_SUBDIR / weighting
     df = prediction_frame(run_dir, weights_name, prediction, weighting, bins)
     tag = f'{prediction}-{weighting}'
 
@@ -871,15 +989,16 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
                    parents=[Path(run_dir) / f'predictions_{weights_name}.csv'],
                    subjects=sorted(at_t2['subject'].unique()),
                    script='ieeg_ehr/analysis/plot_pain_change_prediction.py')
-    fig_dc_pain(dc_df, out_dir, name('dc-pain-bins'), title, min_subjects, model)
+    fig_dc_pain(dc_df, out_dir, name('dc-pain-fell'), title, min_subjects, model)
     fig_dose_by_dc(dose_df, out_dir, name('dose-response-by-dc'), title, min_subjects, slopes)
     params = json.loads((Path(run_dir) / 'provenance.json').read_text())['params']
     weights_path = config.pain_change_prediction_weights_path(weights_name)
     source_run = Path(io.read_sidecar(weights_path)['params']['source_run'])
-    per_subject = dc_shift_contributions(at_t2, params['trajectory_dir'], weights_name,
-                                         source_run, weighting)
-    # The heatmap's ROI and band order: the in-sample fit the LOO run refits.
     source_params = json.loads((source_run / 'provenance.json').read_text())['params']
+    terms = pair_cell_terms(at_t2, params['trajectory_dir'], weights_name, source_run,
+                            weighting)
+    per_subject = dc_shift_contributions(terms)
+    # The heatmap's ROI and band order: the in-sample fit the LOO run refits.
     rois = list(dict.fromkeys(io.read_table(Path(source_params['reference_run']) / 'cells.csv',
                                             on_stale='warn')['region']))
     shift = shift_by_cell(per_subject)
@@ -894,6 +1013,17 @@ def render_all(run_dir, weights_name, prediction='raw', weighting='uniform', min
                  list(BAND_SETS[source_params['band_set']]),
                  model.set_index(['formula', 'term']).loc[
                      (f'{DC_PAIN_FORMULAS[0]} + (1 | subject)', 'dc'), 'estimate'])
+    # The source fit's subject floor for a cell.
+    fits = component_fits(terms, at_t2, source_params['min_subjects'])
+    io.write_table(fits, Path(run_dir) / f'dc-components_dpain_{tag}.csv',
+                   params={'weights': weights_name, 'weighting': weighting,
+                           'formula': 'score_k ~ delta_pain + dc + (1 | subject)',
+                           'min_subjects': source_params['min_subjects'],
+                           'first_hours_out': DC_FIRST_HOURS_OUT},
+                   parents=[weights_path, Path(run_dir) / f'predictions_{weights_name}.csv'],
+                   subjects=sorted(at_t2['subject'].unique()),
+                   script='ieeg_ehr/analysis/plot_pain_change_prediction.py')
+    fig_components(fits, out_dir, name('dc-components'), title, source_params['min_subjects'])
 
 
 def main(argv=None):
@@ -902,7 +1032,7 @@ def main(argv=None):
     ap.add_argument('--run-dir', required=True)
     ap.add_argument('--weights', required=True)
     ap.add_argument('--prediction', choices=['raw', 'adj'], default='raw')
-    ap.add_argument('--weighting', choices=['uniform', 'ivw', 'unit'], default='uniform')
+    ap.add_argument('--weighting', choices=['uniform', 'ivw', 'unit'], default='unit')
     ap.add_argument('--min-subjects', type=int, default=3)
     ap.add_argument('--bins', type=json.loads, default=None,
                     help='JSON {label: [lo, hi]}, inclusive, in display order')
