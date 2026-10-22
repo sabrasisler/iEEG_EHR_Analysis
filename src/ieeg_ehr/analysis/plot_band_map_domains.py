@@ -111,7 +111,7 @@ def domain_rows(regions, scheme):
 def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_label,
                value='beta_nrs_within', p_col='p', reject='p_bh_reject',
                band_col='band', converged='converged',
-               margins_in=POSTER_MARGINS_IN, bracket_in=POSTER_BRACKET_IN):
+               margins_in=POSTER_MARGINS_IN, bracket_in=POSTER_BRACKET_IN, cap=None):
     """Draw the region x band map, rows grouped by domain. Returns the colour cap.
 
     `cells` holds one row per (region, band) with `value`, `p_col` and `reject`
@@ -121,7 +121,9 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
     none. A cell whose fit did not converge is drawn grey with no star or
     outline: its estimate is the optimizer's last iteration, not a result.
     `margins_in` and `bracket_in` move the poster's margins and domain bracket, in
-    inches, for domain labels or ROI names wider than the defaults hold.
+    inches, for domain labels or ROI names wider than the defaults hold. `cap`
+    replaces the default cap: cells beyond it saturate and the colorbar shows an
+    extension arrow on that side.
     """
     order = [r for _, ms in groups for r in ms]
     names = list(bands)
@@ -140,7 +142,11 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
     logger.info('%d cells greyed out as not converged; %d BH-significant converged '
                 'cells drawn', n_grey, int(sig.to_numpy().sum()))
 
-    cap = float(np.nanmax(np.abs(cells[value].to_numpy(dtype=float))))
+    values = cells[value].to_numpy(dtype=float)
+    cap = float(np.nanmax(np.abs(values))) if cap is None else cap
+    extend = {(False, False): 'neither', (True, False): 'min', (False, True): 'max',
+              (True, True): 'both'}[(bool(np.nanmin(values) < -cap),
+                                     bool(np.nanmax(values) > cap))]
     cm = plt.get_cmap('RdBu_r').copy()
     cm.set_bad('0.85')
     if poster:
@@ -216,7 +222,7 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
         cax = fig.add_axes((p.x1 + 0.15 / POSTER_SIZE[0],
                             p.y0 + 0.2 * p.height, 0.16 / POSTER_SIZE[0],
                             0.6 * p.height))
-        cb = fig.colorbar(im, cax=cax)
+        cb = fig.colorbar(im, cax=cax, extend=extend)
         cb.set_label(cb_label, fontsize=POSTER_FS['cb_label'])
         cb.ax.tick_params(labelsize=POSTER_FS['cb_tick'])
         if title:
@@ -227,7 +233,7 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
     else:
         if title:
             ax.set_title(title, fontsize=11)
-        fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03, label=cb_label)
+        fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03, label=cb_label, extend=extend)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if poster:

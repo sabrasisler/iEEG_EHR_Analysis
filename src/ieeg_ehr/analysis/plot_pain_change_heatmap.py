@@ -18,6 +18,12 @@ for a region set no domain scheme covers (an hcpex_paper ROI mapping).
 hues of the anatomy glass brain (`plot_pain_change_anatomy.GROUPS`), and refuses
 an ROI that GROUPS does not place.
 
+The colour scale is capped at max |beta| over the term's BH-significant converged
+cells (`colour_cap`), so a large non-significant cell (M1 delta in the 2026-10-22
+run) cannot wash out the significant ones: cells beyond the cap saturate, and the
+colorbar's arrow marks the clipped side. A term with no significant cell is
+capped at max |beta| over every converged cell. The glass brain uses the same cap.
+
 `--scratch` writes `heatmap_<term token>_<grouping>.png` to
 `analysis/scratch/pain_change_heatmap/` instead of the run, for trying a look
 before it replaces the run's figure.
@@ -60,6 +66,13 @@ ANATOMY = 'anatomy'
 ANATOMY_MARGINS_IN = (3.2, 1.05, 0.50, 0.72)
 ANATOMY_BRACKET_IN = (1.95, 2.05)
 SCRATCH_SUBDIR = 'pain_change_heatmap'
+
+
+def colour_cap(cells, term):
+    """max |beta| over the term's BH-significant converged cells, else all converged."""
+    ok = cells['converged'].eq(True)
+    sig = ok & cells[f'{term}_bh_reject'].eq(True)
+    return float(cells.loc[sig if sig.any() else ok, f'{term}_beta'].abs().max())
 
 
 def anatomy_rows(regions):
@@ -118,7 +131,7 @@ def main(argv=None):
     render_map(cells, groups, bands, out, poster=True, colours=colours,
                title=title, cb_label=cb_label, value=f'{args.term}_beta',
                p_col=f'{args.term}_p', reject=f'{args.term}_bh_reject', band_col='freq',
-               **layout)
+               cap=colour_cap(cells, args.term), **layout)
     io.log_analysis(f'pain_change {args.term} heatmap, rows grouped by '
                     f'{args.domain_scheme}', out.parent)
     logger.info('wrote %s', out)

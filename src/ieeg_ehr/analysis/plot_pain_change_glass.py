@@ -23,7 +23,7 @@ LOW value is the mean beta over the ROI's significant LOW_BANDS (delta, theta,
 alpha), the HIGH value over its significant high bands (beta to high gamma). An
 ROI significant in both is a split dot, left half low, right half high
 (`plot_domain_glass.wedge_markers`). Colours are the heatmap's: RdBu_r on +/- the
-heatmap's cap, max |beta| over every converged cell, so a half and its heatmap
+heatmap's cap (`plot_pain_change_heatmap.colour_cap`), so a half and its heatmap
 cells match. The legend is a key to the halves and a colorbar, not a list of
 ROIs; `glass_<term token>_sig.csv` beside it lists each drawn ROI's values.
 
@@ -50,7 +50,7 @@ from ieeg_ehr import io
 from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR, discovery_paths
 from ieeg_ehr.analysis.plot_band_map_domains import BAND_SYMBOL
 from ieeg_ehr.analysis.plot_domain_glass import electrode_coords, inside_brain, wedge_markers
-from ieeg_ehr.analysis.plot_pain_change_heatmap import TERMS
+from ieeg_ehr.analysis.plot_pain_change_heatmap import TERMS, colour_cap
 from ieeg_ehr.analysis.run_mixed_model_pilot import roi_maps
 from ieeg_ehr.config import roi_schemes
 
@@ -233,8 +233,7 @@ def main(argv=None):
         empty = sorted(set(values['region']) - set(el['region']))
         if empty:
             raise SystemExit(f'significant ROIs with no electrode drawn: {empty}')
-        ok = cells['converged'].eq(True)
-        cap = float(np.nanmax(np.abs(cells.loc[ok, f'{args.term}_beta'])))
+        cap = colour_cap(cells, args.term)
         out = run_dir / FIGURES_SUBDIR / f'glass_{token}_sig.png'
         draw_low_high(el[el['region'].isin(values['region'])], values, cap, cb_label,
                       out, args.node_size)
