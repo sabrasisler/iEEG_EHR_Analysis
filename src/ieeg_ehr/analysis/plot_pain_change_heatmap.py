@@ -10,8 +10,9 @@ for `d_pain`, `heatmap_dpain-x-cbar.png` for `d_pain:Cbar`,
 `heatmap_cbar.png` for the opioid main effects `dC` and `Cbar`. Drawn by
 `plot_band_map_domains.render_map` in its poster mode, so it matches the
 band-power poster map: rows grouped by domain, colour = the term's fixed effect,
-outlines = BH across all fitted cells, stars = uncorrected p. A star without an
-outline is not BH-significant. Region names take `roi_schemes.ROI_RENAMES`.
+outlines = BH across all fitted cells (`<term>_bh_reject`), stars = the same BH
+q-values (`<term>_bh`) on STAR_CUTS: * q < 0.05, ** q < 0.01, *** q < 0.001. Every
+star therefore sits in an outline. Region names take `roi_schemes.ROI_RENAMES`.
 `--domain-scheme none` draws the rows ungrouped, in the run's own region order,
 for a region set no domain scheme covers (an hcpex_paper ROI mapping).
 `--domain-scheme anatomy` groups an hcpexv5 run's rows by lobe, in the order and
@@ -130,7 +131,7 @@ def main(argv=None):
         out = run_dir / FIGURES_SUBDIR / f'heatmap_{token}.png'
     render_map(cells, groups, bands, out, poster=True, colours=colours,
                title=title, cb_label=cb_label, value=f'{args.term}_beta',
-               p_col=f'{args.term}_p', reject=f'{args.term}_bh_reject', band_col='freq',
+               p_col=f'{args.term}_bh', reject=f'{args.term}_bh_reject', band_col='freq',
                cap=colour_cap(cells, args.term), **layout)
     io.log_analysis(f'pain_change {args.term} heatmap, rows grouped by '
                     f'{args.domain_scheme}', out.parent)

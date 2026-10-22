@@ -193,7 +193,7 @@ def draw_low_high(el, values, cap, cb_label, out_path, node_size):
                       label='whole dot: one group only')]
     fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, 0.165),
                ncol=1, frameon=False, fontsize=8.5, handletextpad=0.4,
-               labelspacing=0.5, title='BH-significant ROIs, mean β of their bands',
+               labelspacing=0.5, title='Mean β of BH-significant cells (q < 0.05)',
                title_fontproperties={'weight': 'bold', 'size': 9.5})
     cax = fig.add_axes((0.25, 0.035, 0.5, 0.012))
     cb = fig.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax,

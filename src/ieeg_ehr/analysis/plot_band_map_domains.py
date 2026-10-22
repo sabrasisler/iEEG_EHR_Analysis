@@ -66,8 +66,9 @@ POSTER_CB_LABEL = {'log_power': 'Δ log10 power per pain point',
 POSTER_BRACKET_IN = (1.38, 1.48)
 BAND_SYMBOL = {'delta': 'δ', 'theta': 'θ', 'alpha': 'α', 'beta': 'β',
                'gamma': 'γ', 'high_gamma': 'hγ'}
-#: The stars of `plot_domain_lmer.heatmap`: the UNCORRECTED p. The outlines
-#: stay the BH decision, so a star without an outline is not BH-significant.
+#: Star cuts on render_map's `p_col`. Its callers here pass the UNCORRECTED p, as
+#: `plot_domain_lmer.heatmap` does, so a star without an outline is not
+#: BH-significant; `plot_pain_change_heatmap` passes BH q-values instead.
 STAR_CUTS = ((1e-3, '***'), (1e-2, '**'), (5e-2, '*'))
 
 
@@ -173,7 +174,7 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
         ax.set_yticklabels(order, fontsize=fs['roi'])
         for sp in ax.spines.values():
             sp.set_visible(False)
-        # stars: uncorrected p, white on the darkest cells as the domain map
+        # stars on `p_col`, white on the darkest cells as the domain map
         pval = grid(p_col).to_numpy(dtype=float)
         b_ = beta.to_numpy(dtype=float)
         for i in range(len(order)):
