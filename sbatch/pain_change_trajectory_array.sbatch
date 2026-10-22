@@ -2,7 +2,7 @@
 #SBATCH -p ckeller1
 #SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4GB
+#SBATCH --mem=8GB
 #SBATCH -J pc_trajectory
 #SBATCH -o logs/pc_trajectory_%A_%a.out
 # One task per subject. SUBJECTS is a space-separated list, or "all" for the
