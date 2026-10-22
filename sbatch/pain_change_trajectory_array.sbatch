@@ -9,7 +9,9 @@
 # reference run's subjects that are still discovery (53):
 #   sbatch --array=0-3 --export=ALL,SUBJECTS="183 196 210 143" sbatch/pain_change_trajectory_array.sbatch
 #   sbatch --array=0-52 --export=ALL,SUBJECTS=all sbatch/pain_change_trajectory_array.sbatch
-# ROI must be the reference run's --roi-scheme (default roi_v3_ins).
+# ROI must be the reference run's --roi-scheme (default roi_v3_ins). A reference fit with
+# --first-epoch-post (e1post0to5) needs its post-report z tables, and the extraction
+# then starts at t1 + 5 min on the post-report scale (see the module docstring).
 set -euo pipefail
 module load python/3.12
 source $GROUP_HOME/venvs/ieeg_ehr_analysis/bin/activate

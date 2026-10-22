@@ -107,6 +107,44 @@ def post_baseline(n, zsum, z2sum, min_windows):
     return m, s
 
 
+def report_epochs(sess, epoch_ids):
+    """The session's reports among `epoch_ids`: epoch_id and pain_time, in time order."""
+    epochs = (sess.defs[sess.defs['epoch_id'].isin(epoch_ids)]
+              [['epoch_id', 'pain_time']].drop_duplicates('epoch_id')
+              .assign(pain_time=lambda d: pd.to_datetime(d['pain_time']))
+              .sort_values(['pain_time', 'epoch_id'], kind='stable'))
+    if not (epochs['pain_time'] == epochs['pain_time'].dt.floor('min')).all():
+        raise ValueError(f'sub-{sess.subject} ses-{sess.session}: a report is not on a whole '
+                         'minute, so its windows are not whole minute blocks')
+    return epochs
+
+
+def working_windows(blocks, epochs, max_excl, min_windows):
+    """Per report, the pre and post window means on the working scale, and the post
+    baseline (m, s) on that scale, per channel x frequency of `blocks`.
+
+    Returns ({epoch_id: {'pre': (z, frac), 'post': (z, frac)}}, m, s, n, n_post_kept),
+    n the windows behind each baseline cell.
+    """
+    shape = (len(blocks.channels), len(blocks.bins))
+    n = np.zeros(shape, dtype=np.int64)
+    zsum, z2sum = (np.zeros(shape, dtype=config.CACHE_ACCUMULATE_DTYPE) for _ in range(2))
+    windows, n_post_kept = {}, 0
+    w = WINDOW_MIN
+    for ep in epochs.itertuples(index=False):
+        s, cnt, v, s2 = blocks.window(ep.pain_time - pd.Timedelta(minutes=w), 2 * w)
+        pre, pre_frac = window_means(s[:w], cnt[:w], v[:w], max_excl)
+        post, post_frac = window_means(s[w:], cnt[w:], v[w:], max_excl)
+        keep = post_frac[0] <= max_excl
+        n[keep] += cnt[w:].sum(axis=0)[keep]
+        zsum[keep] += s[w:].sum(axis=0)[keep]
+        z2sum[keep] += s2[w:].sum(axis=0)[keep]
+        n_post_kept += int(keep.sum())
+        windows[ep.epoch_id] = {'pre': (pre[0], pre_frac[0]), 'post': (post[0], post_frac[0])}
+    m, s = post_baseline(n, zsum, z2sum, min_windows)
+    return windows, m, s, n, n_post_kept
+
+
 def build_session(subject, session, vc, out_dirs):
     """Write one subject-session's post and pre tables; returns the stats."""
     t0 = time.time()
@@ -123,41 +161,20 @@ def build_session(subject, session, vc, out_dirs):
     slot = {c: i for i, c in enumerate(channels)}
     max_excl = wvc.resolved().max_excluded_frac
 
-    epochs = (sess.defs[sess.defs['epoch_id'].isin(stored['epoch_id'])]
-              [['epoch_id', 'pain_time']].drop_duplicates('epoch_id')
-              .assign(pain_time=lambda d: pd.to_datetime(d['pain_time']))
-              .sort_values(['pain_time', 'epoch_id'], kind='stable'))
-    if not (epochs['pain_time'] == epochs['pain_time'].dt.floor('min')).all():
-        raise ValueError(f'sub-{subject} ses-{session}: a report is not on a whole '
-                         'minute, so its windows are not whole minute blocks')
-
-    shape = (len(channels), len(freq_cols))
-    n = np.zeros(shape, dtype=np.int64)
-    zsum, z2sum = (np.zeros(shape, dtype=config.CACHE_ACCUMULATE_DTYPE) for _ in range(2))
-    working, diffs, nan_mismatch, n_post_kept = {}, [], 0, 0
-    w = WINDOW_MIN
-    for ep in epochs.itertuples(index=False):
-        s, cnt, v, s2 = blocks.window(ep.pain_time - pd.Timedelta(minutes=w), 2 * w)
-        pre, pre_frac = window_means(s[:w], cnt[:w], v[:w], max_excl)
-        post, post_frac = window_means(s[w:], cnt[w:], v[w:], max_excl)
-        keep = post_frac[0] <= max_excl
-        n[keep] += cnt[w:].sum(axis=0)[keep]
-        zsum[keep] += s[w:].sum(axis=0)[keep]
-        z2sum[keep] += s2[w:].sum(axis=0)[keep]
-        n_post_kept += int(keep.sum())
-
-        rows = stored[stored['epoch_id'] == ep.epoch_id]
+    epochs = report_epochs(sess, stored['epoch_id'])
+    windows, m, s, n, n_post_kept = working_windows(blocks, epochs, max_excl, min_windows)
+    working, diffs, nan_mismatch = {}, [], 0
+    for epoch_id, by_window in windows.items():
+        rows = stored[stored['epoch_id'] == epoch_id]
         idx = [slot[c] for c in rows['channel']]
         want = rows[freq_cols].to_numpy(dtype=config.CACHE_ACCUMULATE_DTYPE)
-        got = pre[0][idx]
+        got = by_window['pre'][0][idx]
         nan_mismatch += int((np.isnan(want) != np.isnan(got)).sum())
         both = np.isfinite(want) & np.isfinite(got)
         diffs.append(np.abs(want[both] - got[both]))
-        working[ep.epoch_id] = (rows, idx, {'pre': (pre[0], pre_frac[0]),
-                                            'post': (post[0], post_frac[0])})
+        working[epoch_id] = (rows, idx, by_window)
 
     diffs = np.concatenate(diffs) if diffs else np.array([])
-    m, s = post_baseline(n, zsum, z2sum, min_windows)
     stats = {'n_epochs': len(epochs), 'n_post_channel_epochs_in_baseline': n_post_kept,
              'baseline_windows_median': float(np.median(n.min(axis=1))),
              'baseline_cells_nan': int(np.isnan(s).sum()),

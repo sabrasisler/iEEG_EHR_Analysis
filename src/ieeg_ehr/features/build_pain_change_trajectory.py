@@ -23,6 +23,14 @@ cache: every masked window of every pain epoch in the session. Only the windows
 being scored come from the continuous `preprocessed/bipolar_psd` NWBs. Power stays
 log10 throughout, as in the model the weights come from.
 
+A REFERENCE RUN FIT WITH `--first-epoch-post` (`e1post0to5`) moves both. The earlier
+epoch is [t1, t1 + 5), so the steps run t = t1 + 5 ... t1 + HORIZON_MIN, t_min still
+counts from t1, and d(t1 + 5) = 0. The z is on the `post_report_epochs` scale: a
+first pass over the session's reports finds the post baseline sd s on the working
+scale (`build_pain_change_post_z.working_windows`), and d(t) = (z(t) - z(t1 + 5)) / s,
+the post baseline mean cancelling in the difference. Validation then runs against
+the post-report tables the fit read.
+
 MASKING is the epoch rule per channel: masked windows drop out, and a channel whose
 excluded fraction of the 5-min window exceeds `max_excluded_frac` is NaN at that
 step. A window no run covers, or whose run failed extraction, counts as excluded.
@@ -247,12 +255,19 @@ def window_means(s, cnt, v, max_excluded_frac):
     return zmean, frac
 
 
-def pair_trajectory(blocks, t1, bin_table, bands, max_excluded_frac):
-    """(channel band d, excluded fraction) per step: (n_steps, C, n_bands), (n_steps, C)."""
-    s, cnt, v, _ = blocks.window(t1 - pd.Timedelta(minutes=WINDOW_MIN),
-                              WINDOW_MIN + HORIZON_MIN)
+def pair_trajectory(blocks, t1, bin_table, bands, max_excluded_frac, first_min=0,
+                    scale=None):
+    """(channel band d, excluded fraction) per step: (n_steps, C, n_bands), (n_steps, C).
+
+    Steps end at t1 + first_min ... t1 + HORIZON_MIN, the first one the reference
+    epoch. `scale` (C, F) divides the z difference: the post baseline sd.
+    """
+    s, cnt, v, _ = blocks.window(t1 + pd.Timedelta(minutes=first_min - WINDOW_MIN),
+                              WINDOW_MIN + HORIZON_MIN - first_min)
     zmean, frac = window_means(s, cnt, v, max_excluded_frac)
     d = zmean - zmean[0]
+    if scale is not None:
+        d = d / scale
     n_steps, c, f = d.shape
     dband, names = axes.aggregate_bands(d.reshape(n_steps * c, f), bin_table,
                                         bands=bands, is_difference=True)
@@ -331,9 +346,14 @@ def extract_subject(subject, vc, reference, out_dir, admin, all_defs, max_pairs=
 
     `max_pairs` is a smoke test: stop after that many pairs and write nothing.
     """
+    from ieeg_ehr.features import build_pain_change_post_z as post_z
+
     t0 = time.time()
     sid = f'sub-{subject}'
-    zdir = zview.zscore_dir(vc)
+    first_post = reference['first_epoch_post']
+    first_min = WINDOW_MIN if first_post else 0
+    wvc = post_z.working_vc(vc) if first_post else vc
+    zdir = zview.zscore_dir(wvc)
     zpaths = sorted(zdir.glob(f'zmean_{sid}_ses-*.parquet'))
     if not zpaths:
         raise FileNotFoundError(f'no z-score tables for {sid} in {zdir}')
@@ -347,7 +367,7 @@ def extract_subject(subject, vc, reference, out_dir, admin, all_defs, max_pairs=
     freq_table, _ = fullres_cells.analysis_freq_table()
     bin_table = freq_table.reset_index()
     max_excl = vc.resolved().max_excluded_frac
-    min_windows = zview.zscore_params(vc, fullres_reader.n_freqs())['baseline_min_windows']
+    min_windows = zview.zscore_params(wvc, fullres_reader.n_freqs())['baseline_min_windows']
     columns = [cell_column(r, b) for r in regions for b in bands]
 
     defs = all_defs[all_defs['subject'] == subject]
@@ -363,35 +383,50 @@ def extract_subject(subject, vc, reference, out_dir, admin, all_defs, max_pairs=
         sp = pairs[pairs['session'] == session].reset_index(drop=True)
         if sp.empty:
             continue
-        sess = zview.open_session(subject, session, vc)
+        sess = zview.open_session(subject, session, wvc)
         mean, sd, _ = zview.session_baseline(sess, min_windows)
         logger.info('%s ses-%s: baseline done, %.0fs so far', sid, session, time.time() - t0)
         channels = [c for c in sess.session_channels if c in region_of]
-        blocks = MinuteBlocks(session_runs(subject, session), sess, mean, sd,
-                              channels, freq_table.index.to_numpy())
-        stored_index, stored = pain_change.session_rows(zpath, sp, region_of,
-                                                        freq_table, bands)
+        runs = session_runs(subject, session)
+        bins = freq_table.index.to_numpy()
+        scale = None
+        if first_post:
+            reports = post_z.report_epochs(
+                sess, io.read_table(zpath, columns=['epoch_id'], on_stale='warn')['epoch_id'])
+            _, _, scale, _, _ = post_z.working_windows(
+                MinuteBlocks(runs, sess, mean, sd, channels, bins), reports, max_excl,
+                min_windows)
+            logger.info('%s ses-%s: post baseline done, %.0fs so far', sid, session,
+                        time.time() - t0)
+            stored_index, stored = pain_change.session_rows(
+                post_z.post_zscore_dir(vc, 'pre') / zpath.name, sp, region_of, freq_table,
+                bands, first_path=post_z.post_zscore_dir(vc, 'post') / zpath.name)
+        else:
+            stored_index, stored = pain_change.session_rows(zpath, sp, region_of,
+                                                            freq_table, bands)
+        blocks = MinuteBlocks(runs, sess, mean, sd, channels, bins)
         meta = pair_metadata(sp, defs[defs['session'] == session],
                              admin[(admin['subject'] == subject)
                                    & (admin['session'] == session)],
                              report_times(subject, session))
         for i in np.argsort(meta['t1'].to_numpy(), kind='stable'):
             row = meta.iloc[i]
-            dband, frac = pair_trajectory(blocks, row['t1'], bin_table, bands, max_excl)
+            dband, frac = pair_trajectory(blocks, row['t1'], bin_table, bands, max_excl,
+                                          first_min, scale)
             if not np.isfinite(dband[0]).any():
                 stats['n_pairs_no_t1_channel'] += 1
                 continue
-            k2 = int(round(row['gap_min'] / STEP_MIN))
+            k2 = int(round((row['gap_min'] - first_min) / STEP_MIN))
             mine = stored_index['pair_id'].to_numpy() == sp.at[i, 'pair_id']
             d, nm = validate(dband, channels, k2, stored[mine], stored_index[mine])
             diffs.append(d)
             stats['nan_mismatch'] += nm
             cells, counts = roi_cells(dband, channels, region_of, regions)
-            steps = np.arange(dband.shape[0]) * STEP_MIN
+            steps = first_min + np.arange(dband.shape[0]) * STEP_MIN
             dz = pd.DataFrame(cells, columns=columns)
             dz.insert(0, 'pair_id', row['pair_id'])
             dz.insert(1, 't_min', steps)
-            dz.insert(2, 'overlaps_baseline', steps < WINDOW_MIN)
+            dz.insert(2, 'overlaps_baseline', steps < first_min + WINDOW_MIN)
             dz.insert(3, 'masked_frac', frac.mean(axis=1))
             dz_frames.append(dz)
             pair_rows.append({**row.to_dict(), **{n_channels_column(r): int(n)
@@ -421,7 +456,8 @@ def extract_subject(subject, vc, reference, out_dir, admin, all_defs, max_pairs=
 
     params = extraction_params(vc, reference)
     parents = [str(zdir), io.manifest_ref(config.BIPOLAR_PSD_FULLRES_ROOT),
-               str(reference['run_dir'])]
+               str(reference['run_dir'])] + (
+        [str(post_z.post_zscore_dir(vc, w)) for w in ('pre', 'post')] if first_post else [])
     pairs_out = pd.DataFrame(pair_rows)
     io.write_table(pairs_out, out_dir / f'pairs_{sid}.parquet', params=params,
                    parents=parents + [str(med_state.ADMIN_TABLE)], subjects=[sid],
@@ -447,6 +483,7 @@ def load_reference(run_dir):
             'view_config': prov['params']['view_config'],
             'insula_threshold': (thresholds['all'] if list(thresholds) == ['all']
                                  else thresholds or None),
+            'first_epoch_post': bool(prov['params'].get('first_epoch_post')),
             'subjects': prov['subjects']}
 
 
@@ -459,7 +496,9 @@ def extraction_params(vc, reference):
             'min_gap_min': MIN_GAP_MIN, 'max_gap_min': MAX_GAP_MIN,
             'window_min': WINDOW_MIN, 'step_min': STEP_MIN, 'horizon_min': HORIZON_MIN,
             'reference_run': Path(reference['run_dir']).name,
-            'source': 'preprocessed/bipolar_psd', 'dtype': str(config.CACHE_FLOAT_DTYPE)}
+            'source': 'preprocessed/bipolar_psd', 'dtype': str(config.CACHE_FLOAT_DTYPE),
+            # Absent before the post-report pairing, so earlier extractions keep their hash.
+            **({'first_epoch_post': True} if reference['first_epoch_post'] else {})}
 
 
 def output_dir(vc, reference):
@@ -500,6 +539,8 @@ def main(argv=None):
     io.warn_if_dirty()
 
     reference = load_reference(args.reference_run)
+    if reference['first_epoch_post']:
+        args.baseline = 'post_report_epochs'
     vc = view_config.from_args(args)
     if vc.provenance() != reference['view_config']:
         raise ValueError('view arguments differ from the reference run:\n'
@@ -518,9 +559,10 @@ def main(argv=None):
                                            max_pairs=args.max_pairs))
         return 0
     if not (out_dir / io.MANIFEST_NAME).exists():
+        from ieeg_ehr.features.build_pain_change_post_z import working_vc
+        zdir = zview.zscore_dir(working_vc(vc) if reference['first_epoch_post'] else vc)
         io.write_manifest(out_dir, params=extraction_params(vc, reference),
-                          parents=[str(zview.zscore_dir(vc)), reference['run_dir']],
-                          script=SCRIPT)
+                          parents=[str(zdir), reference['run_dir']], script=SCRIPT)
     for subject in subjects:
         if (out_dir / f'dz_sub-{subject}.parquet').exists() and not args.overwrite:
             logger.info('sub-%s: exists, skipping', subject)

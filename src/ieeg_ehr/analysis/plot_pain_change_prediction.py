@@ -87,6 +87,9 @@ NEUTRAL = '#5f5e5a'
 #: Ordinal blue ramp (steps 250, 450, 650) for the starting-pain terciles.
 TERCILE_COLOURS = ('#86b6ef', '#2a78d6', '#104281')
 INK, MUTED, GRID, SHADE = '#2b2b29', '#6b6a66', '#e4e3df', '#f0efec'
+#: The zero reference line, docs/figure_style.md.
+ZERO = '#d3d2cd'
+TITLE_SIZE = 12
 DOSE_WINDOW_MIN = 10
 #: Both axes of dose-response-by-dc, in NRS.
 DOSE_BY_DC_LIM = 10
@@ -178,8 +181,16 @@ def _style(ax):
     for side in ('left', 'bottom'):
         ax.spines[side].set_color(MUTED)
     ax.tick_params(colors=MUTED, labelcolor=INK)
-    ax.grid(color=GRID, linewidth=0.6)
-    ax.set_axisbelow(True)
+
+
+def _zero(ax, axis='y'):
+    """The light grey line at 0, behind the data: horizontal for `axis` 'y', else vertical."""
+    line = ax.axhline if axis == 'y' else ax.axvline
+    line(0, color=ZERO, lw=0.8, zorder=1)
+
+
+def _title(ax, text):
+    ax.set_title(text, fontsize=TITLE_SIZE, fontweight='bold', color=INK, loc='center')
 
 
 def _time_axis(ax, grey_h=None):
@@ -187,7 +198,7 @@ def _time_axis(ax, grey_h=None):
     if grey_h:
         ax.axvspan(0, grey_h, facecolor='none', edgecolor=GRID, hatch='///', lw=0, zorder=0)
     ax.axvspan(0, WINDOW_MIN / 60, color=SHADE, zorder=0, lw=0)
-    ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
+    _zero(ax)
     ax.set_xlim(0, PLOT_HORIZON_MIN / 60)
     ax.set_xticks(np.arange(0, PLOT_HORIZON_MIN / 60 + 0.25, 0.5))
     ax.set_xlabel('Hours since first report', color=INK)
@@ -195,7 +206,7 @@ def _time_axis(ax, grey_h=None):
 
 def _t2_axis(ax):
     """Hours before the second report on x, ending at the report."""
-    ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
+    _zero(ax)
     ax.axvline(0, color=MUTED, lw=0.8, ls='--', zorder=1)
     ax.set_xlim(-T2_HORIZON_MIN / 60, 0)
     ax.set_xticks(np.arange(-T2_HORIZON_MIN / 60, 0.25, 0.5))
@@ -267,7 +278,7 @@ def fig_validation(df, out_dir, name, title):
     ax.set_ylim(-lim, lim)
     ax.set_xlabel('Actual Δpain at report 2 (NRS)', color=INK)
     ax.set_ylabel('Predicted Δpain at t2 (NRS)', color=INK)
-    ax.set_title(title, fontsize=10, color=INK)
+    _title(ax, title)
     _legend(ax, loc='upper left')
     _footer(fig, f'{len(subjects)} subjects, {len(at_t2)} pairs. x jittered ±0.15.')
     _save(fig, out_dir, name)
@@ -288,7 +299,7 @@ def fig_trajectories(df, out_dir, name, title, min_subjects, groups, colours, gr
     drawn = _trajectory_lines(ax, df, group, groups, colours, min_subjects,
                               label_fmt=label_fmt)
     ax.set_ylabel('Predicted Δpain (NRS)', color=INK)
-    ax.set_title(title, fontsize=10, color=INK)
+    _title(ax, title)
     if colorbar:
         cmap, norm, label = colorbar
         cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=0.02)
@@ -319,16 +330,6 @@ def dose_points(df, hue=None):
     return stats.merge(n_pairs.reset_index(), on=keys)
 
 
-def _dose_axes(ax, title):
-    _style(ax)
-    ax.axhline(0, color=MUTED, lw=0.8)
-    lo, hi = ax.get_xlim()
-    ax.plot([lo, hi], [lo, hi], color=MUTED, lw=0.8, ls='--', label='identity')
-    ax.set_xlabel('Actual Δpain at report 2 (NRS)', color=INK)
-    ax.set_ylabel(f'Predicted Δpain, ±{DOSE_WINDOW_MIN} min of t2 (NRS)', color=INK)
-    ax.set_title(title, fontsize=10, color=INK)
-
-
 def _dose_errorbar(ax, s, colour, dx=0.0, label=None, annotate=False):
     """dose_points rows as mean +/- SEM, labelled subjects/pairs when `annotate`."""
     ax.errorbar(s['delta_pain'] + dx, s['mean'], yerr=s['sem'], fmt='o', ms=5, color=colour,
@@ -340,20 +341,31 @@ def _dose_errorbar(ax, s, colour, dx=0.0, label=None, annotate=False):
                         fontsize=7, color=MUTED)
 
 
-def fig_dose(df, out_dir, name, title, min_subjects, hue=None, hue_levels=(),
-             hue_colours=()):
+def dose_panel(ax, df, min_subjects, hue=None, hue_levels=(), hue_colours=()):
+    """Per integer Δpain, mean ± SEM of dose_points, against the identity line."""
     pts = dose_points(df, hue)
     pts = pts[pts['n_subjects'] >= min_subjects]
-    fig, ax = plt.subplots(figsize=(6, 4.6))
+    _style(ax)
+    _zero(ax)
     series = [(None, NEUTRAL, pts)] if hue is None else [
         (lvl, c, pts[pts[hue] == lvl]) for lvl, c in zip(hue_levels, hue_colours)]
     offsets = np.linspace(-0.2, 0.2, len(series)) if len(series) > 1 else [0.0]
     for (lvl, colour, s), dx in zip(series, offsets):
         _dose_errorbar(ax, s, colour, dx, None if lvl is None else str(lvl),
                        annotate=hue is None)
-    ax.set_xlim(pts['delta_pain'].min() - 1, pts['delta_pain'].max() + 1)
-    _dose_axes(ax, title)
+    lo, hi = pts['delta_pain'].min() - 1, pts['delta_pain'].max() + 1
+    ax.set_xlim(lo, hi)
+    ax.plot([lo, hi], [lo, hi], color=MUTED, lw=0.8, ls='--', label='identity')
+    ax.set_xlabel('True Δpain at report 2', color=INK)
+    ax.set_ylabel('Predicted Δpain at report 2', color=INK)
     _legend(ax, loc='upper left')
+
+
+def fig_dose(df, out_dir, name, title, min_subjects, hue=None, hue_levels=(),
+             hue_colours=()):
+    fig, ax = plt.subplots(figsize=(6, 4.6))
+    dose_panel(ax, df, min_subjects, hue, hue_levels, hue_colours)
+    _title(ax, title)
     _footer(fig, 'Labels: subjects/pairs. Points with fewer than '
                  f'{min_subjects} subjects dropped.')
     _save(fig, out_dir, name)
@@ -372,7 +384,7 @@ def fig_coverage(df, out_dir, name, bins, grey_h=None):
         ax.set_ylabel(f'N {what} with a prediction', color=INK)
         ax.set_ylim(bottom=0)
     _legend(axes[1], loc='upper left', bbox_to_anchor=(1.01, 1))
-    fig.suptitle('Coverage per step', fontsize=10, color=INK)
+    fig.suptitle('Coverage per step', fontsize=TITLE_SIZE, fontweight='bold', color=INK)
     _save(fig, out_dir, name)
 
 
@@ -407,7 +419,7 @@ def fig_subject_detail(df, out_dir, name, title, bins, grey_h=None):
     fig.supylabel('Predicted Δpain (NRS)', color=INK, fontsize=9)
     fig.suptitle(f'{title}\nThin: single pairs. Thick: bin means. y clipped at ±{lim:.0f} '
                  f'({n_out} of {df["value"].notna().sum()} values beyond).',
-                 fontsize=10, color=INK)
+                 fontsize=TITLE_SIZE, fontweight='bold', color=INK)
     fig.tight_layout()
     handles = [plt.Line2D([], [], color=c, lw=1.8) for c in BIN_COLOURS[:len(bins)]]
     fig.legend(handles, list(bins), loc='upper center', bbox_to_anchor=(0.5, 0.0),
@@ -461,19 +473,22 @@ def exposure_steps(pairs):
     return steps, per_pair
 
 
-def to_fraction(df, group):
-    """Each pair's steps averaged within FRACTION_BINS steps of (t - t1) / (t2 - t1)."""
+def to_fraction(df, group, columns=('value', 'dc')):
+    """Each pair's steps averaged within FRACTION_BINS steps of (t - t1) / (t2 - t1).
+
+    Steps after t2 fall in the last bin, so pass steps up to t2 only.
+    """
     step = np.minimum(np.floor(df['t_min'] / df['gap_min'] * FRACTION_BINS), FRACTION_BINS - 1)
     return (df.assign(x_h=(step + 0.5) / FRACTION_BINS)
-            .groupby(['pair_id', 'subject', group, 'x_h'], observed=True)[['value', 'dc']]
+            .groupby(['pair_id', 'subject', group, 'x_h'], observed=True)[list(columns)]
             .mean().reset_index())
 
 
 def _fraction_axis(ax):
     ax.set_xlim(0, 1)
     ax.set_xticks([0, 0.25, 0.5, 0.75, 1])
-    ax.set_xticklabels(['t1', '25%', '50%', '75%', 't2'])
-    ax.set_xlabel('Fraction of the interval from report 1 to report 2', color=INK)
+    ax.set_xticklabels(['0%', '25%', '50%', '75%', '100%'])
+    ax.set_xlabel('% of time between reports', color=INK)
 
 
 def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
@@ -491,7 +506,7 @@ def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
     for ax in (top, bottom):
         _style(ax)
         if axis == 'fraction':
-            ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
+            _zero(ax)
         else:
             _time_axis(ax)
     drawn = _trajectory_lines(top, df, 'dc_group', list(DC_BINS), DC_COLOURS, min_subjects)
@@ -504,7 +519,7 @@ def fig_dc_groups(df, out_dir, name, title, min_subjects, axis):
         bottom.set_xlabel('Hours since first report (each pair ends at its t2)', color=INK)
     top.set_ylabel('Predicted Δpain (NRS)', color=INK)
     bottom.set_ylabel('ΔC since t1 (typical doses)', color=INK)
-    top.set_title(title, fontsize=10, color=INK)
+    _title(top, title)
     _legend(top, loc='upper left', bbox_to_anchor=(1.01, 1), title='ΔC, t1 to t2')
     _footer(fig, f'{df["subject"].nunique()} subjects, {df["pair_id"].nunique()} pairs. '
                  f'ΔC bins: |ΔC| < {DC_SMALL:g} no change, {DC_SMALL:g}-{DC_LARGE:g} small, '
@@ -530,7 +545,7 @@ def fig_dc_actual(df, out_dir, name, title, min_subjects):
                                       gridspec_kw={'width_ratios': (3, 2)})
     for ax in (left, right):
         _style(ax)
-    left.axhline(0, color=MUTED, lw=0.8, zorder=1)
+    _zero(left)
     for i, g in enumerate(drawn):
         colour = DC_COLOURS[DC_BINS.index(g)]
         s = per_subject[per_subject['dc_group'] == g]
@@ -558,7 +573,7 @@ def fig_dc_actual(df, out_dir, name, title, min_subjects):
                for face in (NEUTRAL, 'white')]
     left.legend(handles, ['actual, report 2', 'predicted, t2'], loc='upper left',
                 frameon=False, fontsize=8, labelcolor=INK)
-    fig.suptitle(title, fontsize=10, color=INK)
+    fig.suptitle(title, fontsize=TITLE_SIZE, fontweight='bold', color=INK)
     _footer(fig, f'{at_t2["subject"].nunique()} subjects, {at_t2["pair_id"].nunique()} pairs, '
                  f'the dc-groups pairs with a prediction at t2. Tick labels: subjects/pairs. '
                  f'Small dots: subject means of actual Δpain, x jittered. '
@@ -607,7 +622,7 @@ def fig_dose_by_dc(df, out_dir, name, title, min_subjects, slopes):
     n_out = int((pts[['delta_pain', 'mean']].abs() > lim).any(axis=1).sum())
     for ax, g, colour in zip(axes, DC_BINS, DC_COLOURS):
         _style(ax)
-        ax.axhline(0, color=MUTED, lw=0.8)
+        _zero(ax)
         ax.plot([-lim, lim], [-lim, lim], color=MUTED, lw=0.8, ls='--')
         s = pts[pts['dc_group'] == g]
         _dose_errorbar(ax, s, colour, annotate=True)
@@ -622,7 +637,7 @@ def fig_dose_by_dc(df, out_dir, name, title, min_subjects, slopes):
     axes[0].set_ylim(-lim, lim)
     axes[0].set_ylabel(f'Predicted Δpain, ±{DOSE_WINDOW_MIN} min of t2 (NRS)', color=INK)
     fig.supxlabel('Actual Δpain at report 2 (NRS)', color=INK, fontsize=10)
-    fig.suptitle(f'{title}\nby ΔC, t1 to t2', fontsize=10, color=INK)
+    fig.suptitle(f'{title}\nby ΔC, t1 to t2', fontsize=TITLE_SIZE, fontweight='bold', color=INK)
     fig.tight_layout()
     _footer(fig, 'Labels: subjects/pairs. Points with fewer than '
                  f'{min_subjects} subjects dropped. Axes clipped at ±{lim} ({n_out} of '
@@ -646,11 +661,11 @@ def fig_dc_pain(df, out_dir, name, title, min_subjects, model):
         d = df[df['delta_pain'].between(lo, hi)].assign(
             dc_label=lambda x: x['dc_group'].map(DC_BIN_LABELS))
         _style(ax)
-        ax.axhline(0, color=MUTED, lw=0.8, zorder=1)
+        _zero(ax)
         drawn = _trajectory_lines(ax, to_fraction(d, 'dc_label'), 'dc_label', lines,
                                   DC_COLOURS, min_subjects)
         dropped += [f'{panel}: {g}' for g in lines if g not in drawn]
-        ax.set_title(f'{panel} (Δpain {lo:+d} to {hi:+d})', fontsize=10, color=INK)
+        ax.set_title(f'{panel} (Δpain {lo:+d} to {hi:+d})', fontsize=TITLE_SIZE, fontweight='bold', color=INK)
         _fraction_axis(ax)
         ax.tick_params(labelbottom=True)
         ax.set_ylim(-DC_PAIN_YLIM, DC_PAIN_YLIM)
@@ -665,7 +680,7 @@ def fig_dc_pain(df, out_dir, name, title, min_subjects, model):
                      f'{label} {fe.loc[t, "estimate"]:+.2f} [{fe.loc[t, "ci_low"]:+.2f}, '
                      f'{fe.loc[t, "ci_high"]:+.2f}]'
                      for t, label in (('delta_pain', 'Δpain'), ('dc', 'ΔC'))),
-                 fontsize=10, color=INK)
+                 fontsize=TITLE_SIZE, fontweight='bold', color=INK)
     fig.tight_layout()
     shown = df[np.logical_or.reduce([df['delta_pain'].between(lo, hi)
                                      for lo, hi in DC_PAIN_PANELS.values()])]
@@ -779,8 +794,8 @@ def fig_components(fits, out_dir, name, title, min_subjects):
     fig, (left, right) = plt.subplots(1, 2, figsize=(14, 6.2))
     for ax in (left, right):
         _style(ax)
-        ax.axhline(0, color=MUTED, lw=0.8)
-        ax.axvline(0, color=MUTED, lw=0.8)
+        _zero(ax)
+        _zero(ax, 'x')
         ax.set_xlabel('Δpain coefficient (score NRS per NRS of reported Δpain)', color=INK)
     left.set_ylabel('ΔC coefficient at fixed Δpain (score NRS per typical dose)', color=INK)
     roi = wide.loc['roi']
@@ -806,7 +821,7 @@ def fig_components(fits, out_dir, name, title, min_subjects):
                  labelcolor=INK, loc='upper right')
     right.set_title(f'Region family x band group ({len(family)})', fontsize=9, color=INK)
     fig.suptitle(f'{title}\nPer component: score_k(t2) ~ Δpain + ΔC + (1 | subject), all '
-                 'dc-groups pairs, ΔC continuous', fontsize=10, color=INK)
+                 'dc-groups pairs, ΔC continuous', fontsize=TITLE_SIZE, fontweight='bold', color=INK)
     fig.tight_layout()
     _footer(fig, textwrap.fill(
         'score_k: the component\'s part of the prediction at t2, sum of its cells\' weight x '
@@ -849,8 +864,7 @@ def fig_dc_shift(cells, out_dir, name, title, rois, bands, model_dc):
                                '(z per typical dose)', 'Contribution to the shift\n'
                                '(NRS per typical dose)')):
         _style(ax)
-        ax.grid(axis='x', visible=False)
-        ax.axhline(0, color=MUTED, lw=0.8)
+        _zero(ax)
         for i in range(0, len(rois), 2):
             ax.axvspan(i * (nb + 1) - 0.6, i * (nb + 1) + nb - 0.4, color=SHADE, lw=0,
                        zorder=0)
@@ -875,7 +889,7 @@ def fig_dc_shift(cells, out_dir, name, title, rois, bands, model_dc):
     by_roi.set_yticks(range(len(roi_sum)))
     by_roi.set_yticklabels([roi_schemes.ROI_RENAMES.get(r, r) for r in roi_sum.index],
                            fontsize=7)
-    by_roi.axvline(0, color=MUTED, lw=0.8)
+    _zero(by_roi, 'x')
     by_roi.set_title('By ROI, all bands', fontsize=9, color=INK)
     band_sum = cells.groupby(level='band', sort=False)['contribution'].sum().reindex(bands)
     _style(by_band)
@@ -883,12 +897,12 @@ def fig_dc_shift(cells, out_dir, name, title, rois, bands, model_dc):
     by_band.set_yticks(range(nb))
     by_band.set_yticklabels([BAND_SYMBOL[b] for b in bands], fontsize=8)
     by_band.invert_yaxis()
-    by_band.axvline(0, color=MUTED, lw=0.8)
+    _zero(by_band, 'x')
     by_band.set_title('By band, all ROIs', fontsize=9, color=INK)
     by_band.set_xlabel('NRS per typical dose', color=INK, fontsize=8)
     fig.suptitle(f'{title}\nΔC shift of the prediction by cell: sum of contributions '
                  f'{total:+.2f} NRS per typical dose; fitted ΔC effect on the prediction '
-                 f'at t2 {model_dc:+.2f}', fontsize=10, color=INK)
+                 f'at t2 {model_dc:+.2f}', fontsize=TITLE_SIZE, fontweight='bold', color=INK)
     _footer(fig, 'Contribution = decoder weight x ΔC effect, per subject with its own LOO '
                  'fold and the cells each pair has at t2, averaged over pairs, then over '
                  'subjects with 0 where a subject lacks the cell, so the contributions sum '

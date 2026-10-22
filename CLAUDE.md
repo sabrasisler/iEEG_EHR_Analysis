@@ -26,6 +26,9 @@ area:
   Read before changing a region scheme, adding a domain, or interpreting a
   region row. Derivative of `config/roi_schemes.py` and `analysis/insula_ap.py`
   — those win on any conflict.
+- `docs/figure_style.md` — the poster figure style: bold centered titles, no
+  gridlines, a light grey zero line, and where the shared helpers live. Read
+  before drawing or restyling a poster figure.
 - `docs/cluster_permutation.md` — the cluster-based permutation test on the
   region × frequency map: what is tested, the two correction scopes, why the
   `none` bin is a noise FLOOR and not a pass/fail control, and why a p-value never

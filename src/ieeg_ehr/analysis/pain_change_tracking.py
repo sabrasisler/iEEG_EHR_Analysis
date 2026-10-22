@@ -145,7 +145,7 @@ def _rho_axes(ax, table, null):
     weights = np.full(len(null), len(table) / len(null))
     ax.hist(null, bins=RHO_BINS, weights=weights, histtype='step', color=pplot.MUTED,
             linewidth=1.2, label='pooled permutation null')
-    ax.axvline(0, color=pplot.MUTED, lw=0.8)
+    pplot._zero(ax, 'x')
     ax.axvline(table['spearman_rho'].median(), color=pplot.INK, lw=1.2, ls='--',
                label='median rho')
     ax.set_xlim(-1, 1)
@@ -172,10 +172,9 @@ def fig_rho_forest(table, out_dir, title):
     y = np.arange(len(t))
     fig, ax = plt.subplots(figsize=(6.4, 0.6 + 0.19 * len(t)))
     pplot._style(ax)
-    ax.grid(axis='y', visible=False)
     ax.hlines(y, t['null_lo'], t['null_hi'], color=pplot.GRID, lw=4.5,
               label=f'own null, middle {NULL_BAND[1] - NULL_BAND[0]:g}%')
-    ax.axvline(0, color=pplot.MUTED, lw=0.8)
+    pplot._zero(ax, 'x')
     ax.scatter(t['spearman_rho'], y, s=26, c=colour, edgecolor='white', linewidth=0.5,
                zorder=3)
     for c, lab in ((ABOVE, 'above own null'), (pplot.NEUTRAL, 'inside'),
@@ -187,7 +186,7 @@ def fig_rho_forest(table, out_dir, title):
     ax.set_ylim(-1, len(t))
     ax.set_xlim(-1, 1)
     ax.set_xlabel('Spearman rho, predicted vs actual Δpain at t2', color=pplot.INK)
-    ax.set_title(title, fontsize=10, color=pplot.INK)
+    pplot._title(ax, title)
     pplot._legend(ax, loc='upper left', bbox_to_anchor=(1.01, 1))
     n_above, n_below = band_counts(t)
     tail = (100 - NULL_BAND[1]) / 100
@@ -201,7 +200,7 @@ def fig_rho(table, null, out_dir, title):
     fig, ax = plt.subplots(figsize=(6, 4))
     _rho_axes(ax, table, null)
     ax.set_xlabel('Spearman rho, predicted vs actual Δpain at t2', color=pplot.INK)
-    ax.set_title(title, fontsize=10, color=pplot.INK)
+    pplot._title(ax, title)
     pplot._legend(ax, loc='upper left')
     pplot._footer(fig, _annotation(table, null))
     pplot._save(fig, out_dir, 'tracking_rho_hist')
@@ -224,7 +223,7 @@ def fig_rho_by_beta2(table, null, out_dir, title):
     fig, (top, bottom) = plt.subplots(2, 1, figsize=(6.4, 5), sharex=True,
                                       gridspec_kw={'height_ratios': [3, 1]})
     _rho_axes(top, table, null)
-    top.set_title(title, fontsize=10, color=pplot.INK)
+    pplot._title(top, title)
     pplot._legend(top, loc='upper left')
     norm = Normalize(table['mean_sum_beta2'].min(), table['mean_sum_beta2'].max())
     _strip(bottom, table, BETA2_CMAP(norm(table['mean_sum_beta2'])), 'subjects')
@@ -250,11 +249,11 @@ def fig_rho_by_mdd(table, null, out_dir, title):
     weights = np.full(len(null), len(known) / len(null))
     ax.hist(null, bins=RHO_BINS, weights=weights, histtype='step', color=pplot.MUTED,
             linewidth=1.2, label='pooled permutation null')
-    ax.axvline(0, color=pplot.MUTED, lw=0.8)
+    pplot._zero(ax, 'x')
     ax.set_xlim(-1, 1)
     ax.set_xlabel('Spearman rho, predicted vs actual Δpain at t2', color=pplot.INK)
     ax.set_ylabel('N subjects', color=pplot.INK)
-    ax.set_title(title, fontsize=10, color=pplot.INK)
+    pplot._title(ax, title)
     pplot._legend(ax, loc='upper left')
     pplot._footer(fig, f'MDD: an ICD code within {dx_state.DEFAULT_WINDOW_DAYS} days before '
                        'admission, a billing artefact (dx_state). '
@@ -262,19 +261,24 @@ def fig_rho_by_mdd(table, null, out_dir, title):
     pplot._save(fig, out_dir, 'tracking_rho_by_mdd')
 
 
-def fig_slope(table, out_dir, title):
-    fig, ax = plt.subplots(figsize=(6, 4))
+def slope_panel(ax, table):
+    """Histogram of the per-subject OLS slopes of predicted on actual Δpain, median inlaid."""
     pplot._style(ax)
     lo, hi = np.nanpercentile(table['slope'], [0, 100])
     ax.hist(table['slope'], bins=np.linspace(min(lo, -1), max(hi, 2), 25),
             color=pplot.NEUTRAL, alpha=0.85, edgecolor='white', linewidth=1)
-    ax.axvline(0, color=pplot.MUTED, lw=0.8)
-    ax.axvline(1, color=pplot.INK, lw=1.2, ls='--', label='slope = 1')
-    ax.set_xlabel('OLS slope, predicted on actual Δpain at t2', color=pplot.INK)
-    ax.set_ylabel('N subjects', color=pplot.INK)
-    ax.set_title(title, fontsize=10, color=pplot.INK)
-    pplot._legend(ax, loc='upper right')
-    pplot._footer(fig, f'{len(table)} subjects. Median slope {table["slope"].median():.2f}.')
+    pplot._zero(ax, 'x')
+    ax.text(0.97, 0.97, f'Median slope {table["slope"].median():.2f}', transform=ax.transAxes,
+            ha='right', va='top', fontsize=9, color=pplot.INK)
+    ax.set_xlabel('Predicted Δpain per point of true Δpain', color=pplot.INK)
+    ax.set_ylabel('Patients', color=pplot.INK)
+
+
+def fig_slope(table, out_dir, title):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    slope_panel(ax, table)
+    pplot._title(ax, title)
+    pplot._footer(fig, f'{len(table)} subjects.')
     pplot._save(fig, out_dir, 'tracking_slope_hist')
 
 
