@@ -17,7 +17,8 @@ star therefore sits in an outline. Region names take `roi_schemes.ROI_RENAMES`.
 for a region set no domain scheme covers (an hcpex_paper ROI mapping).
 `--domain-scheme anatomy` groups an hcpexv5 run's rows by lobe, in the order and
 hues of the anatomy glass brain (`plot_pain_change_anatomy.GROUPS`), and refuses
-an ROI that GROUPS does not place.
+an ROI that GROUPS does not place. Its row labels take ANATOMY_SHORT, poster
+abbreviations ("MTL", "vThal"); `cells.csv` keeps the full names.
 
 The colour scale is capped at max |beta| over the term's BH-significant converged
 cells (`colour_cap`), so a large non-significant cell (M1 delta in the 2026-10-22
@@ -62,10 +63,13 @@ POSTER_COLOURS = ('#d95f02', '#1b9e77', '#7570b3', '#447eae', '0.55')
 #: The one block's label under `--domain-scheme none`.
 UNGROUPED = 'ROIs'
 ANATOMY = 'anatomy'
-#: Under `--domain-scheme anatomy` the lobe labels and the longest hcpexv5 ROI
-#: names ("Dorsal/medial thalamus") need a wider left margin than the default.
-ANATOMY_MARGINS_IN = (3.2, 1.05, 0.50, 0.72)
-ANATOMY_BRACKET_IN = (1.95, 2.05)
+#: Row labels under `--domain-scheme anatomy`, short enough for the poster.
+ANATOMY_SHORT = {'Medial temporal lobe': 'MTL', 'Ventral thalamus': 'vThal',
+                 'Dorsal/medial thalamus': 'dThal/mThal', 'Frontal operculum': 'Operculum'}
+#: Under `--domain-scheme anatomy` the two-line "Insula & / cingulate" and
+#: "Subcortical" labels need a wider left margin than the default.
+ANATOMY_MARGINS_IN = (2.55, 1.05, 0.50, 0.72)
+ANATOMY_BRACKET_IN = (1.30, 1.40)
 SCRATCH_SUBDIR = 'pain_change_heatmap'
 
 
@@ -116,6 +120,8 @@ def main(argv=None):
         colours = {UNGROUPED: POSTER_COLOURS[-1]}
     elif args.domain_scheme == ANATOMY:
         groups, colours = anatomy_rows(regions)
+        groups = [(g, [ANATOMY_SHORT.get(r, r) for r in rois]) for g, rois in groups]
+        cells = cells.assign(region=cells['region'].replace(ANATOMY_SHORT))
         layout = {'margins_in': ANATOMY_MARGINS_IN, 'bracket_in': ANATOMY_BRACKET_IN}
     else:
         groups = domain_rows(regions, args.domain_scheme)
