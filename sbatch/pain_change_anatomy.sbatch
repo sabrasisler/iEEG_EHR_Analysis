@@ -5,7 +5,7 @@
 #SBATCH --mem=8GB
 #SBATCH -J pc_anat
 #SBATCH -o logs/pc_anat_%j.out
-# Anatomy glass brain of a pain_change run, one colour per lobe group:
+# Anatomy glass brain of a pain_change run, hue = lobe group, shade = ROI:
 #   sbatch --export=ALL,RUN_DIR=<pain_change run> sbatch/pain_change_anatomy.sbatch
 set -euo pipefail
 module load python/3.12
