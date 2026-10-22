@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 #: cells.csv prefix -> (figure token, title, colourbar label).
 TERMS = {
-    'dpain': ('dpain', 'Pain-change slopes by region', 'Δ z per pain point'),
+    'dpain': ('dpain', 'Δpain–power slopes by region', 'Δ z per pain point'),
     'dpain_x_cbar': ('dpain-x-cbar', 'Opioid moderation of the pain-change slope',
                      'Δ slope per typical dose'),
     'dc': ('dc', 'Opioid exposure change by region', 'Δ z per typical-dose change'),
