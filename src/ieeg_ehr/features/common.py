@@ -347,7 +347,7 @@ def epoch_count_labels(counts, regions, bin_order=None):
 
 
 def draw_mask_outline(ax, mask, color='black', linewidth=1.6, zorder=5,
-                      connect_rows=False):
+                      connect_rows=False, row_y=None):
     """Outline the True region of `mask` with EXPLICIT CELL-EDGE SEGMENTS.
 
     mask is (n_row, n_col), aligned with the pivot an imshow was drawn from, where
@@ -369,14 +369,18 @@ def draw_mask_outline(ax, mask, color='black', linewidth=1.6, zorder=5,
     an entity the test never formed and could not have. Each cluster must be drawn
     as its own one-row box. Set connect_rows=True only for a mask whose rows really
     are a connected dimension.
+
+    `row_y` gives each row's centre in data coordinates, for a heatmap drawn with
+    gaps between blocks of rows; default row i at y = i.
     """
     from matplotlib.collections import LineCollection
 
     mask = np.asarray(mask, dtype=bool)
     n_row, n_col = mask.shape
+    y = np.arange(n_row, dtype=float) if row_y is None else np.asarray(row_y, dtype=float)
     segments = []
     for i, j in zip(*np.nonzero(mask)):
-        left, right, top, bottom = j - 0.5, j + 0.5, i - 0.5, i + 0.5
+        left, right, top, bottom = j - 0.5, j + 0.5, y[i] - 0.5, y[i] + 0.5
         if not connect_rows or i == 0 or not mask[i - 1, j]:
             segments.append([(left, top), (right, top)])
         if not connect_rows or i == n_row - 1 or not mask[i + 1, j]:

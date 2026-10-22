@@ -64,6 +64,10 @@ POSTER_TITLE = 'Pain–power slopes by region'
 POSTER_CB_LABEL = {'log_power': 'Δ log10 power per pain point',
                    'zscore': 'Δ z per pain point'}
 POSTER_BRACKET_IN = (1.38, 1.48)
+#: Empty space between two domain blocks, in rows. Real space, not a white line
+#: painted over the grid, so a black outline on a block's edge row stays on its
+#: own cell instead of floating in the divider.
+GROUP_GAP = 0.25
 BAND_SYMBOL = {'delta': 'δ', 'theta': 'θ', 'alpha': 'α', 'beta': 'β',
                'gamma': 'γ', 'high_gamma': 'hγ'}
 #: Star cuts on render_map's `p_col`. Its callers here pass the UNCORRECTED p, as
@@ -161,11 +165,21 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
                            1 - (T_in + B_in) / H))
     else:
         fig, ax = plt.subplots(figsize=(7.8, 0.42 * len(order) + 1.2))
-    im = ax.imshow(beta.to_numpy(dtype=float), aspect='auto', cmap=cm,
-                   vmin=-cap, vmax=cap, interpolation='nearest')
-    common.draw_mask_outline(ax, sig.to_numpy())
+    # one image per domain block, each block GROUP_GAP rows below the last
+    block = np.concatenate([[k] * len(ms) for k, (_, ms) in enumerate(groups)])
+    ypos = np.arange(len(order)) + GROUP_GAP * block
+    b_ = beta.to_numpy(dtype=float)
+    for k in range(len(groups)):
+        rows = np.flatnonzero(block == k)
+        im = ax.imshow(b_[rows], aspect='auto', cmap=cm, vmin=-cap, vmax=cap,
+                       interpolation='nearest',
+                       extent=(-0.5, len(names) - 0.5, ypos[rows[-1]] + 0.5,
+                               ypos[rows[0]] - 0.5))
+    ax.set_xlim(-0.5, len(names) - 0.5)
+    ax.set_ylim(ypos[-1] + 0.5, ypos[0] - 0.5)
+    common.draw_mask_outline(ax, sig.to_numpy(), row_y=ypos)
     ax.set_xticks(range(len(names)))
-    ax.set_yticks(range(len(order)))
+    ax.set_yticks(ypos)
     if poster:
         fs = POSTER_FS
         ax.set_xticklabels([f'{BAND_SYMBOL.get(b, b)}\n{bands[b][0]}–{bands[b][1]}'
@@ -176,12 +190,11 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
             sp.set_visible(False)
         # stars on `p_col`, white on the darkest cells as the domain map
         pval = grid(p_col).to_numpy(dtype=float)
-        b_ = beta.to_numpy(dtype=float)
         for i in range(len(order)):
             for j in range(len(names)):
                 st = _stars(pval[i, j])
                 if st:
-                    ax.text(j, i, st, ha='center', va='center',
+                    ax.text(j, ypos[i], st, ha='center', va='center',
                             fontsize=fs['star'], fontweight='bold',
                             color='white' if abs(b_[i, j]) > 0.62 * cap
                             else '0.1')
@@ -201,20 +214,18 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
         bx, lx = -bracket_in[0] / aw, -bracket_in[1] / aw
     else:
         bx, lx = -0.215, -0.235
-    for k, (dom, ms) in enumerate(groups):
+    for dom, ms in groups:
         y1 = y0 + len(ms)
         colour = colours.get(dom, '0.55')
-        ax.plot([bx, bx], [y0 - 0.4, y1 - 0.6], transform=tr,
+        ax.plot([bx, bx], [ypos[y0] - 0.4, ypos[y1 - 1] + 0.4], transform=tr,
                 color=colour, lw=3, clip_on=False, solid_capstyle='butt')
         # horizontal, not rotated: one-row domains (M1) have no height to
         # hold a vertical label
-        ax.text(lx, (y0 + y1 - 1) / 2, dom, transform=tr, ha='right',
+        ax.text(lx, (ypos[y0] + ypos[y1 - 1]) / 2, dom, transform=tr, ha='right',
                 va='center', fontsize=POSTER_FS['domain'] if poster else 9,
                 color=colour, fontweight='bold')
         for lab in ax.get_yticklabels()[y0:y1]:
             lab.set_color(colour if dom != UNASSIGNED else '0.25')
-        if k < len(groups) - 1:
-            ax.axhline(y1 - 0.5, color='white', lw=3)
         y0 = y1
 
     if poster:
