@@ -114,6 +114,7 @@ always names one set of curves.
 | `summary_dpain-dhr.png`, `summary_dpain-dhrv.png` | the two scatters above as panels A and B, every band in one panel coloured delta (light green) to high gamma (dark green), main-heatmap BH cells outlined | `plot_pain_change_autonomic` |
 | `pairs_dpain-dhr.png`, `pairs_dpain-dhrv.png` | no neural data: A, every pair's autonomic change against its pain change, with the mean per pain change and the within-subject r; B, each subject's own slope with its 95% CI | `plot_pain_change_autonomic` |
 | `glass_dpain.png` | electrodes of ROIs with a BH-significant `d_pain` cell, coloured by ROI, the rest grey | `plot_pain_change_glass --term dpain` |
+| `glass_dpain_sig.png` | electrodes of BH-significant `d_pain` ROIs only, coloured by the mean beta of their significant δ–α cells (left half) and β–hγ cells (right half), RdBu_r on the heatmap's cap; `glass_dpain_sig.csv` lists the values | `plot_pain_change_glass --term dpain --low-high` |
 
 Overwrite a figure when only its look changes (layout, colour, fonts, labels).
 Give it a new name when what it shows changes (term, statistic, correction,

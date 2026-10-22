@@ -17,6 +17,16 @@ share a sign (`d_pain`, all positive in the 2026-10-15 run), and the heatmap
 beside it carries the size. The script refuses a term whose significant cells
 mix signs, or more ROIs than CATEGORICAL holds.
 
+`--low-high` writes `glass_<term token>_sig.png` instead: only electrodes of an ROI
+with a BH-significant cell are drawn, each dot coloured by the ROI's slope. The
+LOW value is the mean beta over the ROI's significant LOW_BANDS (delta, theta,
+alpha), the HIGH value over its significant high bands (beta to high gamma). An
+ROI significant in both is a split dot, left half low, right half high
+(`plot_domain_glass.wedge_markers`). Colours are the heatmap's: RdBu_r on +/- the
+heatmap's cap, max |beta| over every converged cell, so a half and its heatmap
+cells match. The legend is a key to the halves and a colorbar, not a list of
+ROIs; `glass_<term token>_sig.csv` beside it lists each drawn ROI's values.
+
 Region assignment is `run_mixed_model_pilot.roi_maps` over the run's z-score
 tables with the run's pinned insula cut, the same call `pain_change.load_rows`
 makes, so the brain cannot disagree with the fit about membership. Electrodes
@@ -39,12 +49,14 @@ import numpy as np
 from ieeg_ehr import io
 from ieeg_ehr.analysis.pain_change import FIGURES_SUBDIR, discovery_paths
 from ieeg_ehr.analysis.plot_band_map_domains import BAND_SYMBOL
-from ieeg_ehr.analysis.plot_domain_glass import electrode_coords, inside_brain
+from ieeg_ehr.analysis.plot_domain_glass import electrode_coords, inside_brain, wedge_markers
 from ieeg_ehr.analysis.plot_pain_change_heatmap import TERMS
 from ieeg_ehr.analysis.run_mixed_model_pilot import roi_maps
 from ieeg_ehr.config import roi_schemes
 
 logger = logging.getLogger(__name__)
+
+SCRIPT = 'ieeg_ehr/analysis/plot_pain_change_glass.py'
 
 #: Categorical hues in fixed order (dataviz default palette, light mode),
 #: assigned to the significant ROIs in scheme display order.
@@ -52,6 +64,10 @@ CATEGORICAL = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300',
                '#6250d6', '#e34948')
 GREY = '0.80'
 MNI = ['mni_x', 'mni_y', 'mni_z']
+#: --low-high: the band group of the left half; every other band is high.
+LOW_BANDS = ('delta', 'theta', 'alpha')
+#: --low-high: the heatmap's colormap, so a dot half and its cells match.
+CMAP = 'RdBu_r'
 
 
 def electrodes(params, subjects):
@@ -128,6 +144,69 @@ def draw(el, regions, out_path, node_size, grey_size):
         d.close()
 
 
+def low_high_values(cells, term):
+    """One row per ROI with a BH-significant cell: mean significant beta per group.
+
+    `low` and `high` are NaN where the ROI has no significant cell in that group.
+    """
+    sig = cells[cells[f'{term}_bh_reject'].eq(True) & cells['converged'].eq(True)]
+    group = np.where(sig['freq'].isin(LOW_BANDS), 'low', 'high')
+    out = (sig.assign(group=group).groupby(['region', 'group'])[f'{term}_beta'].mean()
+           .unstack('group').reindex(columns=['low', 'high']))
+    bands = sig.groupby('region')['freq'].agg(lambda b: ','.join(b))
+    return out.assign(bands=bands).reset_index()
+
+
+def draw_low_high(el, values, cap, cb_label, out_path, node_size):
+    """Sagittal over axial: one dot per electrode of a drawn ROI, split low | high."""
+    from nilearn import plotting
+
+    cmap = plt.get_cmap(CMAP)
+    norm = matplotlib.colors.Normalize(-cap, cap)
+    halves = wedge_markers(2)
+    n_of = el['region'].value_counts()
+    fig = plt.figure(figsize=(5.2, 9.2))
+    displays = []
+    for mode, rect in (('x', (0.0, 0.58, 1.0, 0.40)), ('z', (0.08, 0.17, 0.84, 0.42))):
+        d = plotting.plot_glass_brain(None, display_mode=mode, figure=fig, axes=rect,
+                                      annotate=False)
+        for r in sorted(values.itertuples(), key=lambda r: -n_of[r.region]):
+            pts = el.loc[el['region'] == r.region, MNI].to_numpy(dtype=float)
+            parts = [v for v in (r.low, r.high) if np.isfinite(v)]
+            markers = halves if len(parts) == 2 else ['o']
+            for m, v in zip(markers, parts):
+                d.add_markers(pts, marker_color=matplotlib.colors.to_hex(cmap(norm(v))), marker_size=node_size,
+                              marker=m, linewidths=0)
+        displays.append(d)
+
+    key_colour = '0.45'
+    handles = [
+        mlines.Line2D([], [], ls='none', marker='o', markersize=10, fillstyle='left',
+                      markerfacecolor=key_colour, markerfacecoloralt='white',
+                      markeredgecolor=key_colour,
+                      label='left half: δ–α'),
+        mlines.Line2D([], [], ls='none', marker='o', markersize=10, fillstyle='right',
+                      markerfacecolor=key_colour, markerfacecoloralt='white',
+                      markeredgecolor=key_colour, label='right half: β–hγ'),
+        mlines.Line2D([], [], ls='none', marker='o', markersize=10,
+                      markerfacecolor=key_colour, markeredgecolor=key_colour,
+                      label='whole dot: one group only')]
+    fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, 0.165),
+               ncol=1, frameon=False, fontsize=8.5, handletextpad=0.4,
+               labelspacing=0.5, title='BH-significant ROIs, mean β of their bands',
+               title_fontproperties={'weight': 'bold', 'size': 9.5})
+    cax = fig.add_axes((0.25, 0.035, 0.5, 0.012))
+    cb = fig.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax,
+                      orientation='horizontal')
+    cb.set_label(cb_label, fontsize=8.5)
+    cb.ax.tick_params(labelsize=7.5)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=300, facecolor='white', bbox_inches='tight')
+    plt.close(fig)
+    for d in displays:
+        d.close()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -135,6 +214,9 @@ def main(argv=None):
     ap.add_argument('--term', choices=list(TERMS), default='dpain')
     ap.add_argument('--node-size', type=float, default=12)
     ap.add_argument('--grey-size', type=float, default=5)
+    ap.add_argument('--low-high', action='store_true',
+                    help='significant ROIs only, each dot split into its low and high '
+                         'band mean beta (glass_<term>_sig.png)')
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
@@ -144,13 +226,33 @@ def main(argv=None):
     params = prov['params']
     cells = io.read_table(run_dir / 'cells.csv', on_stale='warn')
     cells = cells.assign(region=cells['region'].replace(roi_schemes.ROI_RENAMES))
-    regions = significant_regions(cells, args.term, params['roi_scheme'])
     el = electrodes(params, prov['subjects'])
+    token, _, cb_label = TERMS[args.term]
+    if args.low_high:
+        values = low_high_values(cells, args.term)
+        empty = sorted(set(values['region']) - set(el['region']))
+        if empty:
+            raise SystemExit(f'significant ROIs with no electrode drawn: {empty}')
+        ok = cells['converged'].eq(True)
+        cap = float(np.nanmax(np.abs(cells.loc[ok, f'{args.term}_beta'])))
+        out = run_dir / FIGURES_SUBDIR / f'glass_{token}_sig.png'
+        draw_low_high(el[el['region'].isin(values['region'])], values, cap, cb_label,
+                      out, args.node_size)
+        n = el['region'].value_counts()
+        io.write_table(values.assign(n_electrodes=values['region'].map(n)),
+                       out.with_suffix('.csv'), params=vars(args),
+                       parents=[str(run_dir / 'cells.csv')], subjects=prov['subjects'],
+                       script=SCRIPT)
+        io.log_analysis(f'pain_change {args.term} glass brain, {len(values)} BH-significant '
+                        'ROIs split low | high band mean beta', out.parent)
+        logger.info('wrote %s:\n%s', out, values.to_string(index=False))
+        return 0
+    regions = significant_regions(cells, args.term, params['roi_scheme'])
     empty = [r for r, _ in regions if not (el['region'] == r).any()]
     if empty:
         raise SystemExit(f'significant ROIs with no electrode drawn: {empty}')
 
-    out = run_dir / FIGURES_SUBDIR / f'glass_{TERMS[args.term][0]}.png'
+    out = run_dir / FIGURES_SUBDIR / f'glass_{token}.png'
     draw(el, regions, out, args.node_size, args.grey_size)
     io.log_analysis(f'pain_change {args.term} glass brain, {len(regions)} BH-significant '
                     f'ROIs coloured by region, {len(el)} electrodes', out.parent)
