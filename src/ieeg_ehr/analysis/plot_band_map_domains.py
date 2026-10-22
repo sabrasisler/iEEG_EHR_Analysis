@@ -110,7 +110,8 @@ def domain_rows(regions, scheme):
 
 def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_label,
                value='beta_nrs_within', p_col='p', reject='p_bh_reject',
-               band_col='band', converged='converged'):
+               band_col='band', converged='converged',
+               margins_in=POSTER_MARGINS_IN, bracket_in=POSTER_BRACKET_IN):
     """Draw the region x band map, rows grouped by domain. Returns the colour cap.
 
     `cells` holds one row per (region, band) with `value`, `p_col` and `reject`
@@ -119,6 +120,8 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
     `cells`, so rows left out of `groups` still set the scale. `title` None draws
     none. A cell whose fit did not converge is drawn grey with no star or
     outline: its estimate is the optimizer's last iteration, not a result.
+    `margins_in` and `bracket_in` move the poster's margins and domain bracket, in
+    inches, for domain labels or ROI names wider than the defaults hold.
     """
     order = [r for _, ms in groups for r in ms]
     names = list(bands)
@@ -145,7 +148,7 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
         # label + bracket + ROI names, bottom the two-line band ticks + label,
         # right the colorbar and its label.
         W, H = POSTER_SIZE
-        L_in, R_in, T_in, B_in = POSTER_MARGINS_IN
+        L_in, R_in, T_in, B_in = margins_in
         fig = plt.figure(figsize=(W, H))
         ax = fig.add_axes((L_in / W, B_in / H, 1 - (L_in + R_in) / W,
                            1 - (T_in + B_in) / H))
@@ -188,7 +191,7 @@ def render_map(cells, groups, bands, out_path, *, poster, colours, title, cb_lab
     if poster:
         # inches left of the heatmap, converted to axes fraction
         aw = ax.get_position().width * POSTER_SIZE[0]
-        bx, lx = -POSTER_BRACKET_IN[0] / aw, -POSTER_BRACKET_IN[1] / aw
+        bx, lx = -bracket_in[0] / aw, -bracket_in[1] / aw
     else:
         bx, lx = -0.215, -0.235
     for k, (dom, ms) in enumerate(groups):
